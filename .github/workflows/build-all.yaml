@@ -6,50 +6,19 @@ on:
   workflow_dispatch:
 
 jobs:
-  generate-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      custom_matrix: ${{ steps.matrix.outputs.custom }}
-      aur_matrix: ${{ steps.matrix.outputs.aur }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        
-      - name: Generate matrix from YAML
-        id: matrix
-        run: |
-          python3 << 'EOF'
-          import yaml
-          import json
-          import os
-          
-          with open('projects.yaml', 'r') as f:
-              config = yaml.safe_load(f)
-          
-          # Custom packages matrix
-          custom_packages = config.get('custom_packages', [])
-          custom_matrix = [{'name': pkg['name'], 'type': 'custom'} for pkg in custom_packages]
-          
-          # AUR packages matrix  
-          aur_packages = config.get('aur_packages', [])
-          aur_matrix = [{'name': pkg, 'type': 'aur'} for pkg in aur_packages]
-          
-          # Output matrices
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f'custom={json.dumps(custom_matrix)}\n')
-              f.write(f'aur={json.dumps(aur_matrix)}\n')
-          
-          print("Generated matrices:")
-          print(f"Custom: {len(custom_matrix)} packages")
-          print(f"AUR: {len(aur_matrix)} packages")
-          EOF
-
   build-packages:
-    needs: generate-matrix
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include: ${{ fromJson(needs.generate-matrix.outputs.custom_matrix) }} + ${{ fromJson(needs.generate-matrix.outputs.aur_matrix) }}
+        include:
+          # Csak 3 custom package kezdésnek
+          - { name: nordic-backgrounds, type: custom }
+          - { name: awesome-rofi, type: custom }
+          - { name: awesome-copycats-manjaro, type: custom }
+          # Csak 3 AUR package kezdésnek
+          - { name: nordic-theme, type: aur }
+          - { name: betterlockscreen, type: aur }
+          - { name: nordzy-icon-theme, type: aur }
 
     steps:
     - name: Checkout repository
@@ -58,14 +27,19 @@ jobs:
     - name: Build custom package
       if: matrix.type == 'custom'
       run: |
+        echo "Building custom package: ${{ matrix.name }}"
+        # Generate PKGBUILD first
+        python3 scripts/generate-single-pkgbuild.py ${{ matrix.name }}
+        
+        # Then build in Docker
         docker run --rm -v $PWD:/workspace -w /workspace manjarolinux/base:latest /bin/bash -c "
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git sudo python python-pip
-          pip install pyyaml requests
+          pacman -S --noconfirm base-devel git sudo
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-          python3 scripts/generate-single-pkgbuild.py ${{ matrix.name }}
           cd packages/${{ matrix.name }}
+          ls -la
+          cat PKGBUILD
           sudo -u builder makepkg -s --noconfirm --skippgpcheck
           cp *.pkg.tar.* /workspace/
         "
@@ -73,6 +47,7 @@ jobs:
     - name: Build AUR package
       if: matrix.type == 'aur'
       run: |
+        echo "Building AUR package: ${{ matrix.name }}"
         docker run --rm -v $PWD:/workspace -w /workspace archlinux:latest /bin/bash -c "
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel git sudo
@@ -83,14 +58,16 @@ jobs:
           cd yay-bin
           sudo -u builder makepkg -si --noconfirm --skippgpcheck
           cd /workspace
-          sudo -u builder bash -c 'yay -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --answerclean All --answerdiff None --answeredit None --removemake --noconfirm'
+          sudo -u builder bash -c 'yay -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --answerclean All --answerdiff None --answeredit None --removemake --noconfirm 2>&1 | tee build.log'
           find /tmp/aur-build -name \"*.pkg.tar.*\" -exec cp {} /workspace/ \;
+          echo 'Build completed. Files:'
+          ls -la /workspace/*.pkg.tar.* 2>/dev/null || echo 'No package files found'
         "
 
     - name: Upload package artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.name }}-${{ matrix.type }}-pkg
+        name: ${{ matrix.name }}-pkg
         path: "*.pkg.tar.*"
 
   create-repository:
@@ -104,7 +81,7 @@ jobs:
       run: |
         mkdir -p repo
         find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
-        echo "Packages in repository:"
+        echo "Repository contents:"
         ls -la repo/ || echo "No packages found"
 
     - name: Deploy to GitHub Pages
