@@ -8,7 +8,7 @@ custom_packages:
         source: "wallpapers/*"
         destination: "/usr/share/backgrounds/nordic-backgrounds"
 
-  - name: awesome-rofi-themes
+  - name: awesome-rofi
     repo: megvadulthangya/Awesome-rofi
     branch: my-awesome-config
     description: "Rofi themes and configuration"

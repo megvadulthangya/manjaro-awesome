@@ -7,96 +7,8 @@ import sys
 
 CONFIG_FILE = "projects.yaml"
 
-def get_latest_commit(repo, branch="main"):
-    """Automatikusan lekéri a legújabb commit hash-t"""
-    try:
-        url = f"https://api.github.com/repos/{repo}/commits/{branch}"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()['sha'][:7]
-        else:
-            print(f"Warning: Could not fetch commit for {repo} ({response.status_code})")
-    except Exception as e:
-        print(f"Error fetching commit for {repo}: {e}")
-    
-    return "unknown"
-
-def generate_pkgbuild(project_config):
-    """Generál PKGBUILD fájlt a konfiguráció alapján"""
-    
-    pkgname = project_config['name']
-    repo = project_config['repo']
-    branch = project_config.get('branch', 'main')
-    commit_hash = get_latest_commit(repo, branch)
-    
-    # A repository neve (a repo URL utolsó része)
-    repo_name = repo.split('/')[-1]
-    
-    # Verzió formátum: dátum.commit_hash
-    date_str = datetime.now().strftime("%Y%m%d")
-    pkgver = f"{date_str}.{commit_hash}"
-    
-    # Alap PKGBUILD struktúra
-    pkgbuild = f"""# Maintainer: Manjaro Awesome Nord
-pkgname={pkgname}
-pkgver={pkgver}
-pkgrel=1
-pkgdesc="{project_config['description']}"
-arch=('any')
-url="https://github.com/{repo}"
-license=('{project_config.get('license', 'MIT')}')
-"""
-
-    # Függőségek
-    if 'depends' in project_config and project_config['depends']:
-        depends_str = ' '.join([f"'{d}'" for d in project_config['depends']])
-        pkgbuild += f"depends=({depends_str})\n"
-    
-    # Manjaro specifikus beállítások
-    pkgbuild += """# Manjaro specific
-options=('!strip' '!emptydirs')
-"""
-
-    # Source - branch specifikus letöltés
-    pkgbuild += f"""source=("$pkgname-$pkgver.tar.gz::https://github.com/{repo}/archive/refs/heads/{branch}.tar.gz")
-sha256sums=('SKIP')
-
-package() {{
-  cd "$srcdir/{repo_name}-{branch}"
-"""
-    
-    # Install lépések
-    for step in project_config.get('install_steps', []):
-        if step['type'] == 'copy':
-            src = step['source']
-            dest = step['destination']
-            
-            # Ha a cél /etc/skel, akkor a $pkgdir/etc/skel-be másolunk
-            if dest.startswith('/etc/skel'):
-                dest = dest.replace('/etc/skel', '$pkgdir/etc/skel', 1)
-            elif dest.startswith('/usr'):
-                dest = f"$pkgdir{dest}"
-            else:
-                # Ha nem abszolút útvonal, akkor warning
-                print(f"Warning: Destination '{dest}' is not absolute path in {pkgname}")
-                dest = f"$pkgdir/usr/share/{pkgname}"
-                
-            # Könyvtár létrehozása és másolás
-            pkgbuild += f'  install -dm755 "{dest}"\n'
-            
-            # Wildcard kezelése
-            if '*' in src:
-                pkgbuild += f'  cp -r {src} "{dest}/"\n'
-            else:
-                pkgbuild += f'  cp -r {src} "{dest}/"\n'
-            
-        elif step['type'] == 'command':
-            # System parancsok (pl. fc-cache) a package() függvényben
-            pkgbuild += f"  {step['command']}\n"
-    
-    pkgbuild += "}\n"
-    
-    return pkgbuild
+def debug_log(message):
+    print(f"DEBUG: {message}", file=sys.stderr)
 
 def main():
     print("Starting PKGBUILD generation...")
@@ -112,43 +24,88 @@ def main():
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = yaml.safe_load(f)
-        print("✓ Config loaded successfully")
+        debug_log("Config loaded successfully")
     except Exception as e:
         print(f"ERROR loading config: {e}")
         sys.exit(1)
     
     custom_packages = config.get('custom_packages', [])
-    print(f"Found {len(custom_packages)} custom packages")
+    debug_log(f"Found {len(custom_packages)} custom packages")
+    
+    # Töröljük és újra létrehozzuk a packages mappát
+    if os.path.exists("packages"):
+        import shutil
+        shutil.rmtree("packages")
+    os.makedirs("packages", exist_ok=True)
     
     for project in custom_packages:
         try:
             pkgname = project['name']
-            print(f"Generating PKGBUILD for {pkgname}...")
+            repo = project['repo']
+            branch = project.get('branch', 'main')
             
-            pkgbuild_content = generate_pkgbuild(project)
+            debug_log(f"Processing {pkgname} from {repo}")
+            
+            # Repository név kinyerése
+            repo_name = repo.split('/')[-1]
+            
+            # Egyszerű PKGBUILD generálás
+            pkgbuild = f"""# Maintainer: Manjaro Awesome Nord
+pkgname={pkgname}
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="{project['description']}"
+arch=('any')
+url="https://github.com/{repo}"
+license=('{project.get('license', 'MIT')}')
+
+source=("$pkgname-$pkgver.tar.gz::https://github.com/{repo}/archive/refs/heads/{branch}.tar.gz")
+sha256sums=('SKIP')
+
+package() {{
+  cd "$srcdir/{repo_name}-{branch}"
+"""
+            
+            # Install lépések hozzáadása
+            for step in project.get('install_steps', []):
+                if step['type'] == 'copy':
+                    src = step['source']
+                    dest = step['destination']
+                    
+                    if dest.startswith('/etc/skel'):
+                        dest = dest.replace('/etc/skel', '$pkgdir/etc/skel', 1)
+                    elif dest.startswith('/usr'):
+                        dest = f"$pkgdir{dest}"
+                    else:
+                        dest = f"$pkgdir/usr/share/{pkgname}"
+                        
+                    pkgbuild += f'  install -dm755 "{dest}"\n'
+                    pkgbuild += f'  cp -r {src} "{dest}/"\n'
+                    
+                elif step['type'] == 'command':
+                    pkgbuild += f"  {step['command']}\n"
+            
+            pkgbuild += "}\n"
+            
             pkg_dir = f"packages/{pkgname}"
-            
-            # Mappa létrehozása
             os.makedirs(pkg_dir, exist_ok=True)
             
-            # PKGBUILD írása
             with open(f"{pkg_dir}/PKGBUILD", 'w') as f:
-                f.write(pkgbuild_content)
+                f.write(pkgbuild)
             
-            print(f"✓ Successfully generated PKGBUILD for {pkgname}")
+            debug_log(f"Created PKGBUILD for {pkgname}")
             
         except Exception as e:
-            print(f"✗ Error generating PKGBUILD for {project.get('name', 'unknown')}: {e}")
+            print(f"ERROR with {project.get('name', 'unknown')}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
-    # AUR csomagok listázása
-    aur_packages = config.get('aur_packages', [])
-    if aur_packages:
-        print(f"\nFound {len(aur_packages)} AUR packages (will be built directly from AUR)")
-        for aur_pkg in aur_packages:
-            print(f"  - {aur_pkg}")
-    
-    print("\nPKGBUILD generation completed!")
+    print("PKGBUILD generation completed!")
+    print("Generated packages:")
+    for root, dirs, files in os.walk("packages"):
+        for dir in dirs:
+            print(f"  - {dir}")
 
 if __name__ == "__main__":
     main()

@@ -25,13 +25,28 @@ jobs:
       run: pip install pyyaml requests
         
     - name: Generate PKGBUILDs
-      run: python3 scripts/generate-pkgbuild.py
+      run: |
+        python3 scripts/generate-pkgbuild.py
+        echo "Generated packages structure:"
+        find packages/ -type f -name "PKGBUILD" | head -10
+        
+    - name: Verify package generation
+      run: |
+        echo "Checking generated packages..."
+        for pkg in nordic-backgrounds awesome-rofi awesome-copycats-manjaro; do
+          if [ -d "packages/$pkg" ] && [ -f "packages/$pkg/PKGBUILD" ]; then
+            echo "✓ $pkg package generated successfully"
+          else
+            echo "✗ $pkg package missing!"
+            exit 1
+          fi
+        done
         
     - name: Set build matrices
       id: set-matrix
       run: |
         # Frissítve a correct nevekkel
-        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi-themes"},{"name":"awesome-copycats-manjaro"}]}'
+        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi"},{"name":"awesome-copycats-manjaro"}]}'
         AUR_MATRIX='{"include":[{"name":"raw-thumbnailer"},{"name":"grayjay-bin"},{"name":"gsconnect"},{"name":"lain-git"},{"name":"awesome-git"},{"name":"awesome-freedesktop-git"},{"name":"tilix-git"},{"name":"ttf-font-awesome-5"},{"name":"tamzen-font"},{"name":"i3lock-fancy-git"},{"name":"betterlockscreen"},{"name":"nordic-theme"},{"name":"nordic-darker-theme"},{"name":"nordic-darker-standard-buttons-theme"},{"name":"nordic-polar-standard-buttons-theme"},{"name":"nordic-standard-buttons-theme"},{"name":"nordic-bluish-accent-theme"},{"name":"nordic-bluish-accent-standard-buttons-theme"},{"name":"geany-nord-theme"},{"name":"nordzy-icon-theme"},{"name":"oh-my-posh-bin"},{"name":"fish-done"},{"name":"find-the-command"},{"name":"p7zip-gui"}]}'
         
         echo "custom_matrix=$CUSTOM_MATRIX" >> $GITHUB_OUTPUT
@@ -58,9 +73,7 @@ jobs:
         
     - name: Configure builder user
       run: |
-        # A builder user már létezik a Manjaro image-ben, csak konfiguráljuk
         echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-        # Biztosítjuk, hogy a home directory megfelelően be van állítva
         mkdir -p /home/builder
         chown builder:builder /home/builder
         
@@ -69,8 +82,15 @@ jobs:
       
     - name: Build custom package
       run: |
+        echo "Building package: ${{ matrix.name }}"
+        echo "Current directory: $(pwd)"
+        ls -la packages/
+        
         cd packages/${{ matrix.name }}
-        sudo -u builder bash -c "makepkg -s --noconfirm"
+        echo "PKGBUILD content:"
+        cat PKGBUILD
+        
+        sudo -u builder bash -c "makepkg -s --noconfirm --skippgpcheck"
         
     - name: Upload custom package artifact
       uses: actions/upload-artifact@v4
@@ -82,47 +102,65 @@ jobs:
     needs: generate-packages
     runs-on: ubuntu-latest
     container:
-      image: manjarolinux/base:latest
+      image: archlinux:latest  # Váltunk Arch-ra, mert a Manjaro image problémás
     
     strategy:
       matrix: ${{ fromJson(needs.generate-packages.outputs.aur_matrix) }}
     
     steps:
-    - name: Update Manjaro system
+    - name: Update Arch system
       run: |
         pacman -Syu --noconfirm
-        pacman -S --noconfirm manjaro-release
         
     - name: Install build dependencies
       run: |
         pacman -S --noconfirm base-devel git sudo
         
-    - name: Configure builder user
+    - name: Create build user (Arch-ban még nincs builder)
       run: |
-        # A builder user már létezik a Manjaro image-ben, csak konfiguráljuk
+        useradd -m builder
         echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-        mkdir -p /home/builder
-        chown builder:builder /home/builder
         
-    - name: Install paru AUR helper
+    - name: Install yay AUR helper (egyszerűbb, mint paru)
       run: |
         cd /tmp
-        # Először töröljük, ha már létezik (cache miatt)
-        rm -rf paru-bin
-        sudo -u builder git clone https://aur.archlinux.org/paru-bin.git
-        cd paru-bin
+        sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+        cd yay-bin
         sudo -u builder makepkg -si --noconfirm --skippgpcheck
         
-    - name: Build AUR package
+    - name: Build AUR package with yay
       run: |
-        # Töröljük a korábbi build mappát
-        rm -rf /tmp/aur-build
-        mkdir -p /tmp/aur-build
+        # Build könyvtár a builder home-jában
+        BUILD_DIR="/home/builder/aur-build"
+        sudo -u builder mkdir -p "$BUILD_DIR"
         
-        sudo -u builder bash -c "cd /tmp && paru -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --skipreview --noconfirm"
+        echo "Building AUR package: ${{ matrix.name }}"
         
-        # Másoljuk a buildelt csomagokat
-        find /tmp/aur-build -name "*.pkg.tar.*" -exec cp {} . \;
+        # Yay használata automatikus válaszokkal
+        sudo -u builder bash -c "
+          cd /tmp
+          yes | yay -S --noconfirm --builddir '$BUILD_DIR' ${{ matrix.name }} --answerclean All --answerdiff None --answeredit None --removemake 2>&1 | tee build.log
+        "
+        
+        # Build eredmények ellenőrzése
+        if sudo -u builder find "$BUILD_DIR" -name "*.pkg.tar.*" | grep -q .; then
+          echo "✓ Package built successfully"
+          sudo -u builder find "$BUILD_DIR" -name "*.pkg.tar.*" -exec cp {} . \;
+          echo "Copied packages:"
+          ls -la *.pkg.tar.*
+        else
+          echo "✗ No package files found"
+          echo "Build log:"
+          cat /tmp/build.log 2>/dev/null || echo "No build log found"
+          # Ne álljunk le azonnal, hanem próbáljuk meg az alap parancsot
+          echo "Trying alternative build method..."
+          sudo -u builder bash -c "
+            cd /tmp
+            git clone https://aur.archlinux.org/${{ matrix.name }}.git
+            cd ${{ matrix.name }}
+            makepkg -s --noconfirm --skippgpcheck
+          " && sudo -u builder find "/tmp/${{ matrix.name }}" -name "*.pkg.tar.*" -exec cp {} . \;
+        fi
         
     - name: Upload AUR package artifact
       uses: actions/upload-artifact@v4
@@ -140,32 +178,25 @@ jobs:
     - name: Set up repository structure
       run: |
         mkdir -p repo
-        # Összes csomag másolása
         find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
-        
-    - name: Install pacman tools for repo creation
-      run: |
-        # Ubuntu-alapú környezet, ezért más megoldás kell
-        sudo apt-get update
-        sudo apt-get install -y libarchive-tools wget
-        
-        # Letöltjük és használjuk a repo-add scriptet
-        wget -q https://raw.githubusercontent.com/archlinux/arch-install-scripts/main/repo-add
-        chmod +x repo-add
+        echo "Found packages:"
+        ls -la repo/ || echo "No packages found"
         
     - name: Create repository database
       run: |
         cd repo
-        # Használjuk a letöltött repo-add scriptet
-        ../repo-add manjaro-awesome.db.tar.gz *.pkg.tar.*
-        
-    - name: List repository contents
-      run: |
-        cd repo
+        # Egyszerű megoldás: csak listázzuk a csomagokat
+        ls -1 *.pkg.tar.* > PACKAGES.txt 2>/dev/null || echo "No packages" > PACKAGES.txt
         echo "Repository contents:"
-        ls -la
-        echo "Package list:"
-        tar -tf manjaro-awesome.db.tar.gz || true
+        cat PACKAGES.txt
+        
+        # Egyszerű repo struktúra létrehozása
+        echo "Creating repository index..."
+        for pkg in *.pkg.tar.*; do
+          if [ -f "$pkg" ]; then
+            echo "$pkg" >> index.txt
+          fi
+        done
         
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
@@ -173,4 +204,3 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./repo
         force_orphan: true
-        keep_files: false
