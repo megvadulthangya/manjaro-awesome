@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
   build-single-package:
     runs-on: ubuntu-latest
@@ -21,37 +26,88 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel git sudo
           
-          # Build directly in /tmp where we have write permissions
-          cp -r packages/nordic-backgrounds /tmp/
-          cd /tmp/nordic-backgrounds
-          makepkg -s --noconfirm --skippgpcheck
-          cp *.pkg.tar.* /workspace/ 2>/dev/null || echo 'No package files'
+          # Create non-root user for building
+          useradd -m -s /bin/bash builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          
+          # Switch to builder user and build
+          su - builder -c '
+            cd /workspace/packages/nordic-backgrounds
+            makepkg -s --noconfirm --skippgpcheck
+            cp *.pkg.tar.* /workspace/ 2>/dev/null || echo \"No package files created\"
+          '
         "
 
-    - name: Upload package
+    - name: Check built package
+      run: |
+        echo "Checking for built packages..."
+        if ls *.pkg.tar.* 1> /dev/null 2>&1; then
+          echo "✅ Package built successfully:"
+          ls -la *.pkg.tar.*
+        else
+          echo "❌ No package files found"
+          exit 1
+        fi
+
+    - name: Upload package artifact
       uses: actions/upload-artifact@v4
       with:
         name: nordic-backgrounds-pkg
         path: "*.pkg.tar.*"
-        if-no-files-found: warn
 
   create-repository:
     needs: build-single-package
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
     steps:
     - name: Download artifact
       uses: actions/download-artifact@v4
 
+    - name: Setup Pages
+      uses: actions/configure-pages@v3
+
     - name: Create repository
       run: |
         mkdir -p repo
-        cp *.pkg.tar.* repo/ 2>/dev/null || echo "No packages to copy"
-        echo "Repository:"
+        # Copy package files
+        find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
+        echo "Repository contents:"
         ls -la repo/
+        
+        # Create simple index.html for testing
+        cat > repo/index.html << EOF
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Manjaro Awesome Repository</title>
+        </head>
+        <body>
+            <h1>Manjaro Awesome Repository</h1>
+            <p>Available packages:</p>
+            <ul>
+        EOF
+        
+        for pkg in repo/*.pkg.tar.*; do
+          if [ -f "$pkg" ]; then
+            pkgname=$(basename "$pkg")
+            echo "        <li><a href=\"$pkgname\">$pkgname</a></li>" >> repo/index.html
+          fi
+        done
+        
+        cat >> repo/index.html << EOF
+            </ul>
+        </body>
+        </html>
+        EOF
 
-    - name: Deploy
-      uses: peaceiris/actions-gh-pages@v3
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v2
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./repo
-        force_orphan: true
+        path: ./repo
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v2
