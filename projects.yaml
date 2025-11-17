@@ -1,6 +1,7 @@
 custom_packages:
   - name: nordic-backgrounds
     repo: megvadulthangya/nordic-backgrounds
+    branch: master  # ← Javítva: main → master
     description: "Nordic theme wallpapers"
     license: MIT
     install_steps:

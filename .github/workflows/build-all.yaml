@@ -3,201 +3,125 @@ name: Build Manjaro Packages
 on:
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
-  generate-packages:
+  generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      custom_matrix: ${{ steps.set-matrix.outputs.custom_matrix }}
-      aur_matrix: ${{ steps.set-matrix.outputs.aur_matrix }}
+      custom_matrix: ${{ steps.matrix.outputs.custom }}
+      aur_matrix: ${{ steps.matrix.outputs.aur }}
     steps:
-    - uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
+      - name: Checkout repo
+        uses: actions/checkout@v4
         
-    - name: Install dependencies
-      run: pip install pyyaml requests
-        
-    - name: Generate PKGBUILDs
-      run: |
-        python3 scripts/generate-pkgbuild.py
-        echo "Generated packages structure:"
-        find packages/ -type f -name "PKGBUILD" | head -10
-        
-    - name: Verify package generation
-      run: |
-        echo "Checking generated packages..."
-        for pkg in nordic-backgrounds awesome-rofi awesome-copycats-manjaro; do
-          if [ -d "packages/$pkg" ] && [ -f "packages/$pkg/PKGBUILD" ]; then
-            echo "✓ $pkg package generated successfully"
-          else
-            echo "✗ $pkg package missing!"
-            exit 1
-          fi
-        done
-        
-    - name: Set build matrices
-      id: set-matrix
-      run: |
-        # Frissítve a correct nevekkel
-        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi"},{"name":"awesome-copycats-manjaro"}]}'
-        AUR_MATRIX='{"include":[{"name":"raw-thumbnailer"},{"name":"grayjay-bin"},{"name":"gsconnect"},{"name":"lain-git"},{"name":"awesome-git"},{"name":"awesome-freedesktop-git"},{"name":"tilix-git"},{"name":"ttf-font-awesome-5"},{"name":"tamzen-font"},{"name":"i3lock-fancy-git"},{"name":"betterlockscreen"},{"name":"nordic-theme"},{"name":"nordic-darker-theme"},{"name":"nordic-darker-standard-buttons-theme"},{"name":"nordic-polar-standard-buttons-theme"},{"name":"nordic-standard-buttons-theme"},{"name":"nordic-bluish-accent-theme"},{"name":"nordic-bluish-accent-standard-buttons-theme"},{"name":"geany-nord-theme"},{"name":"nordzy-icon-theme"},{"name":"oh-my-posh-bin"},{"name":"fish-done"},{"name":"find-the-command"},{"name":"p7zip-gui"}]}'
-        
-        echo "custom_matrix=$CUSTOM_MATRIX" >> $GITHUB_OUTPUT
-        echo "aur_matrix=$AUR_MATRIX" >> $GITHUB_OUTPUT
+      - name: Generate matrix from YAML
+        id: matrix
+        run: |
+          python3 << 'EOF'
+          import yaml
+          import json
+          import os
+          
+          with open('projects.yaml', 'r') as f:
+              config = yaml.safe_load(f)
+          
+          # Custom packages matrix
+          custom_packages = config.get('custom_packages', [])
+          custom_matrix = [{'name': pkg['name'], 'type': 'custom'} for pkg in custom_packages]
+          
+          # AUR packages matrix  
+          aur_packages = config.get('aur_packages', [])
+          aur_matrix = [{'name': pkg, 'type': 'aur'} for pkg in aur_packages]
+          
+          # Output matrices
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'custom={json.dumps(custom_matrix)}\n')
+              f.write(f'aur={json.dumps(aur_matrix)}\n')
+          
+          print("Generated matrices:")
+          print(f"Custom: {len(custom_matrix)} packages")
+          print(f"AUR: {len(aur_matrix)} packages")
+          EOF
 
-  build-custom-packages:
-    needs: generate-packages
+  build-packages:
+    needs: generate-matrix
     runs-on: ubuntu-latest
-    container:
-      image: manjarolinux/base:latest
-    
     strategy:
-      matrix: ${{ fromJson(needs.generate-packages.outputs.custom_matrix) }}
-    
+      matrix:
+        include: ${{ fromJson(needs.generate-matrix.outputs.custom_matrix) }} + ${{ fromJson(needs.generate-matrix.outputs.aur_matrix) }}
+
     steps:
-    - name: Update Manjaro system
-      run: |
-        pacman -Syu --noconfirm
-        pacman -S --noconfirm manjaro-release
-        
-    - name: Install build dependencies
-      run: |
-        pacman -S --noconfirm base-devel git sudo
-        
-    - name: Configure builder user
-      run: |
-        echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-        mkdir -p /home/builder
-        chown builder:builder /home/builder
-        
     - name: Checkout repository
       uses: actions/checkout@v4
-      
-    - name: Build custom package
-      run: |
-        echo "Building package: ${{ matrix.name }}"
-        echo "Current directory: $(pwd)"
-        ls -la packages/
-        
-        cd packages/${{ matrix.name }}
-        echo "PKGBUILD content:"
-        cat PKGBUILD
-        
-        sudo -u builder bash -c "makepkg -s --noconfirm --skippgpcheck"
-        
-    - name: Upload custom package artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.name }}-custom-pkg
-        path: packages/${{ matrix.name }}/*.pkg.tar.*
 
-  build-aur-packages:
-    needs: generate-packages
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest  # Váltunk Arch-ra, mert a Manjaro image problémás
-    
-    strategy:
-      matrix: ${{ fromJson(needs.generate-packages.outputs.aur_matrix) }}
-    
-    steps:
-    - name: Update Arch system
-      run: |
-        pacman -Syu --noconfirm
-        
-    - name: Install build dependencies
-      run: |
-        pacman -S --noconfirm base-devel git sudo
-        
-    - name: Create build user (Arch-ban még nincs builder)
-      run: |
-        useradd -m builder
-        echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-        
-    - name: Install yay AUR helper (egyszerűbb, mint paru)
-      run: |
-        cd /tmp
-        sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
-        cd yay-bin
-        sudo -u builder makepkg -si --noconfirm --skippgpcheck
-        
-    - name: Build AUR package with yay
-      run: |
-        # Build könyvtár a builder home-jában
-        BUILD_DIR="/home/builder/aur-build"
-        sudo -u builder mkdir -p "$BUILD_DIR"
-        
-        echo "Building AUR package: ${{ matrix.name }}"
-        
-        # Yay használata automatikus válaszokkal
-        sudo -u builder bash -c "
+    - name: Setup build environment
+      if: matrix.type == 'custom'
+      uses: docker://manjarolinux/base:latest
+      with:
+        entrypoint: /bin/bash
+        args: -c |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git sudo python python-pip
+          pip install pyyaml requests
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          
+          # Generate PKGBUILD for this specific package
+          cd /github/workspace
+          python3 scripts/generate-single-pkgbuild.py ${{ matrix.name }}
+          
+          # Build the package
+          cd packages/${{ matrix.name }}
+          sudo -u builder makepkg -s --noconfirm --skippgpcheck
+          
+          # Copy package to workspace root
+          cp *.pkg.tar.* /github/workspace/
+
+    - name: Build AUR package
+      if: matrix.type == 'aur'
+      uses: docker://archlinux:latest
+      with:
+        entrypoint: /bin/bash
+        args: -c |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git sudo
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          
+          # Install yay
           cd /tmp
-          yes | yay -S --noconfirm --builddir '$BUILD_DIR' ${{ matrix.name }} --answerclean All --answerdiff None --answeredit None --removemake 2>&1 | tee build.log
-        "
-        
-        # Build eredmények ellenőrzése
-        if sudo -u builder find "$BUILD_DIR" -name "*.pkg.tar.*" | grep -q .; then
-          echo "✓ Package built successfully"
-          sudo -u builder find "$BUILD_DIR" -name "*.pkg.tar.*" -exec cp {} . \;
-          echo "Copied packages:"
-          ls -la *.pkg.tar.*
-        else
-          echo "✗ No package files found"
-          echo "Build log:"
-          cat /tmp/build.log 2>/dev/null || echo "No build log found"
-          # Ne álljunk le azonnal, hanem próbáljuk meg az alap parancsot
-          echo "Trying alternative build method..."
-          sudo -u builder bash -c "
-            cd /tmp
-            git clone https://aur.archlinux.org/${{ matrix.name }}.git
-            cd ${{ matrix.name }}
-            makepkg -s --noconfirm --skippgpcheck
-          " && sudo -u builder find "/tmp/${{ matrix.name }}" -name "*.pkg.tar.*" -exec cp {} . \;
-        fi
-        
-    - name: Upload AUR package artifact
+          sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+          cd yay-bin
+          sudo -u builder makepkg -si --noconfirm --skippgpcheck
+          
+          # Build AUR package
+          cd /github/workspace
+          sudo -u builder bash -c "yay -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --answerclean All --answerdiff None --answeredit None --removemake --noconfirm"
+          
+          # Copy packages (as root to avoid permission issues)
+          find /tmp/aur-build -name "*.pkg.tar.*" -exec cp {} . \;
+
+    - name: Upload package artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.name }}-aur-pkg
+        name: ${{ matrix.name }}-${{ matrix.type }}-pkg
         path: "*.pkg.tar.*"
 
   create-repository:
-    needs: [build-custom-packages, build-aur-packages]
+    needs: build-packages
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
-      
-    - name: Set up repository structure
+
+    - name: Create repository structure
       run: |
         mkdir -p repo
         find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
-        echo "Found packages:"
+        echo "Packages in repository:"
         ls -la repo/ || echo "No packages found"
-        
-    - name: Create repository database
-      run: |
-        cd repo
-        # Egyszerű megoldás: csak listázzuk a csomagokat
-        ls -1 *.pkg.tar.* > PACKAGES.txt 2>/dev/null || echo "No packages" > PACKAGES.txt
-        echo "Repository contents:"
-        cat PACKAGES.txt
-        
-        # Egyszerű repo struktúra létrehozása
-        echo "Creating repository index..."
-        for pkg in *.pkg.tar.*; do
-          if [ -f "$pkg" ]; then
-            echo "$pkg" >> index.txt
-          fi
-        done
-        
+
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:

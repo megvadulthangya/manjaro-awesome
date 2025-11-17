@@ -1,0 +1,17 @@
+# Maintainer: Manjaro Awesome Nord
+pkgname=nordic-backgrounds
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Nordic theme wallpapers"
+arch=('any')
+url="https://github.com/megvadulthangya/nordic-backgrounds"
+license=('MIT')
+
+source=("https://github.com/megvadulthangya/nordic-backgrounds/archive/refs/heads/master.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/nordic-backgrounds-master"  # ← JAVÍTVA: main → master
+  install -dm755 "$pkgdir/usr/share/backgrounds/nordic-backgrounds"
+  cp -r wallpapers/* "$pkgdir/usr/share/backgrounds/nordic-backgrounds/"
+}
