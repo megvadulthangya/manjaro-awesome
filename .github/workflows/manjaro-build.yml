@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      OUTPUT_DIR: /output
+      OUTPUT_DIR: /home/builder/output
       REPO_NAME: manjaro-awesome
       AUR_PACKAGES: |
         raw-thumbnailer
@@ -54,7 +54,7 @@ jobs:
           sudo passwd -d builder
           sudo bash -c "echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
           mkdir -p $OUTPUT_DIR
-          sudo chown builder:builder $OUTPUT_DIR
+          chown builder:builder $OUTPUT_DIR
 
       - name: Download Arch bootstrap
         run: |
