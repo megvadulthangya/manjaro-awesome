@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y --no-install-recommends \
-            wget git tar zstd xz-utils bsdtar sudo fakeroot fontconfig
+      wget git tar zstd xz-utils libarchive-tools sudo fakeroot fontconfig
 
       - name: Create builder user and directories
         run: |
