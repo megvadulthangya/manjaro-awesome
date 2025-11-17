@@ -1,59 +1,49 @@
-name: Build and Deploy
+name: Test Package Build
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Build package
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Build test package
       run: |
-        # Create PKGBUILD
+        # Create temporary directory and PKGBUILD
         mkdir -p /tmp/pkgbuild
         cat > /tmp/pkgbuild/PKGBUILD << 'EOF'
-pkgname=nordic-backgrounds-test
+pkgname=test-package
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Test package for nordic backgrounds"
+pkgdesc="Test package"
 arch=('any')
 
 package() {
-  echo "This is a test package"
+  echo "Test package content"
 }
 EOF
 
-        # Build in container
+        # Build in Docker
         docker run --rm \
           -v /tmp/pkgbuild:/build \
-          -w /build \
           manjarolinux/base:latest \
           bash -c "
             pacman -Syu --noconfirm
             pacman -S --noconfirm base-devel
             useradd -m builder
             su - builder -c 'cd /build && makepkg'
-            ls -la *.pkg.tar.*
           "
-        
+
         # Check result
-        if ls /tmp/pkgbuild/*.pkg.tar.* 1>/dev/null 2>&1; then
-          echo "✅ TEST SUCCESS - Package was built!"
-          mkdir -p repo
-          cp /tmp/pkgbuild/*.pkg.tar.* repo/
-          ls -la repo/
+        if find /tmp/pkgbuild -name "*.pkg.tar.*" | grep -q .; then
+          echo "✅ SUCCESS: Package was built!"
+          find /tmp/pkgbuild -name "*.pkg.tar.*" -exec ls -la {} \;
         else
-          echo "❌ TEST FAILED - No package created"
+          echo "❌ FAILED: No package file created"
           exit 1
         fi
-
-    - name: Deploy
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./repo
-        force_orphan: true
