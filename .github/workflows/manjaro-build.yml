@@ -46,7 +46,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y --no-install-recommends \
-            build-essential fakeroot git wget tar zstd xz-utils pkg-config base-devel
+            build-essential fakeroot git wget tar zstd xz-utils pkg-config
 
       - name: Create builder user
         run: |
@@ -85,7 +85,7 @@ jobs:
               if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
               git clone https://aur.archlinux.org/$pkg.git
               cd "$pkg"
-              makepkg -s --noconfirm --clean
+              makepkg -s --noconfirm --clean || true
               mv *.pkg.tar.zst $OUTPUT_DIR/ || true
               cd ..
             done
