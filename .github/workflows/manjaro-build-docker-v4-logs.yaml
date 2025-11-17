@@ -1,0 +1,138 @@
+name: Build Manjaro Packages + AUR (with logs)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      OUTPUT_DIR: /home/builder/output
+      LOG_DIR: /home/builder/logs
+      REPO_NAME: manjaro-awesome
+      AUR_PACKAGES: |
+        raw-thumbnailer
+        grayjay-bin
+        gsconnect
+        lain-git
+        awesome-git
+        awesome-freedesktop-git
+        tilix-git
+        ttf-font-awesome-5
+        tamzen-font
+        i3lock-fancy-git
+        betterlockscreen
+        nordic-theme
+        nordic-darker-theme
+        nordic-darker-standard-buttons-theme
+        nordic-polar-standard-buttons-theme
+        nordic-standard-buttons-theme
+        nordic-bluish-accent-theme
+        nordic-bluish-accent-standard-buttons-theme
+        geany-nord-theme
+        nordzy-icon-theme
+        oh-my-posh-bin
+        fish-done
+        find-the-command
+        p7zip-gui
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install host dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y --no-install-recommends \
+            wget git tar zstd xz-utils bsdtar sudo fakeroot fontconfig
+
+      - name: Create builder user and directories
+        run: |
+          sudo useradd -m builder
+          sudo passwd -d builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
+          sudo mkdir -p $OUTPUT_DIR $LOG_DIR
+          sudo chown -R builder:builder $OUTPUT_DIR $LOG_DIR
+
+      - name: Download Arch bootstrap
+        run: |
+          wget https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-2025.11.01-x86_64.tar.zst
+          mkdir -p arch-bootstrap
+          sudo tar -I zstd -xf archlinux-bootstrap-2025.11.01-x86_64.tar.zst -C arch-bootstrap --strip-components=1
+
+      - name: Install Arch build dependencies
+        run: |
+          sudo arch-bootstrap/root.x86_64/bin/pacman-key --init
+          sudo arch-bootstrap/root.x86_64/bin/pacman-key --populate archlinux
+          sudo arch-bootstrap/root.x86_64/bin/pacman -Syu --noconfirm
+          sudo arch-bootstrap/root.x86_64/bin/pacman -S --noconfirm \
+            base-devel git wget xz zstd fakeroot pkgconf fontconfig
+
+      - name: Build local PKGBUILD packages with logs
+        run: |
+          su - builder -c "
+            mkdir -p $LOG_DIR
+            cd /github/workspace
+            for pkgdir in \$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
+              pkgname=\$(basename \$pkgdir)
+              echo '=== BUILDING LOCAL PACKAGE: \$pkgname ===' | tee $LOG_DIR/local-\$pkgname.log
+              cd \$pkgdir
+              if makepkg -s --noconfirm --clean 2>&1 | tee -a $LOG_DIR/local-\$pkgname.log; then
+                mv *.pkg.tar.zst $OUTPUT_DIR/ || true
+              else
+                echo '!!! FAILED BUILD: \$pkgname' | tee -a $LOG_DIR/local-\$pkgname.log
+              fi
+              cd -
+            done
+          "
+
+      - name: Build AUR packages with logs
+        run: |
+          su - builder -c "
+            mkdir -p $LOG_DIR
+            cd /tmp
+            for pkg in $AUR_PACKAGES; do
+              echo '=== BUILDING AUR PACKAGE: \$pkg ===' | tee $LOG_DIR/aur-\$pkg.log
+              rm -rf \$pkg || true
+              if git clone https://aur.archlinux.org/\$pkg.git 2>&1 | tee -a $LOG_DIR/aur-\$pkg.log; then
+                cd \$pkg
+                if makepkg -s --noconfirm --clean 2>&1 | tee -a $LOG_DIR/aur-\$pkg.log; then
+                  mv *.pkg.tar.zst $OUTPUT_DIR/ || true
+                else
+                  echo '!!! FAILED BUILD: \$pkg' | tee -a $LOG_DIR/aur-\$pkg.log
+                fi
+                cd ..
+              else
+                echo '!!! FAILED CLONE: \$pkg' | tee -a $LOG_DIR/aur-\$pkg.log
+              fi
+            done
+          "
+
+      - name: Create repo database
+        run: |
+          su - builder -c "
+            cd $OUTPUT_DIR
+            repo-add ${REPO_NAME}.db.tar.gz *.pkg.tar.zst || true
+          "
+
+      - name: Commit & push repo to gh-pages
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan gh-pages || git checkout gh-pages
+          git rm -rf .
+          cp -r $OUTPUT_DIR/* .
+          git add .
+          git commit -m 'Update Manjaro repo' || true
+          git push -f origin gh-pages
+
+      - name: Upload built packages and logs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: manjaro-packages-and-logs
+          path: |
+            ${{ env.OUTPUT_DIR }}/*.pkg.tar.zst
+            ${{ env.LOG_DIR }}/*.log
