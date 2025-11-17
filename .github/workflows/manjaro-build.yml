@@ -1,70 +1,127 @@
-name: Build and Deploy Manjaro Packages
+name: Build Manjaro Packages + AUR
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-
     env:
       OUTPUT_DIR: /home/builder/output
       REPO_NAME: manjaro-awesome
-      AUR_PACKAGES: raw-thumbnailer
+      AUR_PACKAGES: |
+        raw-thumbnailer
+        grayjay-bin
+        gsconnect
+        lain-git
+        awesome-git
+        awesome-freedesktop-git
+        tilix-git
+        ttf-font-awesome-5
+        tamzen-font
+        i3lock-fancy-git
+        betterlockscreen
+        nordic-theme
+        nordic-darker-theme
+        nordic-darker-standard-buttons-theme
+        nordic-polar-standard-buttons-theme
+        nordic-standard-buttons-theme
+        nordic-bluish-accent-theme
+        nordic-bluish-accent-standard-buttons-theme
+        geany-nord-theme
+        nordzy-icon-theme
+        oh-my-posh-bin
+        fish-done
+        find-the-command
+        p7zip-gui
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup build environment
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y git makepkg base-devel
+          sudo apt install -y --no-install-recommends \
+            build-essential fakeroot git wget tar zstd xz-utils pkg-config
 
-      - name: Create output directory
-        run: mkdir -p $OUTPUT_DIR
-
-      - name: Build packages
+      - name: Create builder user
         run: |
-          # Példa build lépés, itt a PKGBUILD-eket kell építeni
-          # Minden build artifact ide kerül:
-          # /home/builder/output
-          for pkg in awesome-copycats-manjaro awesome-rofi nordic-backgrounds; do
-            mkdir -p temp_build
-            cp -r packages/$pkg/* temp_build/
-            cd temp_build
-            makepkg -o -p PKGBUILD -d || true  # '-o' csak az outputot készíti
-            cp *tar.zst $OUTPUT_DIR/ || true
-            cd ..
-            rm -rf temp_build
-          done
+          sudo useradd -m builder
+          sudo passwd -d builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' | sudo tee -a /etc/sudoers
+          sudo mkdir -p $OUTPUT_DIR
+          sudo chown builder:builder $OUTPUT_DIR
 
-      - name: Check output
+      - name: Download Arch bootstrap
         run: |
-          if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A $OUTPUT_DIR)" ]; then
-            echo "❌ Output directory is empty!"
-            exit 1
-          else
-            echo "✅ Output directory has files:"
-            ls -l $OUTPUT_DIR
-          fi
+          wget https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-2025.11.01-x86_64.tar.zst
+          mkdir -p arch-bootstrap
+          sudo tar -I zstd -xf archlinux-bootstrap-2025.11.01-x86_64.tar.zst -C arch-bootstrap --strip-components=1
 
-      - name: Deploy to gh-pages
+      - name: Build local PKGBUILD packages
+        run: |
+          su - builder -c '
+            set -e
+            mkdir -p $OUTPUT_DIR
+            for pkgdir in $(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
+              echo "=== BUILDING: $pkgdir ==="
+              cd "$pkgdir"
+              makepkg -s --noconfirm --clean
+              cp *.pkg.tar.zst $OUTPUT_DIR/ || true
+              cd -
+            done
+          '
+
+      - name: Build AUR packages
+        run: |
+          su - builder -c '
+            set -e
+            mkdir -p $OUTPUT_DIR
+            cd /tmp
+            for pkg in $AUR_PACKAGES; do
+              echo "=== BUILDING AUR PACKAGE: $pkg ==="
+              if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
+              git clone https://aur.archlinux.org/$pkg.git
+              cd "$pkg"
+              makepkg -s --noconfirm --clean || true
+              cp *.pkg.tar.zst $OUTPUT_DIR/ || true
+              cd ..
+            done
+          '
+
+      - name: Fix permissions for Git push
+        run: |
+          sudo chown -R $USER:$USER $OUTPUT_DIR
+
+      - name: Create repo database
+        run: |
+          cd $OUTPUT_DIR
+          repo-add ${REPO_NAME}.db.tar.gz *.pkg.tar.zst || true
+
+      - name: Commit & push repo to gh-pages
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@users.noreply.github.com"
 
-          # Új orphan branch a gh-pages-hez
+          # Ellenőrzés, hogy van-e fájl a $OUTPUT_DIR-ben
+          if [ -z "$(ls -A $OUTPUT_DIR)" ]; then
+            echo "❌ No files to deploy!"
+            exit 1
+          fi
+
           git checkout --orphan gh-pages
-
-          # Törlés mindenből, ami a fő branch-en van
           git rm -rf .
-
-          # Másolás a build artifactokból
           cp -r $OUTPUT_DIR/* .
-
           git add .
           git commit -m "Update Manjaro repo"
           git push -f origin gh-pages
+
+      - name: Upload packages as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: manjaro-packages
+          path: ${{ env.OUTPUT_DIR }}/*.pkg.tar.zst
