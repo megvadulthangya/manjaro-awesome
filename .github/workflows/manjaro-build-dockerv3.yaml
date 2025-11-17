@@ -14,6 +14,7 @@ jobs:
 
     env:
       OUTPUT_DIR: /home/builder/output
+      WORKSPACE_DIR: /home/builder/workspace
       REPO_NAME: manjaro-awesome
       AUR_PACKAGES: |
         raw-thumbnailer
@@ -42,68 +43,70 @@ jobs:
         p7zip-gui
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git wget xz zstd pkgconf
+          pacman -S --noconfirm base-devel git wget xz zstd fakeroot pkgconf
 
       - name: Create builder user
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           mkdir -p $OUTPUT_DIR
-          chown builder:builder $OUTPUT_DIR
+          mkdir -p $WORKSPACE_DIR
+          chown -R builder:builder /home/builder
+
+      - name: Checkout repo as builder
+        run: |
+          su - builder -c "git clone https://github.com/${GITHUB_REPOSITORY}.git $WORKSPACE_DIR"
 
       - name: Build local PKGBUILD packages
         run: |
-          su - builder -c '
-            cd /github/workspace
+          su - builder -c "
+            cd $WORKSPACE_DIR
             set -e
-            for pkgdir in $(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
-              echo "=== BUILDING LOCAL PACKAGE: $pkgdir ==="
-              cd "$pkgdir"
+            for pkgdir in \$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
+              echo '=== BUILDING LOCAL PACKAGE: '\$pkgdir' ==='
+              cd \"\$pkgdir\"
               makepkg -s --noconfirm --clean
               mv *.pkg.tar.zst $OUTPUT_DIR/ || true
               cd -
             done
-          '
+          "
 
       - name: Build AUR packages
         run: |
-          su - builder -c '
+          su - builder -c "
             cd /tmp
             set -e
             for pkg in $AUR_PACKAGES; do
-              echo "=== BUILDING AUR PACKAGE: $pkg ==="
-              rm -rf "$pkg" || true
-              git clone https://aur.archlinux.org/$pkg.git
-              cd "$pkg"
+              echo '=== BUILDING AUR PACKAGE: '\$pkg' ==='
+              rm -rf \$pkg || true
+              git clone https://aur.archlinux.org/\$pkg.git
+              cd \$pkg
               makepkg -s --noconfirm --clean || true
               mv *.pkg.tar.zst $OUTPUT_DIR/ || true
               cd ..
             done
-          '
+          "
 
       - name: Create repo database
         run: |
-          su - builder -c '
+          su - builder -c "
             cd $OUTPUT_DIR
             repo-add ${REPO_NAME}.db.tar.gz *.pkg.tar.zst || true
-          '
+          "
 
       - name: Commit & push repo to gh-pages
         run: |
-          cd /github/workspace
+          cd $WORKSPACE_DIR
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@users.noreply.github.com"
           git checkout --orphan gh-pages
           git rm -rf .
           cp -r $OUTPUT_DIR/* .
           git add .
-          git commit -m "Update Manjaro repo"
+          git commit -m 'Update Manjaro repo'
           git push -f origin gh-pages
 
       - name: Upload packages as artifact
