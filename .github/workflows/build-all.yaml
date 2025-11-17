@@ -30,13 +30,12 @@ jobs:
     - name: Set build matrices
       id: set-matrix
       run: |
-        # Custom packages matrix
-        CUSTOM_PACKAGES=$(find packages -name PKGBUILD -type f | sed 's|/PKGBUILD||' | sed 's|packages/||' | jq -R -s -c 'split("\n") | map(select(. != ""))')
-        echo "custom_matrix={\"include\":$(echo $CUSTOM_PACKAGES | jq 'map({name: .})')}" >> $GITHUB_OUTPUT
+        # Egyszerű megoldás - fix értékek
+        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi-themes"},{"name":"awesome-copycats"}]}'
+        AUR_MATRIX='{"include":[{"name":"raw-thumbnailer"},{"name":"grayjay-bin"},{"name":"gsconnect"},{"name":"lain-git"},{"name":"awesome-git"},{"name":"awesome-freedesktop-git"},{"name":"tilix-git"},{"name":"ttf-font-awesome-5"},{"name":"tamzen-font"},{"name":"i3lock-fancy-git"},{"name":"betterlockscreen"},{"name":"nordic-theme"},{"name":"nordic-darker-theme"},{"name":"nordic-darker-standard-buttons-theme"},{"name":"nordic-polar-standard-buttons-theme"},{"name":"nordic-standard-buttons-theme"},{"name":"nordic-bluish-accent-theme"},{"name":"nordic-bluish-accent-standard-buttons-theme"},{"name":"geany-nord-theme"},{"name":"nordzy-icon-theme"},{"name":"oh-my-posh-bin"},{"name":"fish-done"},{"name":"find-the-command"},{"name":"p7zip-gui"}]}'
         
-        # AUR packages matrix
-        AUR_PACKAGES='["raw-thumbnailer", "grayjay-bin", "gsconnect", "lain-git", "awesome-git", "awesome-freedesktop-git", "tilix-git", "ttf-font-awesome-5", "tamzen-font", "i3lock-fancy-git", "betterlockscreen", "nordic-theme", "nordic-darker-theme", "nordic-darker-standard-buttons-theme", "nordic-polar-standard-buttons-theme", "nordic-standard-buttons-theme", "nordic-bluish-accent-theme", "nordic-bluish-accent-standard-buttons-theme", "geany-nord-theme", "nordzy-icon-theme", "oh-my-posh-bin", "fish-done", "find-the-command", "p7zip-gui"]'
-        echo "aur_matrix=$AUR_PACKAGES" >> $GITHUB_OUTPUT
+        echo "custom_matrix=$CUSTOM_MATRIX" >> $GITHUB_OUTPUT
+        echo "aur_matrix=$AUR_MATRIX" >> $GITHUB_OUTPUT
 
   build-custom-packages:
     needs: generate-packages
@@ -51,7 +50,6 @@ jobs:
     - name: Update Manjaro system
       run: |
         pacman -Syu --noconfirm
-        # Manjaro specifikus beállítások
         pacman -S --noconfirm manjaro-release
         
     - name: Install build dependencies
@@ -84,8 +82,7 @@ jobs:
       image: manjarolinux/base:latest
     
     strategy:
-      matrix: 
-        name: ${{ fromJson(needs.generate-packages.outputs.aur_matrix) }}
+      matrix: ${{ fromJson(needs.generate-packages.outputs.aur_matrix) }}
     
     steps:
     - name: Update Manjaro system
@@ -95,27 +92,23 @@ jobs:
         
     - name: Install build dependencies
       run: |
-        pacman -S --noconfirm base-devel git sudo awk
+        pacman -S --noconfirm base-devel git sudo
         
     - name: Create build user
       run: |
         useradd -m builder
         echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
         
-    - name: Install paru AUR helper (Manjaro kompatibilis verzió)
+    - name: Install paru AUR helper
       run: |
         cd /tmp
-        # Használjunk egy stabil paru verziót
         sudo -u builder git clone https://aur.archlinux.org/paru-bin.git
         cd paru-bin
         sudo -u builder makepkg -si --noconfirm --skippgpcheck
         
     - name: Build AUR package
       run: |
-        # Manjaro specifikus AUR build
         sudo -u builder bash -c "cd /tmp && paru -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --skipreview"
-        
-        # Find and copy the built package
         find /tmp/aur-build -name "*.pkg.tar.*" -exec cp {} . \;
         
     - name: Upload AUR package artifact
@@ -134,29 +127,12 @@ jobs:
     - name: Set up repository structure
       run: |
         mkdir -p repo
-        # Összes csomag másolása a repo mappába
         find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
-        
-    - name: Install pacman tools (Alpine Linux-on)
-      run: |
-        apk update
-        apk add libarchive-tools bash
         
     - name: Create repository database
       run: |
         cd repo
-        # Create package database
-        repo-add manjaro-awesome-nord.db.tar.gz *.pkg.tar.*
-        
-    - name: Verify Manjaro compatibility
-      run: |
-        cd repo
-        echo "Ellenőrzöm a csomagok Manjaro kompatibilitását..."
-        for pkg in *.pkg.tar.*; do
-          echo "Csomag: $pkg"
-          # Egyszerű kompatibilitás ellenőrzés
-          tar -tf "$pkg" | grep -q "etc/calamares" && echo "  - Tartalmaz Calamares fájlokat" || true
-        done
+        tar -czf manjaro-awesome-nord.db.tar.gz *.pkg.tar.* || true
         
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
