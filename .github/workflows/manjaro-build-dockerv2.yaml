@@ -60,12 +60,13 @@ jobs:
       - name: Build local PKGBUILD packages
         run: |
           su - builder -c '
+            cd /github/workspace
             set -e
             for pkgdir in $(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
               echo "=== BUILDING LOCAL PACKAGE: $pkgdir ==="
               cd "$pkgdir"
               makepkg -s --noconfirm --clean
-              mv *.pkg.tar.zst $OUTPUT_DIR/
+              mv *.pkg.tar.zst $OUTPUT_DIR/ || true
               cd -
             done
           '
@@ -73,11 +74,11 @@ jobs:
       - name: Build AUR packages
         run: |
           su - builder -c '
-            set -e
             cd /tmp
+            set -e
             for pkg in $AUR_PACKAGES; do
               echo "=== BUILDING AUR PACKAGE: $pkg ==="
-              if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
+              rm -rf "$pkg" || true
               git clone https://aur.archlinux.org/$pkg.git
               cd "$pkg"
               makepkg -s --noconfirm --clean || true
@@ -95,6 +96,7 @@ jobs:
 
       - name: Commit & push repo to gh-pages
         run: |
+          cd /github/workspace
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@users.noreply.github.com"
           git checkout --orphan gh-pages
