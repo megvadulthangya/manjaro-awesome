@@ -1,4 +1,4 @@
-name: Build Manjaro Packages
+name: Build Manjaro Packages + AUR
 
 on:
   push:
@@ -12,6 +12,31 @@ jobs:
     env:
       OUTPUT_DIR: /output
       REPO_NAME: manjaro-awesome
+      AUR_PACKAGES: |
+        raw-thumbnailer
+        grayjay-bin
+        gsconnect
+        lain-git
+        awesome-git
+        awesome-freedesktop-git
+        tilix-git
+        ttf-font-awesome-5
+        tamzen-font
+        i3lock-fancy-git
+        betterlockscreen
+        nordic-theme
+        nordic-darker-theme
+        nordic-darker-standard-buttons-theme
+        nordic-polar-standard-buttons-theme
+        nordic-standard-buttons-theme
+        nordic-bluish-accent-theme
+        nordic-bluish-accent-standard-buttons-theme
+        geany-nord-theme
+        nordzy-icon-theme
+        oh-my-posh-bin
+        fish-done
+        find-the-command
+        p7zip-gui
 
     steps:
       - name: Checkout repository
@@ -21,7 +46,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y --no-install-recommends \
-            sudo fakeroot bsdtar xz-utils zstd git base-devel wget
+            build-essential fakeroot git wget tar zstd xz-utils pkg-config base-devel
 
       - name: Create builder user
         run: |
@@ -47,6 +72,22 @@ jobs:
               makepkg -s --noconfirm --clean
               mv *.pkg.tar.zst $OUTPUT_DIR/
               cd -
+            done
+          '
+
+      - name: Build AUR packages
+        run: |
+          su - builder -c '
+            set -e
+            cd /tmp
+            for pkg in $AUR_PACKAGES; do
+              echo "=== BUILDING AUR PACKAGE: $pkg ==="
+              if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
+              git clone https://aur.archlinux.org/$pkg.git
+              cd "$pkg"
+              makepkg -s --noconfirm --clean
+              mv *.pkg.tar.zst $OUTPUT_DIR/ || true
+              cd ..
             done
           '
 
