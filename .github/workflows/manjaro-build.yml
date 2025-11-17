@@ -69,7 +69,7 @@ jobs:
           git push -f origin gh-pages
 
       - name: Upload packages as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: manjaro-packages
           path: ${{ env.OUTPUT_DIR }}/*.pkg.tar.zst
