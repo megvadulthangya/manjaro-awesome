@@ -1,38 +1,34 @@
-name: Simple Build Test
+name: Final Build Test
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  test-build:
+  build:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Build minimal package
+    - name: Create and build package
       run: |
-        # Create build directory
-        mkdir -p /tmp/simple-build
+        # Step 1: Create directory
+        mkdir -p /tmp/final-build
         
-        # Create minimal PKGBUILD
-        cat > /tmp/simple-build/PKGBUILD << 'EOF'
-pkgname=simple-test
-pkgver=1.0
-pkgrel=1
-arch=any
-package() { true; }
-EOF
-
-        # Build in Docker
+        # Step 2: Create PKGBUILD line by line
+        echo 'pkgname=final-test' > /tmp/final-build/PKGBUILD
+        echo 'pkgver=1.0.0' >> /tmp/final-build/PKGBUILD
+        echo 'pkgrel=1' >> /tmp/final-build/PKGBUILD
+        echo 'arch=any' >> /tmp/final-build/PKGBUILD
+        echo 'package() {' >> /tmp/final-build/PKGBUILD
+        echo '  :' >> /tmp/final-build/PKGBUILD
+        echo '}' >> /tmp/final-build/PKGBUILD
+        
+        # Step 3: Build in Docker
         docker run --rm \
-          -v /tmp/simple-build:/build \
+          -v /tmp/final-build:/build \
           manjarolinux/base:latest \
-          bash -c "
-            pacman -Sy --noconfirm base-devel
-            useradd -m builder
-            su builder -c 'cd /build && makepkg'
-          "
-
-        # Show result
-        echo "Build result:"
-        ls -la /tmp/simple-build/ || echo "No files"
+          bash -c "pacman -Sy base-devel --noconfirm && useradd -m builder && su builder -c 'cd /build && makepkg'"
+        
+        # Step 4: Show results
+        echo "=== BUILD COMPLETED ==="
+        ls -la /tmp/final-build/
