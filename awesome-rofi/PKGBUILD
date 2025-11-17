@@ -1,0 +1,30 @@
+# Maintainer: Manjaro Awesome Nord
+pkgname=awesome-rofi
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Rofi themes and configuration"
+arch=('any')
+url="https://github.com/megvadulthangya/Awesome-rofi"
+license=('MIT')
+
+source=("https://github.com/megvadulthangya/Awesome-rofi/archive/refs/heads/my-awesome-config.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/Awesome-rofi-my-awesome-config"
+  
+  # Fonts
+  install -dm755 "$pkgdir/usr/share/fonts/rofi-themes"
+  cp -r fonts/* "$pkgdir/usr/share/fonts/rofi-themes/"
+  
+  # Scripts
+  install -dm755 "$pkgdir/usr/bin"
+  cp -r files/scripts/* "$pkgdir/usr/bin/"
+  
+  # Rofi config
+  install -dm755 "$pkgdir/etc/skel/.config/rofi"
+  cp -r files/* "$pkgdir/etc/skel/.config/rofi/"
+  
+  # Update font cache
+  fc-cache -f -v
+}

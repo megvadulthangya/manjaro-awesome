@@ -1,0 +1,17 @@
+# Maintainer: Manjaro Awesome Nord
+pkgname=awesome-copycats-manjaro
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="AwesomeWM Copycats configuration"
+arch=('any')
+url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
+license=('GPL3')
+
+source=("https://github.com/megvadulthangya/awesome-copycats-manjaro/archive/refs/heads/Autoinstall.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/awesome-copycats-manjaro-Autoinstall"
+  install -dm755 "$pkgdir/etc/skel/.config/awesome"
+  cp -r themes/* "$pkgdir/etc/skel/.config/awesome/"
+}
