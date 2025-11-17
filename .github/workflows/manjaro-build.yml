@@ -60,7 +60,7 @@ jobs:
         run: |
           wget https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-2025.11.01-x86_64.tar.zst
           mkdir -p arch-bootstrap
-          tar -I zstd -xf archlinux-bootstrap-2025.11.01-x86_64.tar.zst -C arch-bootstrap --strip-components=1
+          sudo tar -I zstd -xf archlinux-bootstrap-2025.11.01-x86_64.tar.zst -C arch-bootstrap --strip-components=1
 
       - name: Build local PKGBUILD packages
         run: |
