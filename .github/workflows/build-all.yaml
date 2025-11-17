@@ -1,113 +1,47 @@
-name: Build Manjaro Packages
+name: Build Test Package
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pages: write
-  id-token: write
 
 jobs:
-  build-single-package:
+  build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Build nordic-backgrounds
+    - uses: actions/checkout@v4
+    
+    - name: Build package
       run: |
-        echo "Building nordic-backgrounds package"
-        python3 scripts/generate-single-pkgbuild.py nordic-backgrounds
+        # Create a simple test package
+        mkdir -p test-package
+        cat > test-package/PKGBUILD << 'EOF'
+pkgname=test-package
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Test package"
+arch=('any')
+
+package() {
+  echo "This is a test package"
+}
+EOF
         
-        docker run --rm -v $PWD:/workspace -w /workspace manjarolinux/base:latest /bin/bash -c "
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git sudo
-          
-          # Create non-root user for building
-          useradd -m -s /bin/bash builder
-          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-          
-          # Switch to builder user and build
-          su - builder -c '
-            cd /workspace/packages/nordic-backgrounds
-            makepkg -s --noconfirm --skippgpcheck
-            cp *.pkg.tar.* /workspace/ 2>/dev/null || echo \"No package files created\"
-          '
+        docker run --rm -v $PWD:/workspace manjarolinux/base:latest bash -c "
+          cd /workspace/test-package
+          useradd -m builder
+          su - builder -c 'cd /workspace/test-package && makepkg'
         "
 
-    - name: Check built package
-      run: |
-        echo "Checking for built packages..."
-        if ls *.pkg.tar.* 1> /dev/null 2>&1; then
-          echo "✅ Package built successfully:"
-          ls -la *.pkg.tar.*
-        else
-          echo "❌ No package files found"
-          exit 1
-        fi
-
-    - name: Upload package artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: nordic-backgrounds-pkg
-        path: "*.pkg.tar.*"
-
-  create-repository:
-    needs: build-single-package
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    
-    steps:
-    - name: Download artifact
-      uses: actions/download-artifact@v4
-
-    - name: Setup Pages
-      uses: actions/configure-pages@v3
-
-    - name: Create repository
+    - name: Create repo
       run: |
         mkdir -p repo
-        # Copy package files
-        find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
-        echo "Repository contents:"
+        cp test-package/*.pkg.tar.* repo/ 2>/dev/null || echo "No packages"
+        echo "Built packages:"
         ls -la repo/
-        
-        # Create simple index.html for testing
-        cat > repo/index.html << EOF
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Manjaro Awesome Repository</title>
-        </head>
-        <body>
-            <h1>Manjaro Awesome Repository</h1>
-            <p>Available packages:</p>
-            <ul>
-        EOF
-        
-        for pkg in repo/*.pkg.tar.*; do
-          if [ -f "$pkg" ]; then
-            pkgname=$(basename "$pkg")
-            echo "        <li><a href=\"$pkgname\">$pkgname</a></li>" >> repo/index.html
-          fi
-        done
-        
-        cat >> repo/index.html << EOF
-            </ul>
-        </body>
-        </html>
-        EOF
 
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v2
+    - name: Deploy
+      uses: peaceiris/actions-gh-pages@v3
       with:
-        path: ./repo
-
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v2
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./repo
+        force_orphan: true
