@@ -1,4 +1,4 @@
-name: Build Test Package
+name: Build and Deploy
 
 on:
   push:
@@ -7,40 +7,52 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
     - uses: actions/checkout@v4
     
     - name: Build package
       run: |
-        # Create a simple test package
-        mkdir -p test-package
-        cat > test-package/PKGBUILD << 'EOF'
-pkgname=test-package
+        # Create PKGBUILD
+        mkdir -p /tmp/pkgbuild
+        cat > /tmp/pkgbuild/PKGBUILD << 'EOF'
+pkgname=nordic-backgrounds-test
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Test package"
+pkgdesc="Test package for nordic backgrounds"
 arch=('any')
 
 package() {
   echo "This is a test package"
 }
 EOF
-        
-        docker run --rm -v $PWD:/workspace manjarolinux/base:latest bash -c "
-          cd /workspace/test-package
-          useradd -m builder
-          su - builder -c 'cd /workspace/test-package && makepkg'
-        "
 
-    - name: Create repo
-      run: |
-        mkdir -p repo
-        cp test-package/*.pkg.tar.* repo/ 2>/dev/null || echo "No packages"
-        echo "Built packages:"
-        ls -la repo/
+        # Build in container
+        docker run --rm \
+          -v /tmp/pkgbuild:/build \
+          -w /build \
+          manjarolinux/base:latest \
+          bash -c "
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm base-devel
+            useradd -m builder
+            su - builder -c 'cd /build && makepkg'
+            ls -la *.pkg.tar.*
+          "
+        
+        # Check result
+        if ls /tmp/pkgbuild/*.pkg.tar.* 1>/dev/null 2>&1; then
+          echo "✅ TEST SUCCESS - Package was built!"
+          mkdir -p repo
+          cp /tmp/pkgbuild/*.pkg.tar.* repo/
+          ls -la repo/
+        else
+          echo "❌ TEST FAILED - No package created"
+          exit 1
+        fi
 
     - name: Deploy
-      uses: peaceiris/actions-gh-pages@v3
+      uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./repo
