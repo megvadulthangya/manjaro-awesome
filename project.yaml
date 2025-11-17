@@ -1,0 +1,70 @@
+# Egyéni csomagok
+custom_packages:
+  - name: nordic-backgrounds
+    repo: megvadulthangya/nordic-backgrounds
+    description: "Nordic theme wallpapers"
+    license: MIT
+    install_steps:
+      - type: copy
+        source: "wallpapers/*"
+        destination: "/usr/share/backgrounds/nordic-backgrounds"
+
+  - name: awesome-rofi-themes
+    repo: megvadulthangya/Awesome-rofi
+    branch: my-awesome-config
+    description: "Rofi themes and configuration"
+    license: MIT
+    depends:
+      - rofi
+      - fonts
+    install_steps:
+      - type: copy
+        source: "fonts/*"
+        destination: "/usr/share/fonts/rofi-themes"
+      - type: command
+        command: "fc-cache -f -v"
+      - type: copy
+        source: "files/scripts/*"
+        destination: "/usr/bin"
+      - type: copy
+        source: "files/*"
+        destination: "/etc/skel/.config/rofi"
+
+  - name: awesome-copycats
+    repo: megvadulthangya/awesome-copycats-manjaro
+    branch: Autoinstall
+    description: "AwesomeWM Copycats configuration"
+    license: GPL3
+    depends:
+      - awesome
+    install_steps:
+      - type: copy
+        source: "themes"
+        destination: "/etc/skel/.config/awesome"
+
+# AUR csomagok
+aur_packages:
+  - raw-thumbnailer
+  - grayjay-bin
+  - gsconnect
+  - lain-git
+  - awesome-git
+  - awesome-freedesktop-git
+  - tilix-git
+  - ttf-font-awesome-5
+  - tamzen-font
+  - i3lock-fancy-git
+  - betterlockscreen
+  - nordic-theme
+  - nordic-darker-theme
+  - nordic-darker-standard-buttons-theme
+  - nordic-polar-standard-buttons-theme
+  - nordic-standard-buttons-theme
+  - nordic-bluish-accent-theme
+  - nordic-bluish-accent-standard-buttons-theme
+  - geany-nord-theme
+  - nordzy-icon-theme
+  - oh-my-posh-bin
+  - fish-done
+  - find-the-command
+  - p7zip-gui
