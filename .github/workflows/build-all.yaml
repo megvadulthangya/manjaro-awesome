@@ -56,10 +56,13 @@ jobs:
       run: |
         pacman -S --noconfirm base-devel git sudo
         
-    - name: Create build user
+    - name: Configure builder user
       run: |
-        useradd -m builder
+        # A builder user már létezik a Manjaro image-ben, csak konfiguráljuk
         echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+        # Biztosítjuk, hogy a home directory megfelelően be van állítva
+        mkdir -p /home/builder
+        chown builder:builder /home/builder
         
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -94,21 +97,31 @@ jobs:
       run: |
         pacman -S --noconfirm base-devel git sudo
         
-    - name: Create build user
+    - name: Configure builder user
       run: |
-        useradd -m builder
+        # A builder user már létezik a Manjaro image-ben, csak konfiguráljuk
         echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+        mkdir -p /home/builder
+        chown builder:builder /home/builder
         
     - name: Install paru AUR helper
       run: |
         cd /tmp
+        # Először töröljük, ha már létezik (cache miatt)
+        rm -rf paru-bin
         sudo -u builder git clone https://aur.archlinux.org/paru-bin.git
         cd paru-bin
         sudo -u builder makepkg -si --noconfirm --skippgpcheck
         
     - name: Build AUR package
       run: |
-        sudo -u builder bash -c "cd /tmp && paru -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --skipreview"
+        # Töröljük a korábbi build mappát
+        rm -rf /tmp/aur-build
+        mkdir -p /tmp/aur-build
+        
+        sudo -u builder bash -c "cd /tmp && paru -S --noconfirm --builddir /tmp/aur-build ${{ matrix.name }} --skipreview --noconfirm"
+        
+        # Másoljuk a buildelt csomagokat
         find /tmp/aur-build -name "*.pkg.tar.*" -exec cp {} . \;
         
     - name: Upload AUR package artifact
@@ -127,12 +140,32 @@ jobs:
     - name: Set up repository structure
       run: |
         mkdir -p repo
+        # Összes csomag másolása
         find . -name "*.pkg.tar.*" -exec cp {} repo/ \;
+        
+    - name: Install pacman tools for repo creation
+      run: |
+        # Ubuntu-alapú környezet, ezért más megoldás kell
+        sudo apt-get update
+        sudo apt-get install -y libarchive-tools wget
+        
+        # Letöltjük és használjuk a repo-add scriptet
+        wget -q https://raw.githubusercontent.com/archlinux/arch-install-scripts/main/repo-add
+        chmod +x repo-add
         
     - name: Create repository database
       run: |
         cd repo
-        tar -czf manjaro-awesome-nord.db.tar.gz *.pkg.tar.* || true
+        # Használjuk a letöltött repo-add scriptet
+        ../repo-add manjaro-awesome.db.tar.gz *.pkg.tar.*
+        
+    - name: List repository contents
+      run: |
+        cd repo
+        echo "Repository contents:"
+        ls -la
+        echo "Package list:"
+        tar -tf manjaro-awesome.db.tar.gz || true
         
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
@@ -140,3 +173,4 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./repo
         force_orphan: true
+        keep_files: false
