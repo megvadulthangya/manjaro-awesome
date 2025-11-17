@@ -1,77 +1,57 @@
-name: Build Manjaro Repo (Local PKGBUILDs + AUR)
+name: Build Manjaro Repository
 
 on:
   push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    container:
-      image: manjarolinux/base:latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Install build dependencies
-        run: |
-          pacman -Sy --noconfirm base-devel git pacman-contrib
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y arch-install-scripts git wget
 
-      - name: Create output directory
-        run: mkdir -p output
+    - name: Create non-root build user
+      run: |
+        sudo useradd -m builder
+        sudo passwd -d builder
+        sudo bash -c "echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
 
-      #####################################################################
-      # 1) BUILD LOCAL (SAJÁT) PKGBUILD CSOMAGOK
-      #####################################################################
-      - name: Build local packages
-        run: |
-          echo "=== Building local PKGBUILD packages ==="
-          for pkgdir in $(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
-            echo "BUILDING: $pkgdir"
-            cd "$pkgdir"
-            makepkg -s --noconfirm --clean
-            mv *.pkg.tar.zst /output/
-            cd -
+    - name: Install Arch bootstrap to build the packages
+      run: |
+        wget https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-x86_64.tar.gz
+        sudo tar xzf archlinux-bootstrap-x86_64.tar.gz -C /opt
+        sudo mv /opt/archlinux-bootstrap-* /opt/arch
+        sudo sed -i 's/#Server/Server/g' /opt/arch/etc/pacman.d/mirrorlist
+        sudo mount --bind /opt/arch /opt/arch
+        sudo cp -r . /opt/arch/root/project
+
+    - name: Build packages inside Arch chroot
+      run: |
+        sudo arch-chroot /opt/arch /bin/bash -c "
+          pacman -Sy --noconfirm base-devel git
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          cd /root/project
+          mkdir /root/output
+
+          for PKG in \$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
+            echo 'Building: ' \$PKG
+            cd \$PKG
+            sudo -u builder makepkg --noconfirm --clean --syncdeps
+            mv *.pkg.tar.zst /root/output/
+            cd /root/project
           done
+        "
 
-      #####################################################################
-      # 2) BUILD AUR CSOMAGOK
-      #####################################################################
-      - name: Clone and build AUR packages
-        run: |
-          echo "=== Building AUR packages ==="
-          AUR_PACKAGES="raw-thumbnailer grayjay-bin gsconnect lain-git awesome-git awesome-freedesktop-git tilix-git ttf-font-awesome-5 tamzen-font i3lock-fancy-git betterlockscreen nordic-theme nordic-darker-theme nordic-darker-standard-buttons-theme nordic-polar-standard-buttons-theme nordic-standard-buttons-theme nordic-bluish-accent-theme nordic-bluish-accent-standard-buttons-theme geany-nord-theme nordzy-icon-theme oh-my-posh-bin fish-done find-the-command p7zip-gui"
-
-          mkdir -p aurbuild
-          cd aurbuild
-
-          for pkg in $AUR_PACKAGES; do
-            echo "CLONING AUR PKG: $pkg"
-            git clone https://aur.archlinux.org/"$pkg".git
-
-            cd "$pkg"
-            makepkg -s --noconfirm --clean
-            mv *.pkg.tar.zst /output/
-            cd ..
-          done
-
-      #####################################################################
-      # 3) REPO DATABASE LÉTREHOZÁSA
-      #####################################################################
-      - name: Generate repo database
-        run: |
-          cd output
-          repo-add custom.db.tar.gz *.pkg.tar.zst
-
-      #####################################################################
-      # 4) DEPLOY TO GH-PAGES
-      #####################################################################
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: ./output
+    - name: Upload repo artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: built-packages
+        path: /opt/arch/root/output/
