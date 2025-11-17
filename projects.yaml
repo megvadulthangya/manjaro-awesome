@@ -1,4 +1,3 @@
-# Egyéni csomagok
 custom_packages:
   - name: nordic-backgrounds
     repo: megvadulthangya/nordic-backgrounds
@@ -14,9 +13,6 @@ custom_packages:
     branch: my-awesome-config
     description: "Rofi themes and configuration"
     license: MIT
-    depends:
-      - rofi
-      - fonts
     install_steps:
       - type: copy
         source: "fonts/*"
@@ -30,19 +26,16 @@ custom_packages:
         source: "files/*"
         destination: "/etc/skel/.config/rofi"
 
-  - name: awesome-copycats
+  - name: awesome-copycats-manjaro
     repo: megvadulthangya/awesome-copycats-manjaro
     branch: Autoinstall
     description: "AwesomeWM Copycats configuration"
     license: GPL3
-    depends:
-      - awesome
     install_steps:
       - type: copy
-        source: "themes"
+        source: "themes/*"
         destination: "/etc/skel/.config/awesome"
 
-# AUR csomagok
 aur_packages:
   - raw-thumbnailer
   - grayjay-bin

@@ -30,8 +30,8 @@ jobs:
     - name: Set build matrices
       id: set-matrix
       run: |
-        # Egyszerű megoldás - fix értékek
-        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi-themes"},{"name":"awesome-copycats"}]}'
+        # Frissítve a correct nevekkel
+        CUSTOM_MATRIX='{"include":[{"name":"nordic-backgrounds"},{"name":"awesome-rofi-themes"},{"name":"awesome-copycats-manjaro"}]}'
         AUR_MATRIX='{"include":[{"name":"raw-thumbnailer"},{"name":"grayjay-bin"},{"name":"gsconnect"},{"name":"lain-git"},{"name":"awesome-git"},{"name":"awesome-freedesktop-git"},{"name":"tilix-git"},{"name":"ttf-font-awesome-5"},{"name":"tamzen-font"},{"name":"i3lock-fancy-git"},{"name":"betterlockscreen"},{"name":"nordic-theme"},{"name":"nordic-darker-theme"},{"name":"nordic-darker-standard-buttons-theme"},{"name":"nordic-polar-standard-buttons-theme"},{"name":"nordic-standard-buttons-theme"},{"name":"nordic-bluish-accent-theme"},{"name":"nordic-bluish-accent-standard-buttons-theme"},{"name":"geany-nord-theme"},{"name":"nordzy-icon-theme"},{"name":"oh-my-posh-bin"},{"name":"fish-done"},{"name":"find-the-command"},{"name":"p7zip-gui"}]}'
         
         echo "custom_matrix=$CUSTOM_MATRIX" >> $GITHUB_OUTPUT

@@ -29,12 +29,15 @@ def generate_pkgbuild(project_config):
     branch = project_config.get('branch', 'main')
     commit_hash = get_latest_commit(repo, branch)
     
+    # A repository neve (a repo URL utolsó része)
+    repo_name = repo.split('/')[-1]
+    
     # Verzió formátum: dátum.commit_hash
     date_str = datetime.now().strftime("%Y%m%d")
     pkgver = f"{date_str}.{commit_hash}"
     
     # Alap PKGBUILD struktúra
-    pkgbuild = f"""# Maintainer: {project_config.get('maintainer', 'Manjaro Awesome Nord')}
+    pkgbuild = f"""# Maintainer: Manjaro Awesome Nord
 pkgname={pkgname}
 pkgver={pkgver}
 pkgrel=1
@@ -59,7 +62,7 @@ options=('!strip' '!emptydirs')
 sha256sums=('SKIP')
 
 package() {{
-  cd "$srcdir/{pkgname}-{branch}"
+  cd "$srcdir/{repo_name}-{branch}"
 """
     
     # Install lépések
@@ -95,57 +98,33 @@ package() {{
     
     return pkgbuild
 
-def generate_srcinfo(project_config, pkgver):
-    """Generál .SRCINFO fájlt"""
-    pkgname = project_config['name']
-    
-    srcinfo = f"""pkgbase = {pkgname}
-\tpkgdesc = {project_config['description']}
-\tpkgver = {pkgver}
-\tpkgrel = 1
-\turl = https://github.com/{project_config['repo']}
-\tarch = any
-\tlicense = {project_config.get('license', 'MIT')}
-"""
-    
-    if 'depends' in project_config and project_config['depends']:
-        for dep in project_config['depends']:
-            srcinfo += f"\tdepends = {dep}\n"
-    
-    return srcinfo
-
-def load_config():
-    """Betölti a konfigurációs YAML fájlt"""
-    if not os.path.exists(CONFIG_FILE):
-        print(f"Error: {CONFIG_FILE} not found!")
-        sys.exit(1)
-    
-    with open(CONFIG_FILE, 'r') as f:
-        try:
-            return yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            print(f"Error parsing {CONFIG_FILE}: {e}")
-            sys.exit(1)
-
 def main():
     print("Starting PKGBUILD generation...")
     
-    config = load_config()
+    # Ellenőrizzük, hogy a fájl létezik-e
+    if not os.path.exists(CONFIG_FILE):
+        print(f"ERROR: {CONFIG_FILE} not found!")
+        print("Current directory:", os.getcwd())
+        print("Files in current directory:", os.listdir('.'))
+        sys.exit(1)
     
-    # Csak egyéni csomagok generálása
+    # Konfiguráció betöltése
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = yaml.safe_load(f)
+        print("✓ Config loaded successfully")
+    except Exception as e:
+        print(f"ERROR loading config: {e}")
+        sys.exit(1)
+    
     custom_packages = config.get('custom_packages', [])
-    
-    if not custom_packages:
-        print("No custom packages found in config!")
-        return
-    
-    print(f"Found {len(custom_packages)} custom packages to generate")
+    print(f"Found {len(custom_packages)} custom packages")
     
     for project in custom_packages:
-        pkgname = project['name']
-        print(f"Generating PKGBUILD for {pkgname}...")
-        
         try:
+            pkgname = project['name']
+            print(f"Generating PKGBUILD for {pkgname}...")
+            
             pkgbuild_content = generate_pkgbuild(project)
             pkg_dir = f"packages/{pkgname}"
             
@@ -156,17 +135,10 @@ def main():
             with open(f"{pkg_dir}/PKGBUILD", 'w') as f:
                 f.write(pkgbuild_content)
             
-            # .SRCINFO generálása
-            pkgver = pkgbuild_content.split('pkgver=')[1].split()[0]
-            srcinfo_content = generate_srcinfo(project, pkgver)
-            
-            with open(f"{pkg_dir}/.SRCINFO", 'w') as f:
-                f.write(srcinfo_content)
-            
             print(f"✓ Successfully generated PKGBUILD for {pkgname}")
             
         except Exception as e:
-            print(f"✗ Error generating PKGBUILD for {pkgname}: {e}")
+            print(f"✗ Error generating PKGBUILD for {project.get('name', 'unknown')}: {e}")
             continue
     
     # AUR csomagok listázása
