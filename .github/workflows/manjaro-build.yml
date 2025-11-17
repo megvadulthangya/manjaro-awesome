@@ -9,115 +9,133 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       OUTPUT_DIR: /home/builder/output
       REPO_NAME: manjaro-awesome
-      AUR_PACKAGES: |
-        raw-thumbnailer
-        grayjay-bin
-        gsconnect
-        lain-git
-        awesome-git
-        awesome-freedesktop-git
-        tilix-git
-        ttf-font-awesome-5
-        tamzen-font
-        i3lock-fancy-git
-        betterlockscreen
-        nordic-theme
-        nordic-darker-theme
-        nordic-darker-standard-buttons-theme
-        nordic-polar-standard-buttons-theme
-        nordic-standard-buttons-theme
-        nordic-bluish-accent-theme
-        nordic-bluish-accent-standard-buttons-theme
-        geany-nord-theme
-        nordzy-icon-theme
-        oh-my-posh-bin
-        fish-done
-        find-the-command
-        p7zip-gui
+      # AUR csomaglista (egy sor / szóközzel elválasztva fog majd belépni a builder shellbe)
+      AUR_PACKAGES: "raw-thumbnailer grayjay-bin gsconnect lain-git awesome-git awesome-freedesktop-git tilix-git ttf-font-awesome-5 tamzen-font i3lock-fancy-git betterlockscreen nordic-theme nordic-darker-theme nordic-darker-standard-buttons-theme nordic-polar-standard-buttons-theme nordic-standard-buttons-theme nordic-bluish-accent-theme nordic-bluish-accent-standard-buttons-theme geany-nord-theme nordzy-icon-theme oh-my-posh-bin fish-done find-the-command p7zip-gui"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Install host dependencies
         run: |
           sudo apt update
           sudo apt install -y --no-install-recommends \
             build-essential fakeroot git wget tar zstd xz-utils pkg-config
 
-      - name: Create builder user
+      - name: Create builder user & prepare output dir
         run: |
-          sudo useradd -m builder
-          sudo passwd -d builder
+          sudo useradd -m builder || true
+          sudo passwd -d builder || true
           echo 'builder ALL=(ALL) NOPASSWD: ALL' | sudo tee -a /etc/sudoers
-          sudo mkdir -p $OUTPUT_DIR
-          sudo chown builder:builder $OUTPUT_DIR
+          sudo mkdir -p "${OUTPUT_DIR}"
+          sudo chown -R builder:builder /home/builder
 
-      - name: Download Arch bootstrap
+      - name: Download + extract Arch bootstrap (root)
         run: |
-          wget https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-2025.11.01-x86_64.tar.zst
+          # friss .tar.zst letöltése (mirror alapján)
+          wget -q https://mirror.rackspace.com/archlinux/iso/latest/archlinux-bootstrap-2025.11.01-x86_64.tar.zst
           mkdir -p arch-bootstrap
           sudo tar -I zstd -xf archlinux-bootstrap-2025.11.01-x86_64.tar.zst -C arch-bootstrap --strip-components=1
 
-      - name: Build local PKGBUILD packages
+      - name: Build local PKGBUILD packages (as builder)
         run: |
-          su - builder -c '
-            set -e
-            mkdir -p $OUTPUT_DIR
-            for pkgdir in $(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
-              echo "=== BUILDING: $pkgdir ==="
-              cd "$pkgdir"
-              makepkg -s --noconfirm --clean
-              cp *.pkg.tar.zst $OUTPUT_DIR/ || true
-              cd -
+          su - builder -c "OUTPUT_DIR=${OUTPUT_DIR}; set -e;
+            mkdir -p \"\$OUTPUT_DIR\";
+            for pkgdir in \$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \;); do
+              echo \"=== BUILDING LOCAL: \$pkgdir ===\";
+              cd \"\$pkgdir\";
+              # makepkg futtatása nem-rootként
+              makepkg -s --noconfirm --clean || { echo \"makepkg failed in \$pkgdir\"; continue; }
+              # másolás az output könyvtárba (ha van .pkg.tar.zst)
+              for p in *.pkg.tar.zst; do
+                [ -f \"\$p\" ] && cp \"\$p\" \"\$OUTPUT_DIR/\";
+              done
+              cd - >/dev/null || true;
             done
-          '
+          "
 
-      - name: Build AUR packages
+      - name: Build AUR packages (as builder)
         run: |
-          su - builder -c '
-            set -e
-            mkdir -p $OUTPUT_DIR
-            cd /tmp
-            for pkg in $AUR_PACKAGES; do
-              echo "=== BUILDING AUR PACKAGE: $pkg ==="
-              if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
-              git clone https://aur.archlinux.org/$pkg.git
-              cd "$pkg"
-              makepkg -s --noconfirm --clean || true
-              cp *.pkg.tar.zst $OUTPUT_DIR/ || true
-              cd ..
+          su - builder -c "OUTPUT_DIR=${OUTPUT_DIR}; AUR_PACKAGES='${AUR_PACKAGES}'; set -e;
+            mkdir -p \"\$OUTPUT_DIR\";
+            cd /tmp;
+            for pkg in \$AUR_PACKAGES; do
+              echo \"=== BUILDING AUR: \$pkg ===\";
+              if [ -d \"\$pkg\" ]; then rm -rf \"\$pkg\"; fi
+              git clone https://aur.archlinux.org/\$pkg.git || { echo \"git clone failed for \$pkg\"; continue; }
+              cd \$pkg || continue;
+              makepkg -s --noconfirm --clean || { echo \"makepkg failed for \$pkg\"; cd ..; continue; }
+              for p in *.pkg.tar.zst; do
+                [ -f \"\$p\" ] && cp \"\$p\" \"\$OUTPUT_DIR/\";
+              done
+              cd ..;
             done
-          '
+          "
 
-      - name: Fix permissions for Git push
+      - name: Ensure output exists and set permissions
         run: |
-          sudo chown -R $USER:$USER $OUTPUT_DIR
+          # ha builder készített fájlokat, átvesszük a repo tulajdonosának UID/GID-jét,
+          # hogy később a Runner user tudja git-addolni a fájlokat.
+          if [ ! -d "${OUTPUT_DIR}" ] || [ -z "$(ls -A ${OUTPUT_DIR} 2>/dev/null)" ]; then
+            echo "No built packages in ${OUTPUT_DIR} — nothing to deploy (this is fatal)."
+            ls -la /home/builder || true
+            exit 1
+          fi
 
-      - name: Create repo database
+          # kiderítjük a repo fájlokat birtokló UID:GID-et (ez a runner user)
+          REPO_UID=$(stat -c '%u' .git)
+          REPO_GID=$(stat -c '%g' .git)
+          echo "Repo UID:GID = ${REPO_UID}:${REPO_GID}"
+
+          # visszaadjuk az output fájlok tulajdonjogát a repo futtató userhez, és beállítjuk olvashatóságot
+          sudo chown -R ${REPO_UID}:${REPO_GID} "${OUTPUT_DIR}"
+          sudo chmod -R a+rX "${OUTPUT_DIR}"
+
+      - name: Create repo database (repo-add) (as builder)
         run: |
-          cd $OUTPUT_DIR
-          repo-add ${REPO_NAME}.db.tar.gz *.pkg.tar.zst || true
+          # repo-add futtatása builder-rel (repo-add része az arch-toolsnak; az arch bootstrap tartalmazhatja)
+          su - builder -c "OUTPUT_DIR=${OUTPUT_DIR}; set -e;
+            cd \"\$OUTPUT_DIR\";
+            # ha léteznek pkg fájlok, akkor repo-add
+            shopt -s nullglob
+            files=( *.pkg.tar.zst )
+            if [ \${#files[@]} -gt 0 ]; then
+              repo-add ${REPO_NAME}.db.tar.gz *.pkg.tar.zst || true
+            else
+              echo 'No pkg files to repo-add'
+            fi
+          "
 
       - name: Commit & push repo to gh-pages
+        env:
+          GIT_COMMITTER_NAME: github-actions
+          GIT_COMMITTER_EMAIL: github-actions@users.noreply.github.com
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@users.noreply.github.com"
 
-          # Ellenőrzés, hogy van-e fájl a $OUTPUT_DIR-ben
-          if [ -z "$(ls -A $OUTPUT_DIR)" ]; then
-            echo "❌ No files to deploy!"
+          # ellenőrizzük ismét, hogy van-e miről deployolni
+          if [ -z "$(ls -A ${OUTPUT_DIR})" ]; then
+            echo "No files to deploy in ${OUTPUT_DIR}"
             exit 1
           fi
 
+          # készítünk egy tiszta gh-pages ágat, és bemásoljuk a build fájlokat
           git checkout --orphan gh-pages
-          git rm -rf .
-          cp -r $OUTPUT_DIR/* .
-          git add .
-          git commit -m "Update Manjaro repo"
+          git rm -rf . || true
+
+          # másolás a munkakönyvtárba (azonos jogosultságok után a runner user képes olvasni)
+          cp -r ${OUTPUT_DIR}/* .
+
+          git add -A
+          git commit -m "Update Manjaro repo" || echo "Nothing to commit"
+          # push a tokennel (actions/checkout beállítások miatt a push működni fog)
           git push -f origin gh-pages
 
       - name: Upload packages as artifact
