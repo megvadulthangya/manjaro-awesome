@@ -1,8 +1,8 @@
-# Maintainer: Manjaro Awesome Nord
+# Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=nordic-backgrounds
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Nordic theme wallpapers"
+pkgdesc="Currated Nordic theme wallpapers"
 arch=('any')
 url="https://github.com/megvadulthangya/nordic-backgrounds"
 license=('MIT')

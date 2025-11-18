@@ -1,17 +1,17 @@
-# Maintainer: Manjaro Awesome Nord
+# Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=awesome-rofi
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="Rofi themes and configuration"
+pkgdesc="A huge collection of Rofi-based custom Applets, Launchers & Powermenus, fully compatible with Awesome WM. This fork includes the necessary adjustments to ensure seamless operation within the Awesome WM environment."
 arch=('any')
-url="https://github.com/megvadulthangya/Awesome-rofi"
-license=('MIT')
+url="https://github.com/megvadulthangya/awesome-rofi"
+license=('GPL3')
 
-source=("https://github.com/megvadulthangya/Awesome-rofi/archive/refs/heads/my-awesome-config.tar.gz")
+source=("https://github.com/megvadulthangya/awesome-rofi/archive/refs/heads/my-awesome-config.tar.gz")
 sha256sums=('SKIP')
 
 package() {
-  cd "$srcdir/Awesome-rofi-my-awesome-config"
+  cd "$srcdir/awesome-rofi-my-awesome-config"
   
   # Fonts
   install -dm755 "$pkgdir/usr/share/fonts/rofi-themes"
