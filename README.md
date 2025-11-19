@@ -2,21 +2,20 @@
 
 # Manjaro Awesome Nord Repository
 
-Package repository for Manjaro Linux providing AwesomeWM configurations, Nord-themed assets, and small productivity enhancements.
+Binary package repository for the Manjaro Awesome Nord project.
+This repository provides all packages — including selected AUR builds — required for building and maintaining the Manjaro Awesome Nord ISO image.
 
-All repository artifacts are published via the `gh-pages` branch and served through GitHub Pages.
+Repository artifacts are hosted on the `gh-pages` branch and served through GitHub Pages.
 
 ---
 
-## Repository Location
-
-The built packages and repository metadata are hosted at:
+## Repository URL
 
 ```
 https://megvadulthangya.github.io/manjaro-awesome/
 ```
 
-Source code and build definitions are located in the main project repository:
+Source repository:
 
 ```
 https://github.com/megvadulthangya/manjaro-awesome
@@ -28,7 +27,7 @@ https://github.com/megvadulthangya/manjaro-awesome
 
 ### 1. Add the repository (safe one-line setup)
 
-This command creates the include file and appends the pacman include reference only if missing:
+Run the following command to create the include file and register the repository without overwriting existing settings:
 
 ```bash
 sudo tee /etc/pacman.d/manjaro-awesome >/dev/null <<'EOF' && \
@@ -48,47 +47,49 @@ sudo pacman -Syy
 
 ### 3. Install packages
 
+Example:
+
 ```bash
-sudo pacman -S nordic-backgrounds awesome-rofi-themes awesome-copycats
+sudo pacman -S awesome-git awesome-rofi nordic-backgrounds nordzy-icon-theme
 ```
 
 ---
 
-## Included Packages
+## Included Content
 
-### Custom Packages
+This repository contains:
 
-* nordic-backgrounds
-* awesome-rofi-themes
-* awesome-copycats
+* **Custom AwesomeWM-related packages**
+* **Nord theme packages** (icons, GTK themes, wallpapers)
+* **Prebuilt AUR packages** required for the Manjaro Awesome Nord ISO
+* **Supplementary utilities** supporting AwesomeWM workflows
 
-### AUR Packages (referenced or supported only)
+A non-exhaustive set of components includes (examples only):
 
-Examples:
+* AwesomeWM builds (stable / git)
+* AwesomeWM themes (copycats, freedesktop integration, lain)
+* Nordic/Nordzy themes and wallpapers
+* GSConnect, Grayjay, Tilix-git, QOwnNotes, Tamzen font, and others
 
-* raw-thumbnailer
-* grayjay-bin
-* gsconnect
-
-(Az AUR-os csomagok nincsenek feltöltve a repo-ba, csak ajánlások.)
+The repo is intended to serve as the complete binary dependency set for ISO building, so package listings may evolve over time.
 
 ---
 
 ## Build & Deployment Schedule
 
-Repository packages are rebuilt and published to the `gh-pages` branch:
+Binary packages are rebuilt and published to the `gh-pages` branch:
 
 * **weekly**, and
-* optionally on manual triggers (e.g., pushing changes to the packaging branch).
+* on manual triggers (e.g. when dependencies or PKGBUILDs change).
 
-This ensures stable and predictable package availability without daily churn.
+This guarantees a stable and predictable build environment for ISO generation without daily rebuild overhead.
 
 ---
 
 ## Notes
 
-* The repository uses GitHub Pages as a static pacman-compatible package host.
-* All package metadata (`db`, `files`, `pkg.tar.zst`) resides in the `gh-pages` branch.
-* The main branch contains packaging scripts, PKGBUILD files, and automation logic.
+* All `.pkg.tar.zst`, `.db`, and `.files` artifacts are stored on the `gh-pages` branch.
+* The main branch contains PKGBUILDs and build scripts.
+* The repository is compatible with `pacman` and `manjaro-tools` ISO building workflows.
 
 ---
