@@ -2,17 +2,33 @@
 
 # Manjaro Awesome Nord Repository
 
-Automated package repository for Manjaro Linux, providing AwesomeWM configurations, Nord-themed assets, and related enhancements.
+Package repository for Manjaro Linux providing AwesomeWM configurations, Nord-themed assets, and small productivity enhancements.
 
-This repository delivers curated AwesomeWM components and Nord-styled packages with continuous automated builds.
+All repository artifacts are published via the `gh-pages` branch and served through GitHub Pages.
+
+---
+
+## Repository Location
+
+The built packages and repository metadata are hosted at:
+
+```
+https://megvadulthangya.github.io/manjaro-awesome/
+```
+
+Source code and build definitions are located in the main project repository:
+
+```
+https://github.com/megvadulthangya/manjaro-awesome
+```
 
 ---
 
 ## Usage
 
-### 1. Add the repository (one-line safe command)
+### 1. Add the repository (safe one-line setup)
 
-Run the following single command to create the include file and register the repository safely without overwriting any existing configuration:
+This command creates the include file and appends the pacman include reference only if missing:
 
 ```bash
 sudo tee /etc/pacman.d/manjaro-awesome >/dev/null <<'EOF' && \
@@ -46,22 +62,33 @@ sudo pacman -S nordic-backgrounds awesome-rofi-themes awesome-copycats
 * awesome-rofi-themes
 * awesome-copycats
 
-### AUR Packages (referenced or supported)
+### AUR Packages (referenced or supported only)
+
+Examples:
 
 * raw-thumbnailer
 * grayjay-bin
 * gsconnect
-* and others as needed
+
+(Az AUR-os csomagok nincsenek feltöltve a repo-ba, csak ajánlások.)
 
 ---
 
-## Automated Builds
+## Build & Deployment Schedule
 
-All repository packages are automatically built:
+Repository packages are rebuilt and published to the `gh-pages` branch:
 
-* daily, and
-* on every push to the `main` branch.
+* **weekly**, and
+* optionally on manual triggers (e.g., pushing changes to the packaging branch).
 
-This ensures up-to-date and reproducible package availability for Manjaro systems.
+This ensures stable and predictable package availability without daily churn.
+
+---
+
+## Notes
+
+* The repository uses GitHub Pages as a static pacman-compatible package host.
+* All package metadata (`db`, `files`, `pkg.tar.zst`) resides in the `gh-pages` branch.
+* The main branch contains packaging scripts, PKGBUILD files, and automation logic.
 
 ---
