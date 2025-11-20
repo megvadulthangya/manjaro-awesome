@@ -6,7 +6,7 @@ pkgdesc="A forked and enhanced version of the original Awesome WM Copycats repos
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
-depends=('awesome' 'lain-git' 'awesome-freedesktop-git')
+depends=('awesome-git' 'lain-git' 'awesome-freedesktop-git')
 makedepends=('git')
 source=("git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
 sha256sums=('SKIP')
@@ -78,7 +78,7 @@ For EXISTING USERS:
 - Run the installation script: /usr/share/awesomewm-nord-config/install-to-user.sh
 - Or manually copy: cp -r /etc/skel/.config/awesome ~/.config/
 
-Dependencies (install from AUR):
+Dependencies (install from pacman):
 - lain-git
 - awesome-freedesktop-git
 
