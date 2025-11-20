@@ -75,10 +75,11 @@ For NEW USERS:
 - The configuration will be automatically available when creating new user accounts
 
 For EXISTING USERS:
-- Run the installation script: /usr/share/awesomewm-nord-config/install-to-user.sh
+- Run the installation script: /usr/share/$pkgname/install-to-user.sh  <-- JAVÍTVA
 - Or manually copy: cp -r /etc/skel/.config/awesome ~/.config/
 
-Dependencies (install from pacman):
+Dependencies (install from pacman From manjaro-awesome repo):
+- awesome-git
 - lain-git
 - awesome-freedesktop-git
 
