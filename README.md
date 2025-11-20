@@ -1,5 +1,5 @@
 # Manjaro Awesome Nord Repository
----
+
 
 Binary package repository for the Manjaro Awesome Nord project.
 This repository provides all packages — including selected AUR builds — required for building and maintaining the Manjaro Awesome Nord ISO image.
