@@ -25,6 +25,4 @@ package() {
   install -dm755 "$pkgdir/etc/skel/.config/rofi"
   cp -r files/* "$pkgdir/etc/skel/.config/rofi/"
   
-  # Update font cache
-  fc-cache -f -v
 }
