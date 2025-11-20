@@ -1,5 +1,4 @@
 # Manjaro Awesome Nord Repository
-
 ---
 
 Binary package repository for the Manjaro Awesome Nord project.
