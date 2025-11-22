@@ -12,6 +12,8 @@ Repository artifacts are hosted on the `gh-pages` branch and served through GitH
 
 ```
 https://megvadulthangya.github.io/manjaro-awesome/
+and
+https://repo.gshoots.hu/manjaro-awesome/
 ```
 
 Source repository:
