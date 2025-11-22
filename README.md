@@ -43,7 +43,7 @@ SigLevel = Optional TrustAll
 Server = https://megvadulthangya.github.io/manjaro-awesome/
 
 # 2. teljes mirror – Oracle szerver (MINDEN csomag, 100MB felett is)
-Server = https://repo.gshoots.hu/manjaro-awesome/
+Server = https://repo.gshoots.hu/
 
 EOF
 ```
