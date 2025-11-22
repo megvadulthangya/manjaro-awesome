@@ -13,7 +13,7 @@ Repository artifacts are hosted on the `gh-pages` branch and served through GitH
 ```
 https://megvadulthangya.github.io/manjaro-awesome/
 and
-https://repo.gshoots.hu/manjaro-awesome/
+https://repo.gshoots.hu/
 ```
 
 Source repository:
@@ -42,7 +42,7 @@ SigLevel = Optional TrustAll
 Server = https://megvadulthangya.github.io/manjaro-awesome/
 
 # 2. teljes mirror – Oracle szerver (MINDEN csomag, 100MB felett is)
-Server = https://repo.gshoots.hu/manjaro-awesome/
+Server = https://repo.gshoots.hu/
 
 EOF
 
