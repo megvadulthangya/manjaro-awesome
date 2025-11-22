@@ -33,9 +33,16 @@ Run the following command to create the include file and register the repository
 sudo tee /etc/pacman.d/manjaro-awesome >/dev/null <<'EOF' && \
 sudo grep -qxF 'Include = /etc/pacman.d/manjaro-awesome' /etc/pacman.conf || \
 echo 'Include = /etc/pacman.d/manjaro-awesome' | sudo tee -a /etc/pacman.conf >/dev/null
+
 [manjaro-awesome]
 SigLevel = Optional TrustAll
+
+# 1. gyors mirror – GitHub Pages (100MB alatti csomagok)
 Server = https://megvadulthangya.github.io/manjaro-awesome/
+
+# 2. teljes mirror – Oracle szerver (MINDEN csomag, 100MB felett is)
+Server = https://repo.gshoots.hu/manjaro-awesome/
+
 EOF
 ```
 
