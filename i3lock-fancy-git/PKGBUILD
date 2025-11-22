@@ -16,7 +16,7 @@ optdepends=('wmctrl: minimize windows before locking'
             'gnome-screenshot: alternative screenshot creator')
 makedepends=('git')
 provides=('i3lock-fancy')
-source=("git+https://github.com/meskarune/$_gitname.git")
+source=("git+https://github.com/megvadulthangya/$_gitname.git")
 md5sums=('SKIP')
 
 pkgver() {
