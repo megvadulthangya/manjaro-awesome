@@ -12,9 +12,7 @@ Repository artifacts are hosted on the `gh-pages` branch and served through GitH
 ## Repository URL
 
 ```
-https://megvadulthangya.github.io/manjaro-awesome/
-and
-https://repo.gshoots.hu
+You dont need this
 ```
 
 Source repository:
@@ -32,20 +30,7 @@ https://github.com/megvadulthangya/manjaro-awesome
 Run the following command to create the include file and register the repository without overwriting existing settings:
 
 ```bash
-sudo tee /etc/pacman.d/manjaro-awesome >/dev/null <<'EOF' && \
-sudo grep -qxF 'Include = /etc/pacman.d/manjaro-awesome' /etc/pacman.conf || \
-echo 'Include = /etc/pacman.d/manjaro-awesome' | sudo tee -a /etc/pacman.conf >/dev/null
-
-[manjaro-awesome]
-SigLevel = Optional TrustAll
-
-# 1. gyors mirror – GitHub Pages (100MB alatti csomagok)
-Server = https://megvadulthangya.github.io/manjaro-awesome/
-
-# 2. teljes mirror – Oracle szerver (MINDEN csomag, 100MB felett is)
-Server = https://repo.gshoots.hu/
-
-EOF
+You dont need to add anything becuse its included in my iso.
 ```
 
 ### 2. Refresh package databases
