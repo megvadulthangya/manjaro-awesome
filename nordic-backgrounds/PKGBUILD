@@ -1,17 +1,27 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=nordic-backgrounds
-pkgver=1.0.0
+pkgver=r1.g41473c # Placeholder
 pkgrel=1
 pkgdesc="Currated Nordic theme wallpapers"
 arch=('any')
 url="https://github.com/megvadulthangya/nordic-backgrounds"
 license=('MIT')
+makedepends=('git') # Git hozzáadva
 
-source=("https://github.com/megvadulthangya/nordic-backgrounds/archive/refs/heads/master.tar.gz")
+# Tar.gz helyett git clone
+source=("git+https://github.com/megvadulthangya/nordic-backgrounds.git")
 sha256sums=('SKIP')
 
+pkgver() {
+  cd "$srcdir/nordic-backgrounds"
+  # Formátum: r<commits>.<hash>
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
 package() {
-  cd "$srcdir/nordic-backgrounds-master"  # ← JAVÍTVA: main → master
+  # Git clone után a mappa neve simán a repo neve (nincs -master)
+  cd "$srcdir/nordic-backgrounds"
+  
   install -dm755 "$pkgdir/usr/share/backgrounds/nordic-backgrounds"
   cp -r wallpapers/* "$pkgdir/usr/share/backgrounds/nordic-backgrounds/"
 }

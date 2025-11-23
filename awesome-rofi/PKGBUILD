@@ -1,17 +1,26 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=awesome-rofi
-pkgver=1.0.0
+pkgver=r1.7c7070e  # Ez csak placeholder, a pkgver() felülírja majd
 pkgrel=1
-pkgdesc="A huge collection of Rofi-based custom Applets, Launchers & Powermenus, fully compatible with Awesome WM. This fork includes the necessary adjustments to ensure seamless operation within the Awesome WM environment."
+pkgdesc="A huge collection of Rofi-based custom Applets, Launchers & Powermenus, fully compatible with Awesome WM."
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-rofi"
 license=('GPL3')
 depends=('rofi')
-source=("https://github.com/megvadulthangya/awesome-rofi/archive/refs/heads/my-awesome-config.tar.gz")
+makedepends=('git') # Szükséges a verziózáshoz
+# A source-t git-re cseréltem, hogy lássa a verziókat
+source=("git+https://github.com/megvadulthangya/awesome-rofi.git#branch=my-awesome-config")
 sha256sums=('SKIP')
 
+pkgver() {
+  cd "$srcdir/awesome-rofi"
+  # Formátum: r<commits>.<hash> (pl: r161.7c7070e)
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
 package() {
-  cd "$srcdir/awesome-rofi-my-awesome-config"
+  # Git forrásnál a mappa neve a repo neve (nincs -branch utótag)
+  cd "$srcdir/awesome-rofi"
   
   # Fonts
   install -dm755 "$pkgdir/usr/share/fonts/rofi-themes"
@@ -24,5 +33,4 @@ package() {
   # Rofi config
   install -dm755 "$pkgdir/etc/skel/.config/rofi"
   cp -r files/* "$pkgdir/etc/skel/.config/rofi/"
-  
 }
