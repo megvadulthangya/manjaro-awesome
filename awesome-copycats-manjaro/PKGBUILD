@@ -12,38 +12,44 @@ source=("git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#bra
 sha256sums=('SKIP')
 
 pkgver() {
+  # Ez most már biztonságos, mert a prepare() nem törli ki alóla a .git-et
   cd "$srcdir/awesome-copycats-manjaro"
-  # Formátum: r<commits>.<hash>
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd "$srcdir/awesome-copycats-manjaro"
-  # Remove git related files
-  find . -name '.git*' -exec rm -rf {} + 2>/dev/null || true
+  # A prepare most üres vagy törölhető. 
+  # SOHA ne töröld itt a .git mappát, mert kell a pkgver-nek!
+  true
 }
 
 package() {
-  cd "$srcdir"
+  # Belépünk a letöltött forrás mappájába
+  cd "$srcdir/awesome-copycats-manjaro"
   
+  # Célmappa létrehozása
   install -d -m755 "$pkgdir/etc/skel/.config/awesome"
-  cp -r awesome-copycats-manjaro/* "$pkgdir/etc/skel/.config/awesome/"
   
-  shopt -s dotglob
-  for file in awesome-copycats-manjaro/.*; do
-    if [[ -f "$file" && "$file" != *".git"* ]]; then
-      cp "$file" "$pkgdir/etc/skel/.config/awesome/"
-    fi
-  done
-  shopt -u dotglob
+  # MÁSOLÁS: A 'cp -a' mindent másol (rejtett fájlokat is), rekurzívan, jogokkal együtt.
+  # A pont (.) jelenti a jelenlegi mappa tartalmát.
+  cp -a . "$pkgdir/etc/skel/.config/awesome/"
   
+  # TISZTÍTÁS: Most, hogy már a csomagban ($pkgdir) van minden,
+  # INNEN töröljük ki a .git mappát. Ez nem bántja a forrást, így a pkgver() működni fog.
+  rm -rf "$pkgdir/etc/skel/.config/awesome/.git"
+  rm -rf "$pkgdir/etc/skel/.config/awesome/.gitignore"
+  rm -rf "$pkgdir/etc/skel/.config/awesome/.github" 2>/dev/null || true
+  
+  # Template átnevezése (ha létezik)
   if [ -f "$pkgdir/etc/skel/.config/awesome/rc.lua.template" ]; then
     mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" "$pkgdir/etc/skel/.config/awesome/rc.lua"
   fi
   
+  # Jogosultságok beállítása (biztos, ami biztos)
   find "$pkgdir/etc/skel/.config/awesome" -type f -exec chmod 644 {} \;
   find "$pkgdir/etc/skel/.config/awesome" -type d -exec chmod 755 {} \;
   
+  # Install script létrehozása
   install -d -m755 "$pkgdir/usr/share/$pkgname"
   cat > "$pkgdir/usr/share/$pkgname/install-to-user.sh" << 'EOF'
 #!/bin/bash
@@ -58,6 +64,7 @@ EOF
   
   chmod +x "$pkgdir/usr/share/$pkgname/install-to-user.sh"
   
+  # README
   install -d -m755 "$pkgdir/usr/share/doc/$pkgname"
   cat > "$pkgdir/usr/share/doc/$pkgname/README" << EOF
 Awesome WM Nord Configuration
