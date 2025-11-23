@@ -1,6 +1,6 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=nordic-backgrounds
-pkgver=r1.g41473c # Placeholder
+pkgver=r161.e6670ac
 pkgrel=1
 pkgdesc="Currated Nordic theme wallpapers"
 arch=('any')
