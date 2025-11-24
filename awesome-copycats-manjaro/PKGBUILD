@@ -1,6 +1,6 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 pkgname=awesome-copycats-manjaro
-pkgver=r1056.78067a4
+pkgver=r1057.25f7bc3
 pkgrel=1
 pkgdesc="A forked and enhanced version of the original Awesome WM Copycats repository."
 arch=('any')
