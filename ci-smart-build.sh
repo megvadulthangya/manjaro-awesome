@@ -54,11 +54,12 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ (JAVÍTVA: --global a --system helyett) ---
-# Mivel builder userként futunk, csak a globális (saját) konfigot írhatjuk!
+# --- GIT KONFIGURÁCIÓ (Globális, biztonsági határokkal) ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 git config --global --add safe.directory '*'
+# Ez a legfontosabb a konténerben:
+export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -161,7 +162,7 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- GIT PUSH (GOD MODE) ---
+        # --- JAVÍTOTT GIT PUSH LOGIKA (EGYSZERŰSÍTETT) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
@@ -169,11 +170,10 @@ build_package() {
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # GOD MODE: Kényszerítjük a Git-et a helyes útvonalakra
-            export GIT_DIR="$REPO_ROOT/.git"
-            export GIT_WORK_TREE="$REPO_ROOT"
+            # Visszalépünk a gyökérbe, és onnan dolgozunk!
+            cd "$REPO_ROOT"
             
-            git add "$REPO_ROOT/$pkg/PKGBUILD" "$REPO_ROOT/$pkg/.SRCINFO"
+            git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
             
             if git diff-index --quiet HEAD --; then
                 log_info "Nincs mit commitolni."
@@ -187,9 +187,6 @@ build_package() {
                     log_err "Git Push sikertelen (de a csomag elkészült)."
                 fi
             fi
-            # Visszaállítjuk a változókat
-            unset GIT_DIR
-            unset GIT_WORK_TREE
         fi
     else
         log_err "HIBA az építésnél: $pkg"
