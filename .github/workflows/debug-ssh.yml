@@ -1,7 +1,7 @@
 name: Debug SSH Connection ONLY
 
 on: 
-  workflow_dispatch: # Csak gombnyomásra indul
+  workflow_dispatch:
 
 jobs:
   debug-connection:
@@ -24,25 +24,17 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           
-          echo "--- 1. DEKÓDOLÁS KEZDÉSE ---"
-          # Base64 dekódolás
-          echo "$VPS_KEY" | base64 -d > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          echo "--- 1. DEKÓDOLÁS (ED25519) ---"
+          # Most már helyes néven mentjük
+          echo "$VPS_KEY" | base64 -d > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
           
-          echo "--- 2. KULCS ELLENŐRZÉSE (FEJLÉC) ---"
-          # KIÍRJUK A KULCS ELSŐ 2 SORÁT. 
-          # Ha itt értelmetlen betűhalmazt látsz a "-----BEGIN..." helyett, 
-          # akkor a dekódolás nem sikerült!
-          head -n 2 ~/.ssh/id_rsa
-          echo "..."
-          echo "-------------------------------------"
-
-          echo "--- 3. KULCS TÍPUS ELLENŐRZÉSE ---"
-          # Ez megmondja, mit gondol az SSH a fájlról (ez dobta a type -1 hibát)
-          ssh-keygen -lf ~/.ssh/id_rsa || echo "HIBA: Az SSH nem ismeri fel a kulcsot!"
+          echo "--- 2. KULCS TÍPUS ELLENŐRZÉSE ---"
+          ssh-keygen -lf ~/.ssh/id_ed25519 || echo "HIBA: Az SSH nem ismeri fel a kulcsot!"
           
-          echo "--- 4. KAPCSOLÓDÁSI TESZT ---"
+          echo "--- 3. KAPCSOLÓDÁSI TESZT ---"
           ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
           
-          # verbose (-v) mód és RSA kényszerítés
-          ssh -v -o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa $VPS_USER@$VPS_HOST "echo 'SIKERES CSATLAKOZÁS!'"
+          # TISZTA PARANCS: Nincs RSA kényszerítés, csak a kulcsot adjuk meg (-i)
+          # A -v marad, hogy lássuk a logot
+          ssh -v -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 $VPS_USER@$VPS_HOST "echo 'SIKERES CSATLAKOZÁS!'"
