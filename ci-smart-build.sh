@@ -2,10 +2,8 @@
 set -e
 
 # --- 1. ÚTVONAL FIXÁLÁS ---
-# Belépünk abba a mappába, ahol a script van (a repo gyökérbe)
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
-echo "[DEBUG] Script munkakönyvtára: $REPO_ROOT"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
@@ -55,7 +53,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ (A buildernek is kell) ---
+# --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 
@@ -109,8 +107,8 @@ build_package() {
         cd build_aur
         if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
         
-        log_info "AUR klónozása: $pkg"
-        if ! git clone "https://aur.archlinux.org/$pkg.git"; then
+        # log_info "AUR klónozása: $pkg" # Kicsit csöndesebbre vesszük
+        if ! git clone "https://aur.archlinux.org/$pkg.git" > /dev/null 2>&1; then
              log_err "Nem sikerült klónozni: $pkg"
              return
         fi
@@ -123,11 +121,10 @@ build_package() {
         cd "$pkg"
     fi
 
-    log_info "Verzió ellenőrzése: $pkg ..."
-    
-    # --- ITT A LÉNYEG: KIVETTÜK A /dev/null-t, HOGY LÁSSUK A HIBÁT! ---
-    if ! makepkg -o --noconfirm; then
-         log_err "Forrás letöltési hiba: $pkg (Lásd a fenti hibaüzenetet!)"
+    # --- 1. fázis: GYORS ELLENŐRZÉS (Függőségek nélkül!) ---
+    # A -d (nodeps) a kulcs! Nem érdekli, ha hiányzik a rofi vagy a gtk.
+    if ! makepkg -od --noconfirm > /dev/null 2>&1; then
+         log_err "Forrás letöltési/verzió hiba: $pkg (Rossz PKGBUILD?)"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
          return
     fi
@@ -150,8 +147,11 @@ build_package() {
         return
     fi
 
+    # --- 2. fázis: ÉPÍTÉS (Függőségek telepítésével!) ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
+    # A -s (syncdeps) kapcsoló automatikusan telepíti a hiányzó dolgokat (rofi, cmake, stb)
+    # A -e (noextract) mivel már letöltöttük az 1. fázisban
     if makepkg -se --noconfirm --clean --nocheck; then
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
         
@@ -173,7 +173,7 @@ build_package() {
             fi
         fi
     else
-        log_err "HIBA az építésnél: $pkg."
+        log_err "HIBA az építésnél: $pkg (Valószínűleg hiányzó AUR függőség vagy build hiba)"
     fi
 
     cd "$REPO_ROOT"
