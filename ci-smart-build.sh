@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# --- 1. GARANTÁLJUK, HOGY A REPO GYÖKERÉBEN VAGYUNK ---
+cd "$(dirname "$0")"
+REPO_ROOT=$(pwd)
+
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
     "awesome-rofi"
@@ -43,13 +47,13 @@ AUR_PACKAGES=(
 
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
-OUTPUT_DIR="./built_packages"
+OUTPUT_DIR="built_packages"  # Relatív a gyökérhez
 
-# --- SSH BEÁLLÍTÁSOK (JAVÍTVA) ---
-# Töröltem az RSA kényszerítést, mert már modern kulcsot használunk!
+# SSH Opciók
 SSH_OPTS="-o StrictHostKeyChecking=no"
 
-mkdir -p "$OUTPUT_DIR"
+# Mappa létrehozása (a gyökérben)
+mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
@@ -59,8 +63,9 @@ git config --global --add safe.directory '*'
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
 log_skip() { echo -e "\e[33m[SKIP]\e[0m $1"; }
+log_err()  { echo -e "\e[31m[HIBA]\e[0m $1"; }
 
-# 1. YAY TELEPÍTÉSE
+# 2. YAY TELEPÍTÉSE
 if ! command -v yay &> /dev/null; then
     log_info "Yay telepítése..."
     cd /tmp
@@ -70,21 +75,22 @@ if ! command -v yay &> /dev/null; then
     cd - > /dev/null
 fi
 
-# 2. SZERVER KAPCSOLAT TESZT
+# 3. SZERVER KAPCSOLAT ÉS LISTA
 log_info "Kapcsolódás a szerverhez (Lista lekérése)..."
-# Most már simán mennie kell, mert a yaml-ben beállítottuk a kulcsot
-if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > remote_files.txt; then
+# A remote_files.txt-t a repo gyökerébe mentjük
+if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > "$REPO_ROOT/remote_files.txt"; then
     log_succ "Sikeres kapcsolódás!"
 else
-    echo "!!! KRITIKUS HIBA AZ SSH KAPCSOLÓDÁSKOR !!!"
+    log_err "Nem sikerült lekérni a listát a szerverről!"
     exit 1
 fi
 
-# Segédfüggvény: Ellenőrzi, hogy a PONTOS fájlnév ott van-e
+# Segédfüggvény
 is_on_server() {
     local pkgname="$1"
     local version="$2"
-    if grep -q "^${pkgname}-${version}-" remote_files.txt; then
+    # A gyökérben lévő fájlt keressük
+    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt"; then
         return 0
     else
         return 1
@@ -95,18 +101,41 @@ build_package() {
     local pkg="$1"
     local is_aur="$2"
     
+    # Visszatérünk a gyökérbe minden kör elején
+    cd "$REPO_ROOT"
+
     if [ "$is_aur" == "true" ]; then
+        # AUR esetén a build_aur mappában dolgozunk
+        mkdir -p build_aur
+        cd build_aur
         if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
-        git clone "https://aur.archlinux.org/$pkg.git"
+        
+        log_info "AUR klónozása: $pkg"
+        if ! git clone "https://aur.archlinux.org/$pkg.git"; then
+             log_err "Nem sikerült klónozni: $pkg"
+             return
+        fi
         cd "$pkg"
     else
-        if [ ! -d "$pkg" ]; then log_info "Hiba: $pkg mappa nincs meg!"; return; fi
+        # Helyi csomag esetén
+        if [ ! -d "$pkg" ]; then 
+            log_err "Helyi mappa nem található: $pkg (Jelenlegi hely: $(pwd))"
+            return
+        fi
         cd "$pkg"
     fi
 
     # --- VERZIÓ KIDERÍTÉSE ---
     log_info "Verzió ellenőrzése: $pkg ..."
-    makepkg -o --noconfirm > /dev/null 2>&1 || true 
+    
+    # Próbáljuk frissíteni a pkgver-t forrás letöltéssel
+    if ! makepkg -o --noconfirm > /dev/null 2>&1; then
+         # Ha a forrás letöltés nem sikerül (pl. halott link), ne álljunk meg, 
+         # de jelezzük a hibát és ugorjunk
+         log_err "Forrás letöltési hiba: $pkg (lehet, hogy hibás a PKGBUILD url?)"
+         if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
+         return
+    fi
 
     makepkg --printsrcinfo > .SRCINFO
     full_ver=$(grep "pkgver =" .SRCINFO | head -1 | awk '{print $3}')
@@ -122,14 +151,21 @@ build_package() {
 
     if is_on_server "$pkg" "$current_version"; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
-        if [ "$is_aur" == "true" ]; then cd .. && rm -rf "$pkg"; else cd ..; fi
+        if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
         return
     fi
 
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
+    
+    # Építés indítása
+    # A '|| true' azért van, hogy ha egy csomag elhasal, NE álljon le az egész script, 
+    # hanem menjen a következőre!
     if makepkg -se --noconfirm --clean --nocheck; then
-        mv *.pkg.tar.zst ../$OUTPUT_DIR/ || mv *.pkg.tar.xz ../$OUTPUT_DIR/
-        echo "$pkg" >> ../packages_to_clean.txt
+        # SIKERES ÉPÍTÉS
+        # A kész csomagot a gyökér/built_packages mappába mozgatjuk
+        mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
+        
+        echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
         if [ "$is_aur" == "false" ]; then
@@ -147,28 +183,35 @@ build_package() {
             fi
         fi
     else
-        log_info "HIBA az építésnél: $pkg"
+        log_err "HIBA az építésnél: $pkg. (Kihagyva, megyünk tovább)"
     fi
 
-    if [ "$is_aur" == "true" ]; then cd .. && rm -rf "$pkg"; else cd ..; fi
+    # Takarítás: Visszatérés a gyökérbe
+    cd "$REPO_ROOT"
+    if [ "$is_aur" == "true" ]; then 
+        rm -rf "build_aur/$pkg" 
+    fi
 }
 
 # --- FŐ CIKLUSOK ---
+
 log_info "--- SAJÁT CSOMAGOK ---"
 for pkg in "${LOCAL_PACKAGES[@]}"; do
     build_package "$pkg" "false"
 done
 
 log_info "--- AUR CSOMAGOK ---"
-mkdir -p build_aur
-cd build_aur
+# Takarítjuk az előző build szemetet
+rm -rf build_aur
+
 for pkg in "${AUR_PACKAGES[@]}"; do
     build_package "$pkg" "true"
 done
-cd ..
 
 # --- FELTÖLTÉS ---
-if [ -z "$(ls -A $OUTPUT_DIR)" ]; then
+cd "$REPO_ROOT"
+
+if [ -z "$(ls -A $OUTPUT_DIR 2>/dev/null)" ]; then
     log_succ "Minden naprakész. Nincs feltölteni való."
     exit 0
 fi
@@ -181,7 +224,7 @@ REMOTE_COMMANDS="cd $REMOTE_DIR && "
 
 if [ -f packages_to_clean.txt ]; then
     while read pkg_to_clean; do
-        REMOTE_COMMANDS+="ls -t ${pkg_to_clean}-*.pkg.tar.zst | tail -n +2 | xargs -r rm -- && "
+        REMOTE_COMMANDS+="ls -t ${pkg_to_clean}-*.pkg.tar.zst 2>/dev/null | tail -n +2 | xargs -r rm -- && "
     done < packages_to_clean.txt
 fi
 
