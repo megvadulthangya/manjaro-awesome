@@ -1,19 +1,13 @@
 #!/bin/bash
 set -e
 
-# --- 0. BIZTONSÁGI ZÁRAK FELOLDÁSA (AZONNAL!) ---
-# Ez kötelező, hogy a git parancsok működjenek a konténerben
-export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
-git config --global --add safe.directory '*'
-
 # --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
 
-# Most már működni fog ez a parancs:
-ORIGIN_URL=$(git remote get-url origin)
-# Átírjuk https-ről ssh-ra
-SSH_REPO_URL=$(echo "$ORIGIN_URL" | sed -E 's|https://github.com/|git@github.com:|')
+# --- FIX SSH URL (A TE CÍMED) ---
+# Nem kérdezzük le a Gittől, mert az hibát okozhat a konténerben. Beírjuk fixen.
+SSH_REPO_URL="git@github.com:megvadulthangya/manjaro-awesome.git"
 
 echo "[DEBUG] Repo gyökér: $REPO_ROOT"
 echo "[DEBUG] Push URL: $SSH_REPO_URL"
@@ -171,15 +165,15 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- GIT PUSH LOGIKA (CLONE MÓDSZER) ---
+        # --- GIT PUSH (CLONE MÓDSZER) ---
         if [ "$is_aur" == "false" ]; then
-            log_info "PKGBUILD frissítése és Git Push..."
+            log_info "PKGBUILD frissítése és Git Push (Clone módszer)..."
             
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # Clone módszer a /tmp mappába (Biztos ami biztos)
+            # Tiszta klón a /tmp-be (Ez biztosan működik!)
             TEMP_GIT_DIR="/tmp/git_publish_$pkg"
             rm -rf "$TEMP_GIT_DIR"
             
