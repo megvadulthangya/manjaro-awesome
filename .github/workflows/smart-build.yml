@@ -39,7 +39,7 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          printf "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          printf "%s\n" -- "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           # DEBUG: Ellenőrizzük, hogy a kulcs formátuma helyes-e (nem írjuk ki a tartalmát!)
           echo "--- SSH KEY DEBUG INFO ---"
