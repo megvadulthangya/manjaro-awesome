@@ -13,9 +13,10 @@ LOCAL_PACKAGES=(
     "i3lock-fancy-git"
 )
 
+# Átraktuk ide a fontot, mert jobb az AUR-ból
 AUR_PACKAGES=(
-    "raw-thumbnailer"
     "ttf-font-awesome-5"
+    "raw-thumbnailer"
     "grayjay-bin"
     "gsconnect"
     "lain-git"
@@ -54,8 +55,10 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
+# Fontos: A builder usernek is beállítjuk a safe directory-t
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
+git config --global --add safe.directory "$REPO_ROOT"
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -120,7 +123,7 @@ build_package() {
         cd "$pkg"
     fi
 
-    # --- 1. fázis: GYORS ELLENŐRZÉS (Függőségek nélkül!) ---
+    # --- 1. fázis: GYORS ELLENŐRZÉS ---
     if ! makepkg -od --noconfirm > /dev/null 2>&1; then
          log_err "Forrás letöltési/verzió hiba: $pkg (Rossz PKGBUILD?)"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
@@ -145,61 +148,52 @@ build_package() {
         return
     fi
 
-    # --- 2. fázis: ÉPÍTÉS (OKOS FÜGGŐSÉGKEZELÉSSEL) ---
+    # --- 2. fázis: ÉPÍTÉS ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
-    # TRÜKK: Használjuk a yay-t a függőségek telepítésére!
-    # Ez felrakja az AUR-os dolgokat is (pl. gtkd, libopenraw)
-    log_info "Függőségek ellenőrzése és telepítése (AUR támogatással)..."
-    
-    # Lekérjük a függőségeket a PKGBUILD-ből
-    # A 'source PKGBUILD' nem biztonságos, inkább parse-oljuk
-    # Vagy egyszerűen rábízzuk a yay-re az egészet? 
-    # Nem, mert a yay buildelne is.
-    # Megpróbáljuk a 'makepkg -s' helyett manuálisan felrakni a hiányzókat.
-    
-    # A legegyszerűbb megoldás: Hagyjuk, hogy a yay építse meg a csomagot, ha már úgyis ott van!
-    # De akkor nem tudjuk hova teszi.
-    # Maradjunk a biztosnál:
-    
+    # Függőségek kezelése (yay)
+    if [ "$is_aur" == "true" ]; then
+        log_info "Függőségek ellenőrzése (AUR)..."
+        # Próbáljuk meg a yay-t, de ha nem megy, ne álljunk meg, hátha a makepkg megoldja
+        yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
+    fi
+
     if makepkg -se --noconfirm --clean --nocheck; then
-        # SIKER
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
-        
-        # Git Push logika (csak helyi csomagoknál)
+
+        # --- JAVÍTOTT GIT PUSH LOGIKA ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
+            
+            # 1. Frissítjük a fájlokat
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
-            git add PKGBUILD .SRCINFO
+            
+            # 2. VISSZALÉPÜNK A GYÖKÉRBE (Hogy lássa a .git mappát!)
+            cd "$REPO_ROOT"
+            
+            # 3. Hozzáadjuk a módosított fájlokat (útvonallal együtt)
+            git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
+            
+            # 4. Commit és Push
             if git diff-index --quiet HEAD --; then
                 log_info "Nincs mit commitolni."
             else
                 git commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
-                git push
-                log_succ "Git repo frissítve!"
+                # Próbáljuk meg a pull-t előtte, hátha volt változás közben
+                git pull --rebase origin main || true 
+                if git push; then
+                    log_succ "Git repo frissítve!"
+                else
+                    log_err "Git Push sikertelen (de a csomag elkészült)."
+                fi
             fi
         fi
     else
-        # HA A MAKEPKG ELHASAL (FÜGGŐSÉG MIATT)
-        log_info "Hagyományos build sikertelen. Próbálkozás AUR függőségekkel (yay)..."
-        
-        # Ez a parancs telepíti a hiányzó függőségeket (akár AUR-ból is) anélkül, hogy buildelne
-        if yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//'); then
-             # Ha sikerült felrakni a függőségeket, próbáljuk újra a buildet
-             if makepkg -e --noconfirm --clean --nocheck; then
-                 mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
-                 echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
-                 log_succ "$pkg építése sikeres (második próbálkozásra)."
-             else
-                 log_err "VÉGLEGES HIBA: $pkg nem épült fel."
-             fi
-        else
-             log_err "Nem sikerült telepíteni a függőségeket ehhez: $pkg"
-        fi
+        log_err "HIBA az építésnél: $pkg"
     fi
 
     cd "$REPO_ROOT"
