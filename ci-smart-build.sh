@@ -1,9 +1,11 @@
 #!/bin/bash
 set -e
 
-# --- 1. GARANTÁLJUK, HOGY A REPO GYÖKERÉBEN VAGYUNK ---
+# --- 1. ÚTVONAL FIXÁLÁS ---
+# Belépünk abba a mappába, ahol a script van (a repo gyökérbe)
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
+echo "[DEBUG] Script munkakönyvtára: $REPO_ROOT"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
@@ -49,16 +51,13 @@ REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="built_packages"
 
-# SSH Opciók
 SSH_OPTS="-o StrictHostKeyChecking=no"
 
-# Mappa létrehozása
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ ---
+# --- GIT KONFIGURÁCIÓ (A buildernek is kell) ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
-git config --global --add safe.directory '*'
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -75,17 +74,16 @@ if ! command -v yay &> /dev/null; then
     cd - > /dev/null
 fi
 
-# 3. SZERVER KAPCSOLAT ÉS LISTA
-log_info "Kapcsolódás a szerverhez (Lista lekérése)..."
+# 3. SZERVER KAPCSOLAT
+log_info "Kapcsolódás a szerverhez..."
 if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > "$REPO_ROOT/remote_files.txt"; then
     log_succ "Sikeres kapcsolódás!"
 else
-    log_err "Nem sikerült lekérni a listát a szerverről!"
+    log_err "Nem sikerült lekérni a listát!"
     exit 1
 fi
 
-# 4. ADATBÁZIS LETÖLTÉSE (Hogy tudjunk hozzáadni)
-# Ha már van DB a szerveren, letöltjük, hogy frissíteni tudjuk
+# 4. DB LETÖLTÉS
 log_info "Meglévő adatbázis letöltése..."
 scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
@@ -127,8 +125,9 @@ build_package() {
 
     log_info "Verzió ellenőrzése: $pkg ..."
     
-    if ! makepkg -o --noconfirm > /dev/null 2>&1; then
-         log_err "Forrás letöltési hiba: $pkg"
+    # --- ITT A LÉNYEG: KIVETTÜK A /dev/null-t, HOGY LÁSSUK A HIBÁT! ---
+    if ! makepkg -o --noconfirm; then
+         log_err "Forrás letöltési hiba: $pkg (Lásd a fenti hibaüzenetet!)"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
          return
     fi
@@ -202,10 +201,8 @@ if [ -z "$(ls -A $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null)" ]; then
     exit 0
 fi
 
-# ADATBÁZIS FRISSÍTÉSE (Helyben, mert itt van a repo-add!)
 log_info "Adatbázis generálása..."
 cd "$OUTPUT_DIR"
-# A régi DB-t töröljük, és újat generálunk a meglévő + új csomagokból
 rm -f ${REPO_DB_NAME}.db* ${REPO_DB_NAME}.files*
 repo-add ${REPO_DB_NAME}.db.tar.gz *.pkg.tar.zst
 
@@ -222,9 +219,7 @@ if [ -f packages_to_clean.txt ]; then
     done < packages_to_clean.txt
 fi
 
-# A DB fájlokat nem kell törölni, mert az scp felülírta őket a frissel!
 REMOTE_COMMANDS+="echo 'Takarítás kész.'"
-
 ssh $SSH_OPTS $VPS_USER@$VPS_HOST "$REMOTE_COMMANDS"
 
 log_succ "KÉSZ! Repó frissítve."
