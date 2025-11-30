@@ -47,12 +47,12 @@ AUR_PACKAGES=(
 
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
-OUTPUT_DIR="built_packages"  # Relatív a gyökérhez
+OUTPUT_DIR="built_packages"
 
 # SSH Opciók
 SSH_OPTS="-o StrictHostKeyChecking=no"
 
-# Mappa létrehozása (a gyökérben)
+# Mappa létrehozása
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
@@ -77,7 +77,6 @@ fi
 
 # 3. SZERVER KAPCSOLAT ÉS LISTA
 log_info "Kapcsolódás a szerverhez (Lista lekérése)..."
-# A remote_files.txt-t a repo gyökerébe mentjük
 if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > "$REPO_ROOT/remote_files.txt"; then
     log_succ "Sikeres kapcsolódás!"
 else
@@ -85,11 +84,15 @@ else
     exit 1
 fi
 
+# 4. ADATBÁZIS LETÖLTÉSE (Hogy tudjunk hozzáadni)
+# Ha már van DB a szerveren, letöltjük, hogy frissíteni tudjuk
+log_info "Meglévő adatbázis letöltése..."
+scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+
 # Segédfüggvény
 is_on_server() {
     local pkgname="$1"
     local version="$2"
-    # A gyökérben lévő fájlt keressük
     if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt"; then
         return 0
     else
@@ -101,11 +104,9 @@ build_package() {
     local pkg="$1"
     local is_aur="$2"
     
-    # Visszatérünk a gyökérbe minden kör elején
     cd "$REPO_ROOT"
 
     if [ "$is_aur" == "true" ]; then
-        # AUR esetén a build_aur mappában dolgozunk
         mkdir -p build_aur
         cd build_aur
         if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
@@ -117,22 +118,17 @@ build_package() {
         fi
         cd "$pkg"
     else
-        # Helyi csomag esetén
         if [ ! -d "$pkg" ]; then 
-            log_err "Helyi mappa nem található: $pkg (Jelenlegi hely: $(pwd))"
+            log_err "Helyi mappa nem található: $pkg"
             return
         fi
         cd "$pkg"
     fi
 
-    # --- VERZIÓ KIDERÍTÉSE ---
     log_info "Verzió ellenőrzése: $pkg ..."
     
-    # Próbáljuk frissíteni a pkgver-t forrás letöltéssel
     if ! makepkg -o --noconfirm > /dev/null 2>&1; then
-         # Ha a forrás letöltés nem sikerül (pl. halott link), ne álljunk meg, 
-         # de jelezzük a hibát és ugorjunk
-         log_err "Forrás letöltési hiba: $pkg (lehet, hogy hibás a PKGBUILD url?)"
+         log_err "Forrás letöltési hiba: $pkg"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
          return
     fi
@@ -157,12 +153,7 @@ build_package() {
 
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
-    # Építés indítása
-    # A '|| true' azért van, hogy ha egy csomag elhasal, NE álljon le az egész script, 
-    # hanem menjen a következőre!
     if makepkg -se --noconfirm --clean --nocheck; then
-        # SIKERES ÉPÍTÉS
-        # A kész csomagot a gyökér/built_packages mappába mozgatjuk
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
         
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
@@ -183,14 +174,11 @@ build_package() {
             fi
         fi
     else
-        log_err "HIBA az építésnél: $pkg. (Kihagyva, megyünk tovább)"
+        log_err "HIBA az építésnél: $pkg."
     fi
 
-    # Takarítás: Visszatérés a gyökérbe
     cd "$REPO_ROOT"
-    if [ "$is_aur" == "true" ]; then 
-        rm -rf "build_aur/$pkg" 
-    fi
+    if [ "$is_aur" == "true" ]; then rm -rf "build_aur/$pkg"; fi
 }
 
 # --- FŐ CIKLUSOK ---
@@ -201,25 +189,31 @@ for pkg in "${LOCAL_PACKAGES[@]}"; do
 done
 
 log_info "--- AUR CSOMAGOK ---"
-# Takarítjuk az előző build szemetet
 rm -rf build_aur
-
 for pkg in "${AUR_PACKAGES[@]}"; do
     build_package "$pkg" "true"
 done
 
-# --- FELTÖLTÉS ---
+# --- DB FRISSÍTÉS ÉS FELTÖLTÉS ---
 cd "$REPO_ROOT"
 
-if [ -z "$(ls -A $OUTPUT_DIR 2>/dev/null)" ]; then
+if [ -z "$(ls -A $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null)" ]; then
     log_succ "Minden naprakész. Nincs feltölteni való."
     exit 0
 fi
 
+# ADATBÁZIS FRISSÍTÉSE (Helyben, mert itt van a repo-add!)
+log_info "Adatbázis generálása..."
+cd "$OUTPUT_DIR"
+# A régi DB-t töröljük, és újat generálunk a meglévő + új csomagokból
+rm -f ${REPO_DB_NAME}.db* ${REPO_DB_NAME}.files*
+repo-add ${REPO_DB_NAME}.db.tar.gz *.pkg.tar.zst
+
 log_info "Feltöltés a szerverre..."
+cd ..
 scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/
 
-log_info "Szerver adatbázis frissítése..."
+log_info "Takarítás a szerveren..."
 REMOTE_COMMANDS="cd $REMOTE_DIR && "
 
 if [ -f packages_to_clean.txt ]; then
@@ -228,8 +222,8 @@ if [ -f packages_to_clean.txt ]; then
     done < packages_to_clean.txt
 fi
 
-REMOTE_COMMANDS+="rm -f ${REPO_DB_NAME}.db* ${REPO_DB_NAME}.files* && "
-REMOTE_COMMANDS+="repo-add ${REPO_DB_NAME}.db.tar.gz *.pkg.tar.zst"
+# A DB fájlokat nem kell törölni, mert az scp felülírta őket a frissel!
+REMOTE_COMMANDS+="echo 'Takarítás kész.'"
 
 ssh $SSH_OPTS $VPS_USER@$VPS_HOST "$REMOTE_COMMANDS"
 
