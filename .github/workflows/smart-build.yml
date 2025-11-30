@@ -1,11 +1,9 @@
 name: Manjaro Repo Smart Builder
 
 on:
-#  push:
-#    branches: [ "main" ]
+  workflow_dispatch:
   schedule:
     - cron: '0 4 * * *'
-  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -19,31 +17,33 @@ jobs:
 
       - name: Prepare Environment
         run: |
-          # Alaprendszer frissítése és csomagok telepítése
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm --needed git rsync openssh base-devel jq
           
-          # Builder user létrehozása
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Jogosultságok javítása a munkamappán
+          # JOGOSULTSÁGOK JAVÍTÁSA (A leggyakoribb hibaforrás)
           chown -R builder:builder .
-          git config --global --add safe.directory '*'
+          
+          # Git beállítása RENDSZERSZINTEN (hogy a builder is lássa)
+          git config --system --add safe.directory '*'
 
       - name: Setup SSH for Builder
         run: |
-          # FONTOS: A kulcsot a 'builder' felhasználó mappájába tesszük!
           mkdir -p /home/builder/.ssh
-          
-          # Base64 dekódolás (az új Ed25519 kulcshoz)
           echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
-          
-          # Jogosultságok beállítása (szigorúan 600, és a builderé legyen)
           chmod 600 /home/builder/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts
           chown -R builder:builder /home/builder/.ssh
+
+      - name: Debug Directory Structure
+        run: |
+          echo "--- JELENLEGI KÖNYVTÁR TARTALMA (ROOT) ---"
+          ls -la
+          echo "--- AWESOME-ROFI TARTALMA ---"
+          ls -la awesome-rofi/ || echo "HIBA: awesome-rofi mappa nem olvasható!"
 
       - name: Run Smart Build Script
         env:
@@ -51,5 +51,4 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           chmod +x ./ci-smart-build.sh
-          # A builder user nevében futtatjuk a scriptet
           su builder -c ./ci-smart-build.sh
