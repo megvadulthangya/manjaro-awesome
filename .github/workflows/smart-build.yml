@@ -15,19 +15,33 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Prepare Environment
+      - name: Prepare Environment (Install Build Essentials)
         run: |
           pacman-key --init
           pacman-key --populate archlinux
-          pacman -Syu --noconfirm --needed git rsync openssh base-devel jq
+          # Itt a lényeg: Előre felrakjuk a "kritikus" építőeszközöket!
+          # appstream -> Kell a Tilixnek
+          # rust, cargo -> Kell a raw-thumbnailernek
+          # imagemagick -> Kell az i3lock-fancy-gitnek
+          # gtk3, gtk4 -> Kell a legtöbb GUI programnak
+          # po4a, meson, ninja -> Általános fordítók
+          pacman -Syu --noconfirm --needed \
+            git rsync openssh base-devel jq \
+            appstream appstream-glib \
+            rust cargo \
+            meson ninja cmake \
+            python \
+            gtk3 gtk4 \
+            imagemagick \
+            po4a \
+            bc \
+            fontconfig
           
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # JOGOSULTSÁGOK JAVÍTÁSA (A leggyakoribb hibaforrás)
+          # Jogosultságok
           chown -R builder:builder .
-          
-          # Git beállítása RENDSZERSZINTEN (hogy a builder is lássa)
           git config --system --add safe.directory '*'
 
       - name: Setup SSH for Builder
@@ -40,10 +54,7 @@ jobs:
 
       - name: Debug Directory Structure
         run: |
-          echo "--- JELENLEGI KÖNYVTÁR TARTALMA (ROOT) ---"
           ls -la
-          echo "--- AWESOME-ROFI TARTALMA ---"
-          ls -la awesome-rofi/ || echo "HIBA: awesome-rofi mappa nem olvasható!"
 
       - name: Run Smart Build Script
         env:
