@@ -55,9 +55,10 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
-git config --global user.name "GitHub Action Bot"
-git config --global user.email "action@github.com"
-git config --global --add safe.directory '*'
+# Rendszerszinten állítjuk, hogy biztos legyen
+git config --system user.name "GitHub Action Bot"
+git config --system user.email "action@github.com"
+git config --system --add safe.directory '*'
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -160,7 +161,7 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- JAVÍTOTT GIT PUSH LOGIKA (FIX: FILESYSTEM BOUNDARY) ---
+        # --- JAVÍTOTT GIT PUSH LOGIKA (GOD MODE) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
@@ -168,17 +169,12 @@ build_package() {
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # --- ITT A JAVÍTÁS! ---
-            # 1. Visszalépünk a gyökérbe
-            cd "$REPO_ROOT"
+            # GOD MODE: Megmondjuk a gitnek a PONTOS útvonalakat
+            # Így nem számít, hol állunk éppen, vagy mit gondol a git
+            export GIT_DIR="$REPO_ROOT/.git"
+            export GIT_WORK_TREE="$REPO_ROOT"
             
-            # 2. Engedélyezzük a fájlrendszer határok átlépését!
-            export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
-            
-            # 3. Explicit megmondjuk a gitnek, hol a repo
-            git config --global --add safe.directory "$REPO_ROOT"
-            
-            git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
+            git add "$REPO_ROOT/$pkg/PKGBUILD" "$REPO_ROOT/$pkg/.SRCINFO"
             
             if git diff-index --quiet HEAD --; then
                 log_info "Nincs mit commitolni."
@@ -192,6 +188,9 @@ build_package() {
                     log_err "Git Push sikertelen (de a csomag elkészült)."
                 fi
             fi
+            # Visszaállítjuk a változókat, hogy ne zavarja a többit
+            unset GIT_DIR
+            unset GIT_WORK_TREE
         fi
     else
         log_err "HIBA az építésnél: $pkg"
