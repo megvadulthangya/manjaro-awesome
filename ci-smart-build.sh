@@ -45,9 +45,9 @@ REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="./built_packages"
 
-# --- SSH BEÁLLÍTÁSOK (A FIX) ---
-# Ez a kapcsolósor engedélyezi a régi RSA kulcsokat és kikapcsolja a host ellenőrzést
-SSH_OPTS="-o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa"
+# --- SSH BEÁLLÍTÁSOK (JAVÍTVA) ---
+# Töröltem az RSA kényszerítést, mert már modern kulcsot használunk!
+SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -70,14 +70,13 @@ if ! command -v yay &> /dev/null; then
     cd - > /dev/null
 fi
 
-# 2. SZERVER KAPCSOLAT TESZT (DEBUG MÓDBAN)
-log_info "Kapcsolódás a szerverhez (Debug mód)..."
-# Itt a -v kapcsoló, hogy lássuk a logban, mi történik, ha baj van!
-if ssh -v $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > remote_files.txt; then
+# 2. SZERVER KAPCSOLAT TESZT
+log_info "Kapcsolódás a szerverhez (Lista lekérése)..."
+# Most már simán mennie kell, mert a yaml-ben beállítottuk a kulcsot
+if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > remote_files.txt; then
     log_succ "Sikeres kapcsolódás!"
 else
     echo "!!! KRITIKUS HIBA AZ SSH KAPCSOLÓDÁSKOR !!!"
-    echo "Kérlek nézd meg a fenti 'debug1:' sorokat a logban."
     exit 1
 fi
 
@@ -175,7 +174,6 @@ if [ -z "$(ls -A $OUTPUT_DIR)" ]; then
 fi
 
 log_info "Feltöltés a szerverre..."
-# Itt is használjuk a speciális SSH opciókat
 scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/
 
 log_info "Szerver adatbázis frissítése..."
