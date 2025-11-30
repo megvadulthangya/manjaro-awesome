@@ -39,17 +39,15 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" -- "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          # DEBUG: Ellenőrizzük, hogy a kulcs formátuma helyes-e (nem írjuk ki a tartalmát!)
-          echo "--- SSH KEY DEBUG INFO ---"
-          echo "File exists: $(ls -l ~/.ssh/id_rsa)"
-          echo "First line: $(head -n 1 ~/.ssh/id_rsa)"
-          echo "Last line: $(tail -n 1 ~/.ssh/id_rsa)"
-          echo "Total lines (should be > 1): $(wc -l < ~/.ssh/id_rsa)"
-          echo "--------------------------"
           
-          # Hozzáadjuk a szervert a known_hosts-hoz
+          # ITT A LÉNYEG: A 'base64 -d' parancs állítja vissza az eredeti kulcsot hibátlanul!
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_rsa
+          
+          chmod 600 ~/.ssh/id_rsa
+          
+          # Ellenőrzés: Ha ezután is type -1, akkor megeszem a kalapom
+          ssh-keygen -lf ~/.ssh/id_rsa
+          
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
       # 3. LÉPÉS: FUTTATÁS
