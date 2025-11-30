@@ -3,7 +3,6 @@ set -e
 
 # --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
-# Abszolút útvonalat mentünk, hogy bárhonnan elérjük
 REPO_ROOT=$(pwd)
 echo "[DEBUG] Repo gyökér: $REPO_ROOT"
 
@@ -55,10 +54,9 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ (Bombabiztos) ---
+# --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
-# Ez engedélyezi a fájlrendszer határok átlépését
 git config --global --add safe.directory '*'
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
@@ -162,7 +160,7 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- ITT A JAVÍTOTT GIT PUSH RÉSZ (-C KAPCSOLÓVAL) ---
+        # --- JAVÍTOTT GIT PUSH LOGIKA (FIX: FILESYSTEM BOUNDARY) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
@@ -170,18 +168,25 @@ build_package() {
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # NEM lépünk cd-vel sehova, hanem megmondjuk a gitnek, hol a repo!
-            # A -C "$REPO_ROOT" azt mondja: "Bárhol is vagyok, te a REPO_ROOT-ban dolgozz!"
+            # --- ITT A JAVÍTÁS! ---
+            # 1. Visszalépünk a gyökérbe
+            cd "$REPO_ROOT"
             
-            git -C "$REPO_ROOT" add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
+            # 2. Engedélyezzük a fájlrendszer határok átlépését!
+            export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
             
-            if git -C "$REPO_ROOT" diff-index --quiet HEAD --; then
+            # 3. Explicit megmondjuk a gitnek, hol a repo
+            git config --global --add safe.directory "$REPO_ROOT"
+            
+            git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
+            
+            if git diff-index --quiet HEAD --; then
                 log_info "Nincs mit commitolni."
             else
-                git -C "$REPO_ROOT" commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
-                git -C "$REPO_ROOT" pull --rebase origin main || true 
+                git commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
+                git pull --rebase origin main || true 
                 
-                if git -C "$REPO_ROOT" push; then
+                if git push; then
                     log_succ "Git repo frissítve!"
                 else
                     log_err "Git Push sikertelen (de a csomag elkészült)."
