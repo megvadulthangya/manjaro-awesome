@@ -19,12 +19,8 @@ jobs:
         run: |
           pacman-key --init
           pacman-key --populate archlinux
-          # Itt a lényeg: Előre felrakjuk a "kritikus" építőeszközöket!
-          # appstream -> Kell a Tilixnek
-          # rust, cargo -> Kell a raw-thumbnailernek
-          # imagemagick -> Kell az i3lock-fancy-gitnek
-          # gtk3, gtk4 -> Kell a legtöbb GUI programnak
-          # po4a, meson, ninja -> Általános fordítók
+          
+          # 1. Telepítjük a hiányzó eszközöket (Tilixhez, Grayjayhez, stb.)
           pacman -Syu --noconfirm --needed \
             git rsync openssh base-devel jq \
             appstream appstream-glib \
@@ -35,8 +31,19 @@ jobs:
             imagemagick \
             po4a \
             bc \
-            fontconfig
+            fontconfig \
+            libxml2 \
+            clang llvm lld
           
+          # 2. DEBUG CSOMAGOK TILTÁSA (EZ A LÉNYEG!)
+          # Megkeressük az OPTIONS sort a konfigban, és a 'debug'-ot átírjuk '!debug'-ra.
+          # Így nem lesznek -debug végű kis fájlok, hanem egyetlen nagy, működő csomag lesz.
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          
+          # + Biztosítjuk, hogy a tömörítés ZST legyen (gyorsabb és ez a szabvány)
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+
+          # Felhasználó beállítása
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
