@@ -54,11 +54,11 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ ---
-# Rendszerszinten állítjuk, hogy biztos legyen
-git config --system user.name "GitHub Action Bot"
-git config --system user.email "action@github.com"
-git config --system --add safe.directory '*'
+# --- GIT KONFIGURÁCIÓ (JAVÍTVA: --global a --system helyett) ---
+# Mivel builder userként futunk, csak a globális (saját) konfigot írhatjuk!
+git config --global user.name "GitHub Action Bot"
+git config --global user.email "action@github.com"
+git config --global --add safe.directory '*'
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -161,7 +161,7 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- JAVÍTOTT GIT PUSH LOGIKA (GOD MODE) ---
+        # --- GIT PUSH (GOD MODE) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
@@ -169,8 +169,7 @@ build_package() {
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # GOD MODE: Megmondjuk a gitnek a PONTOS útvonalakat
-            # Így nem számít, hol állunk éppen, vagy mit gondol a git
+            # GOD MODE: Kényszerítjük a Git-et a helyes útvonalakra
             export GIT_DIR="$REPO_ROOT/.git"
             export GIT_WORK_TREE="$REPO_ROOT"
             
@@ -188,7 +187,7 @@ build_package() {
                     log_err "Git Push sikertelen (de a csomag elkészült)."
                 fi
             fi
-            # Visszaállítjuk a változókat, hogy ne zavarja a többit
+            # Visszaállítjuk a változókat
             unset GIT_DIR
             unset GIT_WORK_TREE
         fi
