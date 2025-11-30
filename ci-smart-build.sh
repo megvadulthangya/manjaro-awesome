@@ -10,12 +10,12 @@ LOCAL_PACKAGES=(
     "awesome-rofi"
     "nordic-backgrounds"
     "awesome-copycats-manjaro"
-    "ttf-font-awesome-5"
     "i3lock-fancy-git"
 )
 
 AUR_PACKAGES=(
     "raw-thumbnailer"
+    "ttf-font-awesome-5"
     "grayjay-bin"
     "gsconnect"
     "lain-git"
