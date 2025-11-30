@@ -20,7 +20,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           
-          # 1. Telepítjük a hiányzó eszközöket (Tilixhez, Grayjayhez, stb.)
+          # Telepítjük a csomagokat
           pacman -Syu --noconfirm --needed \
             git rsync openssh base-devel jq \
             appstream appstream-glib \
@@ -35,28 +35,33 @@ jobs:
             libxml2 \
             clang llvm lld
           
-          # 2. DEBUG CSOMAGOK TILTÁSA (EZ A LÉNYEG!)
-          # Megkeressük az OPTIONS sort a konfigban, és a 'debug'-ot átírjuk '!debug'-ra.
-          # Így nem lesznek -debug végű kis fájlok, hanem egyetlen nagy, működő csomag lesz.
+          # Debug kikapcsolása és tömörítés javítása
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
-          
-          # + Biztosítjuk, hogy a tömörítés ZST legyen (gyorsabb és ez a szabvány)
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
 
-          # Felhasználó beállítása
+          # Builder user létrehozása
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
+          # Rendszerszintű Git feloldás
+          git config --system --add safe.directory '*'
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
           # Jogosultságok
           chown -R builder:builder .
-          git config --system --add safe.directory '*'
 
       - name: Setup SSH for Builder
         run: |
           mkdir -p /home/builder/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
           chmod 600 /home/builder/.ssh/id_ed25519
+          
+          # --- ITT A JAVÍTÁS! ---
+          # 1. Hozzáadjuk a VPS-t (hogy fel tudjon tölteni)
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts
+          # 2. Hozzáadjuk a GITHUBOT IS (hogy le tudja klónozni a push-hoz!)
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts
+          
           chown -R builder:builder /home/builder/.ssh
 
       - name: Debug Directory Structure
