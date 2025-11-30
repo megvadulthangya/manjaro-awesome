@@ -3,7 +3,9 @@ set -e
 
 # --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
+# Abszolút útvonalat mentünk, hogy bárhonnan elérjük
 REPO_ROOT=$(pwd)
+echo "[DEBUG] Repo gyökér: $REPO_ROOT"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
@@ -13,7 +15,6 @@ LOCAL_PACKAGES=(
     "i3lock-fancy-git"
 )
 
-# Átraktuk ide a fontot, mert jobb az AUR-ból
 AUR_PACKAGES=(
     "ttf-font-awesome-5"
     "raw-thumbnailer"
@@ -54,11 +55,11 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ ---
-# Fontos: A builder usernek is beállítjuk a safe directory-t
+# --- GIT KONFIGURÁCIÓ (Bombabiztos) ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
-git config --global --add safe.directory "$REPO_ROOT"
+# Ez engedélyezi a fájlrendszer határok átlépését
+git config --global --add safe.directory '*'
 
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
@@ -125,7 +126,7 @@ build_package() {
 
     # --- 1. fázis: GYORS ELLENŐRZÉS ---
     if ! makepkg -od --noconfirm > /dev/null 2>&1; then
-         log_err "Forrás letöltési/verzió hiba: $pkg (Rossz PKGBUILD?)"
+         log_err "Forrás letöltési/verzió hiba: $pkg"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
          return
     fi
@@ -151,10 +152,8 @@ build_package() {
     # --- 2. fázis: ÉPÍTÉS ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
-    # Függőségek kezelése (yay)
     if [ "$is_aur" == "true" ]; then
         log_info "Függőségek ellenőrzése (AUR)..."
-        # Próbáljuk meg a yay-t, de ha nem megy, ne álljunk meg, hátha a makepkg megoldja
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
     fi
 
@@ -163,29 +162,26 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- JAVÍTOTT GIT PUSH LOGIKA ---
+        # --- ITT A JAVÍTOTT GIT PUSH RÉSZ (-C KAPCSOLÓVAL) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
-            # 1. Frissítjük a fájlokat
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # 2. VISSZALÉPÜNK A GYÖKÉRBE (Hogy lássa a .git mappát!)
-            cd "$REPO_ROOT"
+            # NEM lépünk cd-vel sehova, hanem megmondjuk a gitnek, hol a repo!
+            # A -C "$REPO_ROOT" azt mondja: "Bárhol is vagyok, te a REPO_ROOT-ban dolgozz!"
             
-            # 3. Hozzáadjuk a módosított fájlokat (útvonallal együtt)
-            git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
+            git -C "$REPO_ROOT" add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
             
-            # 4. Commit és Push
-            if git diff-index --quiet HEAD --; then
+            if git -C "$REPO_ROOT" diff-index --quiet HEAD --; then
                 log_info "Nincs mit commitolni."
             else
-                git commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
-                # Próbáljuk meg a pull-t előtte, hátha volt változás közben
-                git pull --rebase origin main || true 
-                if git push; then
+                git -C "$REPO_ROOT" commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
+                git -C "$REPO_ROOT" pull --rebase origin main || true 
+                
+                if git -C "$REPO_ROOT" push; then
                     log_succ "Git repo frissítve!"
                 else
                     log_err "Git Push sikertelen (de a csomag elkészült)."
