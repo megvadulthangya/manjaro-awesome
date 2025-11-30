@@ -1,15 +1,18 @@
 #!/bin/bash
 set -e
 
+# --- 0. BIZTONSÁGI ZÁRAK FELOLDÁSA (AZONNAL!) ---
+# Ez kötelező, hogy a git parancsok működjenek a konténerben
+export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+git config --global --add safe.directory '*'
+
 # --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
-# Ez a GitHub HTTPS URL-je, amit SSH-ra kell konvertálnunk a push-hoz, 
-# VAGY használjuk közvetlenül az SSH URL-t, ha tudjuk.
-# A legbiztosabb: git@github.com:FELHASZNALO/REPO.git
-# Szedjük ki a remote url-t:
+
+# Most már működni fog ez a parancs:
 ORIGIN_URL=$(git remote get-url origin)
-# Átírjuk https-ről ssh-ra, hogy a kulcsot használja (sed trükk)
+# Átírjuk https-ről ssh-ra
 SSH_REPO_URL=$(echo "$ORIGIN_URL" | sed -E 's|https://github.com/|git@github.com:|')
 
 echo "[DEBUG] Repo gyökér: $REPO_ROOT"
@@ -63,7 +66,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT KONFIGURÁCIÓ ---
+# --- GIT USER KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 
@@ -168,30 +171,23 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- ITT AZ ÚJ "CLONE & PUSH" STRATÉGIA ---
+        # --- GIT PUSH LOGIKA (CLONE MÓDSZER) ---
         if [ "$is_aur" == "false" ]; then
-            log_info "PKGBUILD frissítése és Git Push (Clone módszerrel)..."
+            log_info "PKGBUILD frissítése és Git Push..."
             
-            # 1. Először helyben frissítjük a fájlokat, hogy meglegyenek
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # 2. Létrehozunk egy ideiglenes könyvtárat a push-hoz
+            # Clone módszer a /tmp mappába (Biztos ami biztos)
             TEMP_GIT_DIR="/tmp/git_publish_$pkg"
             rm -rf "$TEMP_GIT_DIR"
             
-            # 3. Leklónozzuk a repót egy tiszta helyre (SSH-val!)
-            # Így a builder user lesz a tulajdonos, és nem lesz permission hiba
             if git clone "$SSH_REPO_URL" "$TEMP_GIT_DIR"; then
-                
-                # 4. Átmásoljuk a frissített fájlokat a tiszta repóba
                 cp "$REPO_ROOT/$pkg/PKGBUILD" "$TEMP_GIT_DIR/$pkg/"
                 cp "$REPO_ROOT/$pkg/.SRCINFO" "$TEMP_GIT_DIR/$pkg/"
                 
-                # 5. Commit és Push a tiszta helyről
                 cd "$TEMP_GIT_DIR"
-                
                 if git diff-index --quiet HEAD --; then
                     log_info "Nincs mit commitolni."
                 else
@@ -203,12 +199,10 @@ build_package() {
                         log_err "Git Push sikertelen!"
                     fi
                 fi
-                
-                # Takarítás
                 cd "$REPO_ROOT"
                 rm -rf "$TEMP_GIT_DIR"
             else
-                log_err "Nem sikerült klónozni a publish repót (SSH kulcs rendben van?)"
+                log_err "Nem sikerült klónozni a publish repót."
             fi
         fi
     else
