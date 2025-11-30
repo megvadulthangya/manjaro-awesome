@@ -107,7 +107,6 @@ build_package() {
         cd build_aur
         if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
         
-        # log_info "AUR klónozása: $pkg" # Kicsit csöndesebbre vesszük
         if ! git clone "https://aur.archlinux.org/$pkg.git" > /dev/null 2>&1; then
              log_err "Nem sikerült klónozni: $pkg"
              return
@@ -122,7 +121,6 @@ build_package() {
     fi
 
     # --- 1. fázis: GYORS ELLENŐRZÉS (Függőségek nélkül!) ---
-    # A -d (nodeps) a kulcs! Nem érdekli, ha hiányzik a rofi vagy a gtk.
     if ! makepkg -od --noconfirm > /dev/null 2>&1; then
          log_err "Forrás letöltési/verzió hiba: $pkg (Rossz PKGBUILD?)"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
@@ -147,17 +145,30 @@ build_package() {
         return
     fi
 
-    # --- 2. fázis: ÉPÍTÉS (Függőségek telepítésével!) ---
+    # --- 2. fázis: ÉPÍTÉS (OKOS FÜGGŐSÉGKEZELÉSSEL) ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
-    # A -s (syncdeps) kapcsoló automatikusan telepíti a hiányzó dolgokat (rofi, cmake, stb)
-    # A -e (noextract) mivel már letöltöttük az 1. fázisban
+    # TRÜKK: Használjuk a yay-t a függőségek telepítésére!
+    # Ez felrakja az AUR-os dolgokat is (pl. gtkd, libopenraw)
+    log_info "Függőségek ellenőrzése és telepítése (AUR támogatással)..."
+    
+    # Lekérjük a függőségeket a PKGBUILD-ből
+    # A 'source PKGBUILD' nem biztonságos, inkább parse-oljuk
+    # Vagy egyszerűen rábízzuk a yay-re az egészet? 
+    # Nem, mert a yay buildelne is.
+    # Megpróbáljuk a 'makepkg -s' helyett manuálisan felrakni a hiányzókat.
+    
+    # A legegyszerűbb megoldás: Hagyjuk, hogy a yay építse meg a csomagot, ha már úgyis ott van!
+    # De akkor nem tudjuk hova teszi.
+    # Maradjunk a biztosnál:
+    
     if makepkg -se --noconfirm --clean --nocheck; then
+        # SIKER
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
-        
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
-
+        
+        # Git Push logika (csak helyi csomagoknál)
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
@@ -173,7 +184,22 @@ build_package() {
             fi
         fi
     else
-        log_err "HIBA az építésnél: $pkg (Valószínűleg hiányzó AUR függőség vagy build hiba)"
+        # HA A MAKEPKG ELHASAL (FÜGGŐSÉG MIATT)
+        log_info "Hagyományos build sikertelen. Próbálkozás AUR függőségekkel (yay)..."
+        
+        # Ez a parancs telepíti a hiányzó függőségeket (akár AUR-ból is) anélkül, hogy buildelne
+        if yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//'); then
+             # Ha sikerült felrakni a függőségeket, próbáljuk újra a buildet
+             if makepkg -e --noconfirm --clean --nocheck; then
+                 mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
+                 echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
+                 log_succ "$pkg építése sikeres (második próbálkozásra)."
+             else
+                 log_err "VÉGLEGES HIBA: $pkg nem épült fel."
+             fi
+        else
+             log_err "Nem sikerült telepíteni a függőségeket ehhez: $pkg"
+        fi
     fi
 
     cd "$REPO_ROOT"
