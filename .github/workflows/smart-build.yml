@@ -17,44 +17,39 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 1. LÉPÉS: ELŐSZÖR TELEPÍTÜNK MINDENT (Hogy meglegyen az ssh-keyscan és a git)
       - name: Prepare Environment
         run: |
-          # Frissítjük a kulcstartókat, hogy ne legyen gond az aláírásokkal
+          # Alaprendszer frissítése és csomagok telepítése
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm --needed git rsync openssh base-devel jq
           
-          # Létrehozzuk a builder usert
+          # Builder user létrehozása
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Mivel a checkout rootként történt, visszaadjuk a jogokat a buildernek
+          # Jogosultságok javítása a munkamappán
           chown -R builder:builder .
-          
-          # Git beállítása, hogy a checkout után ne legyen gond a "not a git repository" hibával
           git config --global --add safe.directory '*'
 
-      # 2. LÉPÉS: CSAK MOST ÁLLÍTJUK BE AZ SSH-T (Mert már van openssh)
-      - name: Setup SSH
+      - name: Setup SSH for Builder
         run: |
-          mkdir -p ~/.ssh
+          # FONTOS: A kulcsot a 'builder' felhasználó mappájába tesszük!
+          mkdir -p /home/builder/.ssh
           
-          # ITT A LÉNYEG: A 'base64 -d' parancs állítja vissza az eredeti kulcsot hibátlanul!
-          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_rsa
+          # Base64 dekódolás (az új Ed25519 kulcshoz)
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
           
-          chmod 600 ~/.ssh/id_rsa
-          
-          # Ellenőrzés: Ha ezután is type -1, akkor megeszem a kalapom
-          ssh-keygen -lf ~/.ssh/id_rsa
-          
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          # Jogosultságok beállítása (szigorúan 600, és a builderé legyen)
+          chmod 600 /home/builder/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts
+          chown -R builder:builder /home/builder/.ssh
 
-      # 3. LÉPÉS: FUTTATÁS
       - name: Run Smart Build Script
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           chmod +x ./ci-smart-build.sh
+          # A builder user nevében futtatjuk a scriptet
           su builder -c ./ci-smart-build.sh
