@@ -16,6 +16,7 @@ echo "[DEBUG] Repo gyökér: $REPO_ROOT"
 echo "[DEBUG] Push URL: $SSH_REPO_URL"
 
 # --- CSOMAGOK LISTÁJA ---
+# Először a saját csomagok
 LOCAL_PACKAGES=(
     "awesome-rofi"
     "nordic-backgrounds"
@@ -23,10 +24,11 @@ LOCAL_PACKAGES=(
     "i3lock-fancy-git"
 )
 
+# AUR csomagok (Sorrend fontos a függőségek miatt!)
 AUR_PACKAGES=(
     # "ttf-font-awesome-5"  <-- Ez a kettő maradjon kikommentezve
     # "grayjay-bin"
-    "i3lock-color"          # <-- ÚJ! Ez kellett a betterlockscreen-nek
+    "i3lock-color"          # Fontos: Ez kell a betterlockscreen-nek
     "raw-thumbnailer"
     "gsconnect"
     "lain-git"
@@ -34,7 +36,7 @@ AUR_PACKAGES=(
     "awesome-freedesktop-git"
     "tilix-git"
     "tamzen-font"
-    "betterlockscreen"
+    "betterlockscreen"      # Ez használja az i3lock-color-t
     "nordic-theme"
     "nordic-darker-theme"
     "geany-nord-theme"
@@ -96,15 +98,11 @@ fi
 log_info "Meglévő adatbázis letöltése..."
 scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# Segédfüggvény
-is_on_server() {
+# Segédfüggvény: Megkeresi a fájlnevet a listában
+get_remote_filename() {
     local pkgname="$1"
     local version="$2"
-    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt"; then
-        return 0
-    else
-        return 1
-    fi
+    grep "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt" | head -n 1 || true
 }
 
 build_package() {
@@ -117,7 +115,6 @@ build_package() {
         mkdir -p build_aur
         cd build_aur
         if [ -d "$pkg" ]; then rm -rf "$pkg"; fi
-        
         if ! git clone "https://aur.archlinux.org/$pkg.git" > /dev/null 2>&1; then
              log_err "Nem sikerült klónozni: $pkg"
              return
@@ -131,7 +128,7 @@ build_package() {
         cd "$pkg"
     fi
 
-    # --- 1. fázis: GYORS ELLENŐRZÉS ---
+    # 1. GYORS ELLENŐRZÉS
     if ! makepkg -od --noconfirm > /dev/null 2>&1; then
          log_err "Forrás letöltési/verzió hiba: $pkg"
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
@@ -149,14 +146,25 @@ build_package() {
     fi
 
     local current_version="${full_ver}-${rel_ver}"
-
-    if is_on_server "$pkg" "$current_version"; then
+    
+    # --- SKIP LOGIKA JAVÍTÁSA: Ha skip, akkor is telepítjük! ---
+    local remote_file=$(get_remote_filename "$pkg" "$current_version")
+    
+    if [ -n "$remote_file" ]; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
+        
+        # ITT A JAVÍTÁS: Letöltjük és telepítjük, hogy meglegyen a függőség!
+        log_info "Meglévő csomag letöltése és telepítése (függőségek miatt)..."
+        if scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/$remote_file .; then
+            sudo pacman -U --noconfirm $remote_file > /dev/null 2>&1 || log_err "Nem sikerült telepíteni: $remote_file"
+            rm $remote_file
+        fi
+        
         if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
         return
     fi
 
-    # --- 2. fázis: ÉPÍTÉS ---
+    # --- 2. ÉPÍTÉS ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
     if [ "$is_aur" == "true" ]; then
@@ -164,15 +172,15 @@ build_package() {
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
     fi
 
-    if makepkg -se --noconfirm --clean --nocheck; then
+    # ITT A MÁSIK JAVÍTÁS: -i (install) kapcsoló hozzáadása
+    # Így a frissen épült csomag bekerül a rendszerbe, és a következők megtalálják!
+    if makepkg -sei --noconfirm --clean --nocheck; then
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
-        log_succ "$pkg építése sikeres."
+        log_succ "$pkg építése (és telepítése) sikeres."
 
-        # --- GIT PUSH (CLONE MÓDSZER) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
-            
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
@@ -183,7 +191,6 @@ build_package() {
             if git clone "$SSH_REPO_URL" "$TEMP_GIT_DIR"; then
                 cp "$REPO_ROOT/$pkg/PKGBUILD" "$TEMP_GIT_DIR/$pkg/"
                 cp "$REPO_ROOT/$pkg/.SRCINFO" "$TEMP_GIT_DIR/$pkg/"
-                
                 cd "$TEMP_GIT_DIR"
                 if git diff-index --quiet HEAD --; then
                     log_info "Nincs mit commitolni."
@@ -191,7 +198,7 @@ build_package() {
                     git add "$pkg/PKGBUILD" "$pkg/.SRCINFO"
                     git commit -m "Auto-update: $pkg updated to $current_version [skip ci]"
                     if git push; then
-                        log_succ "Git repo frissítve (SSH Push)!"
+                        log_succ "Git repo frissítve!"
                     else
                         log_err "Git Push sikertelen!"
                     fi
@@ -212,14 +219,14 @@ build_package() {
 
 # --- FŐ CIKLUSOK (FELCSERÉLT SORREND!) ---
 
-# 1. ELŐSZÖR AZ AUR CSOMAGOKAT ÉPÍTJÜK (Függőségek miatt)
+# 1. ELŐSZÖR AZ AUR CSOMAGOK (Hogy meglegyenek az alapok)
 log_info "--- AUR CSOMAGOK ---"
 rm -rf build_aur
 for pkg in "${AUR_PACKAGES[@]}"; do
     build_package "$pkg" "true"
 done
 
-# 2. UTÁNA A SAJÁT CSOMAGOKAT (Mert ezek használhatják a fentieket)
+# 2. UTÁNA A SAJÁT CSOMAGOK (Amik épülhetnek a fentiekre)
 log_info "--- SAJÁT CSOMAGOK ---"
 for pkg in "${LOCAL_PACKAGES[@]}"; do
     build_package "$pkg" "false"
