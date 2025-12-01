@@ -26,11 +26,11 @@ LOCAL_PACKAGES=(
 AUR_PACKAGES=(
     "ttf-font-awesome-5"
     "grayjay-bin"
+    "awesome-git"
     "i3lock-color"
     "raw-thumbnailer"
     "gsconnect"
     "lain-git"
-    "awesome-git"
     "awesome-freedesktop-git"
     "tilix-git"
     "tamzen-font"
