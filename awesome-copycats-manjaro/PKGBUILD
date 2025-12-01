@@ -6,7 +6,7 @@ pkgdesc="A forked and enhanced version of the original Awesome WM Copycats repos
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
-depends=('awesome-git' 'lain-git' 'awesome-freedesktop-git')
+depends=()
 makedepends=('git')
 source=("git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
 sha256sums=('SKIP')
