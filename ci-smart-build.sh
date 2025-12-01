@@ -24,8 +24,8 @@ LOCAL_PACKAGES=(
 )
 
 AUR_PACKAGES=(
-    # "ttf-font-awesome-5"  <-- Hiba miatt kivéve
-    # "grayjay-bin"         <-- 404 miatt kivéve
+    "ttf-font-awesome-5"
+    "grayjay-bin"
     "i3lock-color"
     "raw-thumbnailer"
     "gsconnect"
