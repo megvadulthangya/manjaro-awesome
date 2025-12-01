@@ -24,8 +24,8 @@ LOCAL_PACKAGES=(
 )
 
 AUR_PACKAGES=(
-    # "ttf-font-awesome-5"
-    # "grayjay-bin"
+    # "ttf-font-awesome-5"  <-- Hiba miatt kivéve
+    # "grayjay-bin"         <-- 404 miatt kivéve
     "i3lock-color"
     "raw-thumbnailer"
     "gsconnect"
@@ -51,7 +51,7 @@ AUR_PACKAGES=(
     "a4tech-bloody-driver-git"
     "nordic-bluish-accent-theme"
     "nordic-bluish-accent-standard-buttons-theme"
-    "nordic-polar-standard-buttons-theme"
+    # "nordic-polar-standard-buttons-theme" <-- Üres repo miatt kivéve
     "nordic-standard-buttons-theme"
     "nordic-darker-standard-buttons-theme"
 )
@@ -59,12 +59,10 @@ AUR_PACKAGES=(
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="built_packages"
-CACHE_DIR="repo_cache"
 
 SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
-mkdir -p "$REPO_ROOT/$CACHE_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
@@ -85,34 +83,28 @@ if ! command -v yay &> /dev/null; then
     cd - > /dev/null
 fi
 
-# 3. SZERVER KAPCSOLAT TESZT
-log_info "Kapcsolódás a szerverhez..."
-if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo 'OK'" > /dev/null; then
-    log_succ "Sikeres kapcsolódás!"
+# 3. SZERVER LISTA LEKÉRÉSE (CSAK LISTA, NEM FÁJLOK!)
+log_info "Szerver tartalmának lekérdezése (gyors lista)..."
+if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > "$REPO_ROOT/remote_files.txt"; then
+    log_succ "Lista letöltve."
 else
-    log_err "Nem sikerült csatlakozni a szerverhez!"
-    exit 1
+    log_err "Nem sikerült lekérni a listát! (De folytatjuk, hátha üres a szerver)"
+    touch "$REPO_ROOT/remote_files.txt"
 fi
 
-# 4. SZINKRONIZÁLÁS (CACHE) - EZ A LÉNYEG!
-# Egyetlen kapcsolattal letöltjük az egész repót, hogy ne kelljen minden csomagnál csatlakozni.
-log_info "Teljes repo letöltése cache-be (hogy ne terheljük a kapcsolatot)..."
-# Scp-t használunk -r kapcsolóval a mappára
-if scp -r $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/* "$REPO_ROOT/$CACHE_DIR/" 2>/dev/null; then
-    log_succ "Cache szinkronizálva."
-else
-    log_info "Cache letöltés nem sikerült (vagy üres a szerver). Sebaj, folytatjuk."
-fi
+# 4. DB LETÖLTÉS (Csak a kicsi adatbázis fájl kell a frissítéshez)
+log_info "Adatbázis letöltése..."
+scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# Ha van DB a cache-ben, átmásoljuk a kimeneti mappába is, hogy frissíteni tudjuk
-cp "$REPO_ROOT/$CACHE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
-
-# Segédfüggvény: Most már a HELYI cache-ben keres!
-is_in_cache() {
+# Segédfüggvény: A letöltött szöveges listában keres
+is_on_server() {
     local pkgname="$1"
     local version="$2"
-    # Keresünk a cache mappában olyan fájlt, ami illeszkedik a névre
-    find "$REPO_ROOT/$CACHE_DIR" -name "${pkgname}-${version}-*.pkg.tar.zst" -print -quit | grep -q .
+    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt"; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 build_package() {
@@ -157,19 +149,10 @@ build_package() {
 
     local current_version="${full_ver}-${rel_ver}"
 
-    # --- SKIP LOGIKA (CACHE ALAPJÁN) ---
-    if is_in_cache "$pkg" "$current_version"; then
+    # --- SKIP LOGIKA (KÖNNYŰSÚLYÚ) ---
+    # Ha a listában benne van a név, akkor kész. Nem töltünk le semmit!
+    if is_on_server "$pkg" "$current_version"; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
-        
-        # Megkeressük a fájlt a cache-ben
-        local cached_file=$(find "$REPO_ROOT/$CACHE_DIR" -name "${pkg}-${current_version}-*.pkg.tar.zst" | head -n 1)
-        
-        # Telepítjük a cache-ből (NEM KELL SSH!)
-        log_info "Cache-elt csomag telepítése (függőségek miatt)..."
-        if [ -f "$cached_file" ]; then
-            sudo pacman -U --noconfirm "$cached_file" > /dev/null 2>&1 || log_err "Nem sikerült telepíteni: $cached_file"
-        fi
-        
         if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
         return
     fi
@@ -177,6 +160,7 @@ build_package() {
     # --- 2. ÉPÍTÉS ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
+    # Függőségek előtelepítése yay-vel (ha kell)
     if [ "$is_aur" == "true" ]; then
         log_info "Függőségek ellenőrzése (AUR)..."
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
@@ -187,8 +171,10 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
+        # --- GIT PUSH (CLONE MÓDSZER) ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
+            
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
@@ -225,7 +211,7 @@ build_package() {
     if [ "$is_aur" == "true" ]; then rm -rf "build_aur/$pkg"; fi
 }
 
-# --- FŐ CIKLUSOK ---
+# --- FŐ CIKLUSOK (AUR ELŐBB!) ---
 
 log_info "--- AUR CSOMAGOK ---"
 rm -rf build_aur
