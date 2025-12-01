@@ -16,7 +16,6 @@ echo "[DEBUG] Repo gyökér: $REPO_ROOT"
 echo "[DEBUG] Push URL: $SSH_REPO_URL"
 
 # --- CSOMAGOK LISTÁJA ---
-# Először a saját csomagok
 LOCAL_PACKAGES=(
     "awesome-rofi"
     "nordic-backgrounds"
@@ -24,11 +23,10 @@ LOCAL_PACKAGES=(
     "i3lock-fancy-git"
 )
 
-# AUR csomagok (Sorrend fontos a függőségek miatt!)
 AUR_PACKAGES=(
-    # "ttf-font-awesome-5"  <-- Ez a kettő maradjon kikommentezve
+    # "ttf-font-awesome-5"
     # "grayjay-bin"
-    "i3lock-color"          # Fontos: Ez kell a betterlockscreen-nek
+    "i3lock-color"
     "raw-thumbnailer"
     "gsconnect"
     "lain-git"
@@ -36,7 +34,7 @@ AUR_PACKAGES=(
     "awesome-freedesktop-git"
     "tilix-git"
     "tamzen-font"
-    "betterlockscreen"      # Ez használja az i3lock-color-t
+    "betterlockscreen"
     "nordic-theme"
     "nordic-darker-theme"
     "geany-nord-theme"
@@ -61,10 +59,12 @@ AUR_PACKAGES=(
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="built_packages"
+CACHE_DIR="repo_cache"
 
 SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
+mkdir -p "$REPO_ROOT/$CACHE_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
@@ -85,24 +85,34 @@ if ! command -v yay &> /dev/null; then
     cd - > /dev/null
 fi
 
-# 3. SZERVER KAPCSOLAT
+# 3. SZERVER KAPCSOLAT TESZT
 log_info "Kapcsolódás a szerverhez..."
-if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR" > "$REPO_ROOT/remote_files.txt"; then
+if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo 'OK'" > /dev/null; then
     log_succ "Sikeres kapcsolódás!"
 else
-    log_err "Nem sikerült lekérni a listát!"
+    log_err "Nem sikerült csatlakozni a szerverhez!"
     exit 1
 fi
 
-# 4. DB LETÖLTÉS
-log_info "Meglévő adatbázis letöltése..."
-scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+# 4. SZINKRONIZÁLÁS (CACHE) - EZ A LÉNYEG!
+# Egyetlen kapcsolattal letöltjük az egész repót, hogy ne kelljen minden csomagnál csatlakozni.
+log_info "Teljes repo letöltése cache-be (hogy ne terheljük a kapcsolatot)..."
+# Scp-t használunk -r kapcsolóval a mappára
+if scp -r $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/* "$REPO_ROOT/$CACHE_DIR/" 2>/dev/null; then
+    log_succ "Cache szinkronizálva."
+else
+    log_info "Cache letöltés nem sikerült (vagy üres a szerver). Sebaj, folytatjuk."
+fi
 
-# Segédfüggvény: Megkeresi a fájlnevet a listában
-get_remote_filename() {
+# Ha van DB a cache-ben, átmásoljuk a kimeneti mappába is, hogy frissíteni tudjuk
+cp "$REPO_ROOT/$CACHE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+
+# Segédfüggvény: Most már a HELYI cache-ben keres!
+is_in_cache() {
     local pkgname="$1"
     local version="$2"
-    grep "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt" | head -n 1 || true
+    # Keresünk a cache mappában olyan fájlt, ami illeszkedik a névre
+    find "$REPO_ROOT/$CACHE_DIR" -name "${pkgname}-${version}-*.pkg.tar.zst" -print -quit | grep -q .
 }
 
 build_package() {
@@ -146,18 +156,18 @@ build_package() {
     fi
 
     local current_version="${full_ver}-${rel_ver}"
-    
-    # --- SKIP LOGIKA JAVÍTÁSA: Ha skip, akkor is telepítjük! ---
-    local remote_file=$(get_remote_filename "$pkg" "$current_version")
-    
-    if [ -n "$remote_file" ]; then
+
+    # --- SKIP LOGIKA (CACHE ALAPJÁN) ---
+    if is_in_cache "$pkg" "$current_version"; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
         
-        # ITT A JAVÍTÁS: Letöltjük és telepítjük, hogy meglegyen a függőség!
-        log_info "Meglévő csomag letöltése és telepítése (függőségek miatt)..."
-        if scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/$remote_file .; then
-            sudo pacman -U --noconfirm $remote_file > /dev/null 2>&1 || log_err "Nem sikerült telepíteni: $remote_file"
-            rm $remote_file
+        # Megkeressük a fájlt a cache-ben
+        local cached_file=$(find "$REPO_ROOT/$CACHE_DIR" -name "${pkg}-${current_version}-*.pkg.tar.zst" | head -n 1)
+        
+        # Telepítjük a cache-ből (NEM KELL SSH!)
+        log_info "Cache-elt csomag telepítése (függőségek miatt)..."
+        if [ -f "$cached_file" ]; then
+            sudo pacman -U --noconfirm "$cached_file" > /dev/null 2>&1 || log_err "Nem sikerült telepíteni: $cached_file"
         fi
         
         if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
@@ -172,12 +182,10 @@ build_package() {
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
     fi
 
-    # ITT A MÁSIK JAVÍTÁS: -i (install) kapcsoló hozzáadása
-    # Így a frissen épült csomag bekerül a rendszerbe, és a következők megtalálják!
     if makepkg -sei --noconfirm --clean --nocheck; then
         mv *.pkg.tar.zst "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || mv *.pkg.tar.xz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
-        log_succ "$pkg építése (és telepítése) sikeres."
+        log_succ "$pkg építése sikeres."
 
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
@@ -217,16 +225,14 @@ build_package() {
     if [ "$is_aur" == "true" ]; then rm -rf "build_aur/$pkg"; fi
 }
 
-# --- FŐ CIKLUSOK (FELCSERÉLT SORREND!) ---
+# --- FŐ CIKLUSOK ---
 
-# 1. ELŐSZÖR AZ AUR CSOMAGOK (Hogy meglegyenek az alapok)
 log_info "--- AUR CSOMAGOK ---"
 rm -rf build_aur
 for pkg in "${AUR_PACKAGES[@]}"; do
     build_package "$pkg" "true"
 done
 
-# 2. UTÁNA A SAJÁT CSOMAGOK (Amik épülhetnek a fentiekre)
 log_info "--- SAJÁT CSOMAGOK ---"
 for pkg in "${LOCAL_PACKAGES[@]}"; do
     build_package "$pkg" "false"
