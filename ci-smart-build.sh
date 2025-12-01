@@ -1,12 +1,15 @@
 #!/bin/bash
 set -e
 
+# --- 0. BIZTONSÁGI ZÁRAK FELOLDÁSA ---
+export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+git config --global --add safe.directory '*'
+
 # --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
 
-# --- FIX SSH URL (A TE CÍMED) ---
-# Nem kérdezzük le a Gittől, mert az hibát okozhat a konténerben. Beírjuk fixen.
+# --- FIX SSH URL ---
 SSH_REPO_URL="git@github.com:megvadulthangya/manjaro-awesome.git"
 
 echo "[DEBUG] Repo gyökér: $REPO_ROOT"
@@ -21,9 +24,10 @@ LOCAL_PACKAGES=(
 )
 
 AUR_PACKAGES=(
-    "ttf-font-awesome-5"
+    # "ttf-font-awesome-5"  <-- Ez a kettő maradjon kikommentezve
+    # "grayjay-bin"
+    "i3lock-color"          # <-- ÚJ! Ez kellett a betterlockscreen-nek
     "raw-thumbnailer"
-    "grayjay-bin"
     "gsconnect"
     "lain-git"
     "awesome-git"
@@ -60,7 +64,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
 
-# --- GIT USER KONFIGURÁCIÓ ---
+# --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 
@@ -167,13 +171,12 @@ build_package() {
 
         # --- GIT PUSH (CLONE MÓDSZER) ---
         if [ "$is_aur" == "false" ]; then
-            log_info "PKGBUILD frissítése és Git Push (Clone módszer)..."
+            log_info "PKGBUILD frissítése és Git Push..."
             
             sed -i "s/^pkgver=.*/pkgver=${full_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${rel_ver}/" PKGBUILD
             makepkg --printsrcinfo > .SRCINFO
             
-            # Tiszta klón a /tmp-be (Ez biztosan működik!)
             TEMP_GIT_DIR="/tmp/git_publish_$pkg"
             rm -rf "$TEMP_GIT_DIR"
             
@@ -207,17 +210,19 @@ build_package() {
     if [ "$is_aur" == "true" ]; then rm -rf "build_aur/$pkg"; fi
 }
 
-# --- FŐ CIKLUSOK ---
+# --- FŐ CIKLUSOK (FELCSERÉLT SORREND!) ---
 
-log_info "--- SAJÁT CSOMAGOK ---"
-for pkg in "${LOCAL_PACKAGES[@]}"; do
-    build_package "$pkg" "false"
-done
-
+# 1. ELŐSZÖR AZ AUR CSOMAGOKAT ÉPÍTJÜK (Függőségek miatt)
 log_info "--- AUR CSOMAGOK ---"
 rm -rf build_aur
 for pkg in "${AUR_PACKAGES[@]}"; do
     build_package "$pkg" "true"
+done
+
+# 2. UTÁNA A SAJÁT CSOMAGOKAT (Mert ezek használhatják a fentieket)
+log_info "--- SAJÁT CSOMAGOK ---"
+for pkg in "${LOCAL_PACKAGES[@]}"; do
+    build_package "$pkg" "false"
 done
 
 # --- DB FRISSÍTÉS ÉS FELTÖLTÉS ---
