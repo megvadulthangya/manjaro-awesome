@@ -6,7 +6,12 @@ pkgdesc="A forked and enhanced version of the original Awesome WM Copycats repos
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
+
+# --- MÓDOSÍTÁS: Függőségek beállítása ---
+# Ezek kellenek, hogy a Quake terminál és a config funkciói (háttér, copy-paste) működjenek az ISO-n.
+# A lain-git és awesome-freedesktop-git maradt, feltételezve, hogy ezeket is építed a repódban.
 depends=()
+
 makedepends=('git')
 source=("git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
 sha256sums=('SKIP')
@@ -26,29 +31,29 @@ prepare() {
 package() {
   # Belépünk a letöltött forrás mappájába
   cd "$srcdir/awesome-copycats-manjaro"
-  
+   
   # Célmappa létrehozása
   install -d -m755 "$pkgdir/etc/skel/.config/awesome"
-  
+   
   # MÁSOLÁS: A 'cp -a' mindent másol (rejtett fájlokat is), rekurzívan, jogokkal együtt.
-  # A pont (.) jelenti a jelenlegi mappa tartalmát.
+  # Mivel a scratch.lua ott van a git repódban, itt automatikusan átmásolódik!
   cp -a . "$pkgdir/etc/skel/.config/awesome/"
-  
+   
   # TISZTÍTÁS: Most, hogy már a csomagban ($pkgdir) van minden,
-  # INNEN töröljük ki a .git mappát. Ez nem bántja a forrást, így a pkgver() működni fog.
+  # INNEN töröljük ki a .git mappát.
   rm -rf "$pkgdir/etc/skel/.config/awesome/.git"
   rm -rf "$pkgdir/etc/skel/.config/awesome/.gitignore"
   rm -rf "$pkgdir/etc/skel/.config/awesome/.github" 2>/dev/null || true
-  
+   
   # Template átnevezése (ha létezik)
   if [ -f "$pkgdir/etc/skel/.config/awesome/rc.lua.template" ]; then
     mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" "$pkgdir/etc/skel/.config/awesome/rc.lua"
   fi
-  
+   
   # Jogosultságok beállítása (biztos, ami biztos)
   find "$pkgdir/etc/skel/.config/awesome" -type f -exec chmod 644 {} \;
   find "$pkgdir/etc/skel/.config/awesome" -type d -exec chmod 755 {} \;
-  
+   
   # Install script létrehozása
   install -d -m755 "$pkgdir/usr/share/$pkgname"
   cat > "$pkgdir/usr/share/$pkgname/install-to-user.sh" << 'EOF'
@@ -61,9 +66,9 @@ echo "Installing Awesome WM Nord configuration to $HOME/.config/awesome"
 cp -r /etc/skel/.config/awesome "$HOME/.config/"
 echo "Installation complete! Restart Awesome WM with Mod+Ctrl+R"
 EOF
-  
+   
   chmod +x "$pkgdir/usr/share/$pkgname/install-to-user.sh"
-  
+   
   # README
   install -d -m755 "$pkgdir/usr/share/doc/$pkgname"
   cat > "$pkgdir/usr/share/doc/$pkgname/README" << EOF
