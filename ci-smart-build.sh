@@ -24,6 +24,7 @@ LOCAL_PACKAGES=(
 )
 
 AUR_PACKAGES=(
+    "qt5-styleplugins"
     "urxvt-resize-font-git"
     "ttf-font-awesome-5"
     "grayjay-bin"
