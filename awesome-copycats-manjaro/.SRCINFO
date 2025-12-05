@@ -1,6 +1,6 @@
 pkgbase = awesome-copycats-manjaro
 	pkgdesc = A forked and enhanced version of the original Awesome WM Copycats repository.
-	pkgver = r1059.2ce2863
+	pkgver = r1061.bad0075
 	pkgrel = 1
 	url = https://github.com/megvadulthangya/awesome-copycats-manjaro
 	arch = any
