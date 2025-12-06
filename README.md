@@ -1,3 +1,4 @@
+![Maintenance Status](https://img.shields.io/badge/Maintenance-Actively%20maintained%20via%20automated%20CI%2FCD%20pipeline-brightgreen)
 ---
 
 # Manjaro Awesome Nord Repository
