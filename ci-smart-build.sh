@@ -234,13 +234,26 @@ if [ -z "$(ls -A $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null)" ]; then
     exit 0
 fi
 
-log_info "Adatbázis generálása..."
+log_info "Adatbázis frissítése..."
 cd "$OUTPUT_DIR"
-rm -f ${REPO_DB_NAME}.db* ${REPO_DB_NAME}.files*
-repo-add ${REPO_DB_NAME}.db.tar.gz *.pkg.tar.zst
+
+# 1. HIBAJAVÍTÁS: Nem töröljük a régi DB-t, hanem frissítjük!
+# A script elején már letöltöttük a DB-t (4. lépés), így az itt van.
+# Ha véletlenül nincs itt, akkor a repo-add létrehoz egy újat (első futás).
+
+# Fontos: A repo-add-nak relatív vagy abszolút útvonal kell a meglévő adatbázishoz
+if [ -f "${REPO_DB_NAME}.db.tar.gz" ]; then
+    log_info "Meglévő adatbázis bővítése..."
+    # Csak az új fájlokat adjuk hozzá, a régiek benne maradnak az adatbázisban
+    repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.zst
+else
+    log_info "Új adatbázis létrehozása..."
+    repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.zst
+fi
 
 log_info "Feltöltés a szerverre..."
 cd ..
+# Feltöltjük az új csomagokat ÉS a frissített adatbázist
 scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/
 
 log_info "Takarítás a szerveren..."
