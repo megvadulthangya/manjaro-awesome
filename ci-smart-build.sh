@@ -21,18 +21,20 @@ LOCAL_PACKAGES=(
     "nordic-backgrounds"
     "awesome-copycats-manjaro"
     "i3lock-fancy-git"
+    "ttf-font-awesome-5"
 )
 
 AUR_PACKAGES=(
+    "gtk2"
+    "libinput-gestures"
     "qt5-styleplugins"
     "urxvt-resize-font-git"
-    "ttf-font-awesome-5"
-    "grayjay-bin"
-    "awesome-git"
     "i3lock-color"
     "raw-thumbnailer"
+    "grayjay-bin"
     "gsconnect"
     "lain-git"
+    "awesome-git"
     "awesome-freedesktop-git"
     "tilix-git"
     "tamzen-font"
@@ -53,7 +55,7 @@ AUR_PACKAGES=(
     "a4tech-bloody-driver-git"
     "nordic-bluish-accent-theme"
     "nordic-bluish-accent-standard-buttons-theme"
-    # "nordic-polar-standard-buttons-theme" <-- Üres repo miatt kivéve
+    "nordic-polar-standard-buttons-theme"
     "nordic-standard-buttons-theme"
     "nordic-darker-standard-buttons-theme"
 )

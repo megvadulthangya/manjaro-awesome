@@ -1,0 +1,5 @@
+awesome-rofi:95183314351d1a39c96e360f38c47746ae72cecf
+nordic-backgrounds:b69f713c4eb357060bb9a5b7d5a0eb332391988d
+awesome-copycats-manjaro:47281b550b832105cae02767f8273b203282c2ec
+i3lock-fancy-git:56903fb129767b3768ee0af937aa3be4c6971d5e
+ttf-font-awesome-5:dd3c59c54bb1b006059f9ca40e142626f1d0887a

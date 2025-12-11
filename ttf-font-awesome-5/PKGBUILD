@@ -1,0 +1,28 @@
+# Maintainer: megvadulthangya <megvadulthangya@gmail.com> 
+pkgname=ttf-font-awesome-5
+pkgver=5.15.4
+pkgrel=2  # Megnöveltem 2-re, hogy frissítésnek érzékelje!
+pkgdesc="Iconic font designed for Bootstrap (version 5)"
+arch=('any')
+url="https://fontawesome.com"
+license=('OFL' 'MIT')
+depends=('fontconfig')
+provides=('ttf-font-awesome-5')
+conflicts=('ttf-font-awesome-5')
+# A forrás URL jó, de a GitHub néha variál a tarballokkal
+source=("https://github.com/FortAwesome/Font-Awesome/archive/${pkgver}.tar.gz")
+# SKIP-et használunk, hogy ne hasaljon el, ha változik a checksum
+sha256sums=('SKIP')
+
+package() {
+  cd "Font-Awesome-${pkgver}"
+  
+  # Létrehozzuk a célmappát (saját mappa a tisztaság érdekében)
+  install -d "${pkgdir}/usr/share/fonts/OTF"
+  
+  # Bemásoljuk az OTF fájlokat
+  install -m644 otfs/*.otf "${pkgdir}/usr/share/fonts/OTF/"
+  
+  # Opcionális: Licensz fájl telepítése (jó gyakorlat)
+  install -Dm644 LICENSE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
