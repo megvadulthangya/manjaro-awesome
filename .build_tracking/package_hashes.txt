@@ -1,5 +1,5 @@
-i3lock-fancy-git:56903fb129767b3768ee0af937aa3be4c6971d5e
 ttf-font-awesome-5:dd3c59c54bb1b006059f9ca40e142626f1d0887a
 awesome-rofi:8f3c491d06e3244aed67365f7ccdcf67dedfc532
 nordic-backgrounds:b635c89f1c6000b8c03d79fad64b04a8069a59d5
 awesome-copycats-manjaro:082e8a7c4d758f000465fef58176ea87cfcfc59c
+i3lock-fancy-git:e3c3f3fc077601460b61b2e2526d8a51a17a9150
