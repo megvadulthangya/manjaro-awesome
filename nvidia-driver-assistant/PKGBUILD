@@ -1,73 +1,196 @@
-# Maintainer: Philip Müller <philm[at]manjaro[dot]org>
-# Modified by: Gyöngyösi Gábor
-# Modified by: megvadulthangya <megvadulthangya@gmail.com>
-# Enforce proprietary driver for Maxwell/Pascal/Volta GPUs
-# per NVIDIA Open Kernel Module support policy
-
+# Maintainer: megvadulthangya <megvadulthangya@gmail.com>
+# Minimal PKGBUILD for GitHub Actions with debug
 pkgname=nvidia-driver-assistant
 pkgver=0.23.48.02
 _realver=0.23.48.01
 pkgrel=1
 _pkgrel=1
-pkgdesc="Detect and install the best NVIDIA driver packages for the system (Patched for Maxwell/Pascal)"
+pkgdesc="NVIDIA driver assistant with Maxwell/Pascal/Volta patch"
 arch=('any')
-url="http://www.nvidia.com/"
+url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
-makedepends=('git')
-# A forrás most a te git repository-d lesz
-source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git"
-        "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb::https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb")
-sha256sums=('SKIP'
-            '63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9')
+makedepends=('git' 'wget' 'binutils')
+# FONTOS: Itt megadjuk a v3 branchet!
+source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=v3")
+sha256sums=('SKIP')
+
+# Debug funkció
+_debug() {
+    echo "===== DEBUG [$1] ====="
+    echo "Time: $(date)"
+    echo "PWD: $(pwd)"
+    echo "srcdir: ${srcdir}"
+    echo "pkgdir: ${pkgdir}"
+}
 
 prepare() {
-  # Deb fájl ellenőrzése
-  echo "63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9  nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" | sha256sum -c -
-  
-  # Mappa létrehozása
-  mkdir -p "${pkgname}-${pkgver}"
-  
-  # Deb fájl kicsomagolása
-  bsdtar -xvf "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" -C "${pkgname}-${pkgver}"
-  
-  cd "${pkgname}-${pkgver}"
-  
-  # Patch alkalmazása (a patch fájl a git repo-ban van)
-  # Figyeld: a patch most a git repo gyökerében van, így a relatív útvonal más
-  patch -Np1 -i "../../manjaro.patch"
+    set -x  # Minden parancsot kiír
+    
+    _debug "START PREPARE"
+    
+    echo "=== Repo tartalma ==="
+    ls -la "${srcdir}/"
+    echo ""
+    echo "=== nvidia-driver-assistant mappa tartalma ==="
+    ls -la "${srcdir}/nvidia-driver-assistant/" || echo "Nem létezik a mappa!"
+    
+    # DEB fájl letöltése
+    echo "=== DEB letöltés ==="
+    deb_url="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+    echo "URL: ${deb_url}"
+    
+    if wget --timeout=30 --tries=3 "${deb_url}"; then
+        echo "✓ DEB letöltve"
+        ls -lh "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+    else
+        echo "✗ DEB letöltés sikertelen!"
+        echo "Alternatív próbálkozás curl-lel..."
+        curl -L -O "${deb_url}" || echo "Curl is sikertelen"
+    fi
+    
+    # Mappa létrehozása
+    mkdir -p "${pkgname}-${pkgver}"
+    
+    # DEB kicsomagolása
+    echo "=== DEB kicsomagolás ==="
+    if bsdtar -xvf "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" -C "${pkgname}-${pkgver}"; then
+        echo "✓ DEB kicsomagolva"
+    else
+        echo "✗ DEB kicsomagolás sikertelen!"
+        return 1
+    fi
+    
+    cd "${pkgname}-${pkgver}"
+    
+    # Patch ellenőrzése
+    echo "=== Patch ellenőrzés ==="
+    patch_file="${srcdir}/nvidia-driver-assistant/manjaro.patch"
+    if [ -f "${patch_file}" ]; then
+        echo "✓ Patch fájl: ${patch_file}"
+        echo "Patch tartalma (első 10 sor):"
+        head -10 "${patch_file}"
+    else
+        echo "✗ Nincs patch fájl!"
+        echo "Keresés patch fájlra:"
+        find "${srcdir}/" -name "*.patch" -type f
+    fi
+    
+    # data.tar.xz kicsomagolása
+    if [ -f "data.tar.xz" ]; then
+        echo "=== data.tar.xz kicsomagolás ==="
+        tar -xf data.tar.xz
+        echo "✓ data.tar.xz kicsomagolva"
+    fi
+    
+    # Patch alkalmazása
+    echo "=== Patch alkalmazás ==="
+    if patch --dry-run -Np1 -i "${patch_file}" > /dev/null 2>&1; then
+        patch -Np1 -i "${patch_file}"
+        echo "✓ Patch alkalmazva"
+    else
+        echo "✗ Patch alkalmazás sikertelen (talán már alkalmazva?)"
+        patch -Np1 -i "${patch_file}" || true
+    fi
+    
+    _debug "END PREPARE"
+    set +x
 }
 
 package() {
-  cd "${pkgname}-${pkgver}"
-  
-  # Kicsomagoljuk a data.tar.xz-t
-  tar -xf data.tar.xz -C "${srcdir}/${pkgname}-${pkgver}/"
-  
-  install -Dm755 "usr/bin/${pkgname}" -t "${pkgdir}/usr/bin/"
-  
-  # Ellenőrizzük, hogy léteznek-e a JSON fájlok
-  if [ -d "usr/share/${pkgname}/supported-gpus" ]; then
-    install -Dm644 "usr/share/${pkgname}/supported-gpus"/*.json -t \
-      "${pkgdir}/usr/share/${pkgname}/supported-gpus/"
-  fi
-  
-  install -Dm644 "usr/share/doc/${pkgname}"/{CONTRIBUTING.md,README.md} -t \
-    "$pkgdir/usr/share/doc/${pkgname}/" 2>/dev/null || true
-  
-  install -Dm644 "usr/share/doc/${pkgname}/copyright" -t \
-    "$pkgdir/usr/share/licenses/${pkgname}/" 2>/dev/null || true
-  
-  if [ -f "usr/share/${pkgname}/driver_eula/LICENSE" ]; then
-    install -Dm644 "usr/share/${pkgname}/driver_eula/LICENSE" -t \
-      "${pkgdir}/usr/share/${pkgname}/driver_eula/"
-  fi
-  
-  # A show-driver szkript most a git repo-ban van
-  if [ -f "${srcdir}/nvidia-driver-assistant/show-driver" ]; then
-    install -m755 "${srcdir}/nvidia-driver-assistant/show-driver" \
-      "${pkgdir}/usr/bin/nvidia-recommended-driver"
-  else
-    echo "Warning: show-driver not found in repository!"
-  fi
+    set -x
+    
+    _debug "START PACKAGE"
+    
+    work_dir="${srcdir}/${pkgname}-${pkgver}"
+    echo "=== Package munkakönyvtár ==="
+    echo "Work dir: ${work_dir}"
+    ls -la "${work_dir}/" || echo "Work dir nem létezik!"
+    
+    cd "${work_dir}"
+    
+    # Fájlok kicsomagolása ha szükséges
+    if [ -f "data.tar.xz" ]; then
+        echo "=== data.tar.xz újrakicsomagolás ==="
+        tar -xf data.tar.xz -C "${work_dir}/"
+    fi
+    
+    # Fájlstruktúra
+    echo "=== Fájlstruktúra a munkakönyvtárban ==="
+    find "${work_dir}" -type f | head -30
+    
+    # show-driver ellenőrzése
+    echo "=== show-driver ellenőrzés ==="
+    show_driver="${srcdir}/nvidia-driver-assistant/show-driver"
+    if [ -f "${show_driver}" ]; then
+        echo "✓ show-driver található: ${show_driver}"
+        cat "${show_driver}" | head -5
+    else
+        echo "✗ show-driver nem található!"
+        echo "Keresés show-driver fájlra:"
+        find "${srcdir}/" -name "show-driver" -type f
+    fi
+    
+    # Bináris telepítése
+    echo "=== Bináris telepítés ==="
+    if [ -f "usr/bin/${pkgname}" ]; then
+        install -Dm755 "usr/bin/${pkgname}" -t "${pkgdir}/usr/bin/"
+        echo "✓ ${pkgname} telepítve"
+    else
+        echo "✗ ${pkgname} nem található!"
+        find "${work_dir}" -name "${pkgname}" -type f
+    fi
+    
+    # JSON fájlok
+    echo "=== JSON fájlok telepítése ==="
+    json_dir="usr/share/${pkgname}/supported-gpus"
+    if [ -d "${json_dir}" ]; then
+        install -Dm644 "${json_dir}"/*.json -t "${pkgdir}/usr/share/${pkgname}/supported-gpus/"
+        echo "✓ JSON fájlok telepítve"
+    else
+        echo "✗ JSON mappa nem található: ${json_dir}"
+    fi
+    
+    # Dokumentáció
+    echo "=== Dokumentáció telepítése ==="
+    doc_dir="usr/share/doc/${pkgname}"
+    if [ -d "${doc_dir}" ]; then
+        for doc in CONTRIBUTING.md README.md; do
+            if [ -f "${doc_dir}/${doc}" ]; then
+                install -Dm644 "${doc_dir}/${doc}" -t "${pkgdir}/usr/share/doc/${pkgname}/"
+                echo "✓ ${doc} telepítve"
+            fi
+        done
+    fi
+    
+    # Licenc
+    echo "=== Licenc telepítése ==="
+    if [ -f "usr/share/doc/${pkgname}/copyright" ]; then
+        install -Dm644 "usr/share/doc/${pkgname}/copyright" -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+        echo "✓ copyright telepítve"
+    fi
+    
+    # EULA
+    echo "=== EULA telepítése ==="
+    if [ -f "usr/share/${pkgname}/driver_eula/LICENSE" ]; then
+        install -Dm644 "usr/share/${pkgname}/driver_eula/LICENSE" -t "${pkgdir}/usr/share/${pkgname}/driver_eula/"
+        echo "✓ EULA telepítve"
+    fi
+    
+    # show-driver szkript
+    echo "=== show-driver szkript telepítése ==="
+    if [ -f "${show_driver}" ]; then
+        install -m755 "${show_driver}" "${pkgdir}/usr/bin/nvidia-recommended-driver"
+        echo "✓ show-driver telepítve nvidia-recommended-driver néven"
+    fi
+    
+    # Ellenőrzés: mi lett telepítve
+    echo "=== Telepített fájlok ==="
+    find "${pkgdir}" -type f | sort
+    
+    _debug "END PACKAGE"
+    set +x
 }
+
+# Hiba esetén debug info
+trap 'echo "===== HIBA a $LINENO. sorban ====="; echo "Parancs: $BASH_COMMAND"; echo "Könyvtár: $(pwd)"; ps auxf' ERR
