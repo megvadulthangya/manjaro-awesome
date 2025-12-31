@@ -1,67 +1,73 @@
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
-# Manjaro patched version (Maxwell/Pascal compatible logic)
+# Modified by: Gyöngyösi Gábor
+# Modified by: megvadulthangya <megvadulthangya@gmail.com>
+# Enforce proprietary driver for Maxwell/Pascal/Volta GPUs
+# per NVIDIA Open Kernel Module support policy
 
 pkgname=nvidia-driver-assistant
 pkgver=0.23.48.02
-pkgrel=1
-
 _realver=0.23.48.01
+pkgrel=1
 _pkgrel=1
-
-pkgdesc="Detect and install the best NVIDIA driver packages for the system (Manjaro patched)"
+pkgdesc="Detect and install the best NVIDIA driver packages for the system (Patched for Maxwell/Pascal)"
 arch=('any')
-url="https://www.nvidia.com/"
+url="http://www.nvidia.com/"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
-
-source=(
-  "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${pkgname}_${_realver}-${_pkgrel}_all.deb"
-  "manjaro.patch"
-  "show-driver"
-)
-
-sha256sums=(
-  '63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9'
-  'efd0b696193e006d8eeebcea6812248258f7211eedc8b143927a38abbad04c9c'
-  'ba2de9ef5a7295b3127bef360a5da89cacaec7c7362e351b33177045bcf9e3f7'
-)
+makedepends=('git')
+# A forrás most a te git repository-d lesz
+source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git"
+        "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb::https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb")
+sha256sums=('SKIP'
+            '63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9')
 
 prepare() {
+  # Deb fájl ellenőrzése
+  echo "63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9  nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" | sha256sum -c -
+  
+  # Mappa létrehozása
   mkdir -p "${pkgname}-${pkgver}"
+  
+  # Deb fájl kicsomagolása
+  bsdtar -xvf "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" -C "${pkgname}-${pkgver}"
+  
   cd "${pkgname}-${pkgver}"
-
-  # extract .deb
-  ar x "${srcdir}/${pkgname}_${_realver}-${_pkgrel}_all.deb"
-  bsdtar -xf data.tar.xz
-
-  # apply Manjaro patch
-  patch -Np1 -i "${srcdir}/manjaro.patch"
+  
+  # Patch alkalmazása (a patch fájl a git repo-ban van)
+  # Figyeld: a patch most a git repo gyökerében van, így a relatív útvonal más
+  patch -Np1 -i "../../manjaro.patch"
 }
 
 package() {
   cd "${pkgname}-${pkgver}"
-
-  install -Dm755 usr/bin/${pkgname} \
-    "${pkgdir}/usr/bin/${pkgname}"
-
-  install -Dm644 usr/share/${pkgname}/supported-gpus/*.json \
-    "${pkgdir}/usr/share/${pkgname}/supported-gpus/"
-
-  install -Dm644 usr/share/doc/${pkgname}/README.md \
-    "${pkgdir}/usr/share/doc/${pkgname}/README.md"
-
-  install -Dm644 usr/share/doc/${pkgname}/CONTRIBUTING.md \
-    "${pkgdir}/usr/share/doc/${pkgname}/CONTRIBUTING.md"
-
-  install -Dm644 usr/share/doc/${pkgname}/copyright \
-    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-
-  install -Dm644 usr/share/${pkgname}/driver_eula/LICENSE \
-    "${pkgdir}/usr/share/${pkgname}/driver_eula/LICENSE"
-
-  ln -sf /usr/share/${pkgname}/driver_eula/LICENSE \
-    "${pkgdir}/usr/share/licenses/${pkgname}/EULA"
-
-  install -Dm755 "${srcdir}/show-driver" \
-    "${pkgdir}/usr/bin/nvidia-recommended-driver"
+  
+  # Kicsomagoljuk a data.tar.xz-t
+  tar -xf data.tar.xz -C "${srcdir}/${pkgname}-${pkgver}/"
+  
+  install -Dm755 "usr/bin/${pkgname}" -t "${pkgdir}/usr/bin/"
+  
+  # Ellenőrizzük, hogy léteznek-e a JSON fájlok
+  if [ -d "usr/share/${pkgname}/supported-gpus" ]; then
+    install -Dm644 "usr/share/${pkgname}/supported-gpus"/*.json -t \
+      "${pkgdir}/usr/share/${pkgname}/supported-gpus/"
+  fi
+  
+  install -Dm644 "usr/share/doc/${pkgname}"/{CONTRIBUTING.md,README.md} -t \
+    "$pkgdir/usr/share/doc/${pkgname}/" 2>/dev/null || true
+  
+  install -Dm644 "usr/share/doc/${pkgname}/copyright" -t \
+    "$pkgdir/usr/share/licenses/${pkgname}/" 2>/dev/null || true
+  
+  if [ -f "usr/share/${pkgname}/driver_eula/LICENSE" ]; then
+    install -Dm644 "usr/share/${pkgname}/driver_eula/LICENSE" -t \
+      "${pkgdir}/usr/share/${pkgname}/driver_eula/"
+  fi
+  
+  # A show-driver szkript most a git repo-ban van
+  if [ -f "${srcdir}/nvidia-driver-assistant/show-driver" ]; then
+    install -m755 "${srcdir}/nvidia-driver-assistant/show-driver" \
+      "${pkgdir}/usr/bin/nvidia-recommended-driver"
+  else
+    echo "Warning: show-driver not found in repository!"
+  fi
 }
