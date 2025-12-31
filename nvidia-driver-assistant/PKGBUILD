@@ -1,5 +1,5 @@
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
-# Patched for Manjaro ISO build (local source, no download)
+# Manjaro local-source build (ISO & CI safe)
 
 pkgname=nvidia-driver-assistant
 pkgver=0.23.48.02
@@ -11,10 +11,8 @@ url="https://www.nvidia.com/"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
 
-# --- IMPORTANT ---
-# Manjaro ISO build tooling MUST NOT try to download sources
 source=(
-  "nvidia-driver-assistant_0.23.48.01-1_all.deb::local"
+  "nvidia-driver-assistant_0.23.48.01-1_all.deb"
   "manjaro.patch"
   "show-driver"
 )
@@ -33,10 +31,8 @@ prepare() {
   mkdir -p "${pkgname}-${pkgver}"
   cd "${pkgname}-${pkgver}"
 
-  # Extract local .deb directly (CI + ISO safe)
   bsdtar -xf "${srcdir}/nvidia-driver-assistant_0.23.48.01-1_all.deb"
 
-  # Apply Manjaro patch
   patch -Np1 -i "${srcdir}/manjaro.patch"
 }
 
