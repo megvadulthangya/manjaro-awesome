@@ -1,0 +1,5 @@
+#!/bin/bash
+
+driver=$(nvidia-driver-assistant --verbose 2>&1 | grep 'Recommended driver:')
+driver=${driver#*Recommended driver: }
+echo $driver
