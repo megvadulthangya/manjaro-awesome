@@ -31,11 +31,9 @@ prepare() {
   mkdir -p "${pkgname}-${pkgver}"
   cd "${pkgname}-${pkgver}"
 
-  # .deb fájl kibontása
-  ar x "${srcdir}/${pkgname}_${_realver}-${_pkgrel}_all.deb"
+  # .deb közvetlen kibontása (CI-biztos!)
+  bsdtar -xf "${srcdir}/${pkgname}_${_realver}-${_pkgrel}_all.deb"
 
-  # data.tar.xz tartalmának kibontása
-  bsdtar -xf data.tar.xz
 
   # Manjaro patch alkalmazása
   patch -Np1 -i "${srcdir}/manjaro.patch"
