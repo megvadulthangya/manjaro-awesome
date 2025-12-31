@@ -1,60 +1,70 @@
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
-# Modified by: Gyöngyösi Gábor
-# Enforce proprietary driver for Maxwell/Pascal/Volta GPUs
-# per NVIDIA Open Kernel Module support policy
+# Patched for Manjaro (kernel-aware + open module arch check)
 
 pkgname=nvidia-driver-assistant
-pkgver=0.23.48.01  # Kizárólag a letöltött fájl verziója
-pkgrel=2           # pkgrel növelése mivel patch-et alkalmaztunk
+pkgver=0.23.48.02
+pkgrel=1
+
+# Az NVIDIA által kiadott valódi verzió
+_realver=0.23.48.01
+_pkgrel=1
+
+pkgdesc="Detect and install the best NVIDIA driver packages for the system (Manjaro patched)"
 arch=('any')
-url="http://www.nvidia.com/"
+url="https://www.nvidia.com/"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
 
-# A forrásban használjuk a pkgver-t és a deb fájl relációs számát (1)
-source=("https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${pkgname}_${pkgver}-1_all.deb"
-        'show-driver'
-        'manjaro.patch')
+source=(
+  "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${pkgname}_${_realver}-${_pkgrel}_all.deb"
+  "show-driver"
+  "manjaro.patch"
+)
 
-sha256sums=('63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9'
-            'ba2de9ef5a7295b3127bef360a5da89cacaec7c7362e351b33177045bcf9e3f7'
-            'efd0b696193e006d8eeebcea6812248258f7211eedc8b143927a38abbad04c9c')
+sha256sums=(
+  '63b7eb75805530914f723213af8ec6070089d60782bece179dd6fc22caf914a9'
+  'ba2de9ef5a7295b3127bef360a5da89cacaec7c7362e351b33177045bcf9e3f7'
+  'efd0b696193e006d8eeebcea6812248258f7211eedc8b143927a38abbad04c9c'
+)
 
 prepare() {
-  # DEB fájl kicsomagolása
-  bsdtar -xvf data.tar.xz
-  
-  # Patch alkalmazása a kicsomagolt fájlokra
-  if [[ -f "${srcdir}/manjaro.patch" ]]; then
-    patch -Np1 -i "${srcdir}/manjaro.patch"
-  fi
+  mkdir -p "${pkgname}-${pkgver}"
+  cd "${pkgname}-${pkgver}"
+
+  # .deb fájl kibontása
+  ar x "${srcdir}/${pkgname}_${_realver}-${_pkgrel}_all.deb"
+
+  # data.tar.xz tartalmának kibontása
+  bsdtar -xf data.tar.xz
+
+  # Manjaro patch alkalmazása
+  patch -Np1 -i "${srcdir}/manjaro.patch"
 }
 
 package() {
-  # Bináris fájlok telepítése
-  install -Dm755 "usr/bin/${pkgname}" -t "${pkgdir}/usr/bin/"
-  
-  # JSON fájlok telepítése
-  install -Dm644 "usr/share/${pkgname}/supported-gpus"/*.json -t \
+  cd "${pkgname}-${pkgver}"
+
+  install -Dm755 usr/bin/${pkgname} \
+    "${pkgdir}/usr/bin/${pkgname}"
+
+  install -Dm644 usr/share/${pkgname}/supported-gpus/*.json \
     "${pkgdir}/usr/share/${pkgname}/supported-gpus/"
-  
-  # Dokumentáció telepítése
-  install -Dm644 "usr/share/doc/${pkgname}"/{CONTRIBUTING.md,README.md} -t \
-    "$pkgdir/usr/share/doc/${pkgname}/"
-  
-  # Licenc telepítése
-  install -Dm644 "usr/share/doc/${pkgname}/copyright" -t \
-    "$pkgdir/usr/share/licenses/${pkgname}/"
-  
-  # EULA licenc
-  install -Dm644 "usr/share/${pkgname}/driver_eula/LICENSE" -t \
-    "${pkgdir}/usr/share/${pkgname}/driver_eula/"
-  
-  # Symlink létrehozása a licenchez
-  install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}/"
-  ln -sf "/usr/share/${pkgname}/driver_eula/LICENSE" \
+
+  install -Dm644 usr/share/doc/${pkgname}/README.md \
+    "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+  install -Dm644 usr/share/doc/${pkgname}/CONTRIBUTING.md \
+    "${pkgdir}/usr/share/doc/${pkgname}/CONTRIBUTING.md"
+
+  install -Dm644 usr/share/doc/${pkgname}/copyright \
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  
-  # Egyéni script telepítése
-  install -m755 "${srcdir}/show-driver" "${pkgdir}/usr/bin/nvidia-recommended-driver"
+
+  install -Dm644 usr/share/${pkgname}/driver_eula/LICENSE \
+    "${pkgdir}/usr/share/${pkgname}/driver_eula/LICENSE"
+
+  ln -sf /usr/share/${pkgname}/driver_eula/LICENSE \
+    "${pkgdir}/usr/share/licenses/${pkgname}/EULA"
+
+  install -Dm755 "${srcdir}/show-driver" \
+    "${pkgdir}/usr/bin/nvidia-recommended-driver"
 }
