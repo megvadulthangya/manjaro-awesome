@@ -1,7 +1,7 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 # Minimal PKGBUILD for GitHub Actions with debug
 pkgname=nvidia-driver-assistant
-pkgver=0.23.48.02
+pkgver=0.24.48.02
 _realver=0.23.48.01
 pkgrel=1
 _pkgrel=1
