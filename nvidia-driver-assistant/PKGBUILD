@@ -3,7 +3,7 @@
 pkgname=nvidia-driver-assistant
 pkgver=0.25.48.02
 _realver=0.23.48.01
-pkgrel=4
+pkgrel=5
 _pkgrel=1
 pkgdesc="NVIDIA driver assistant with Maxwell/Pascal/Volta patch"
 arch=('any')
