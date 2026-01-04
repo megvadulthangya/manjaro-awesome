@@ -1,18 +1,18 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 # Minimal PKGBUILD for GitHub Actions with debug
 pkgname=nvidia-driver-assistant
-pkgver=0.25.48.02
+pkgver=2026.01.04.1  # Év.Hónap.Nap.Buildszám
 _realver=0.23.48.01
-pkgrel=7
+pkgrel=1
 _pkgrel=1
-pkgdesc="NVIDIA driver assistant with Maxwell/Pascal/Volta patch"
+pkgdesc="NVIDIA driver assistant with user-protection overrides for legacy GPU support and architecture-aware driver selection"
 arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
 makedepends=('git' 'wget' 'binutils')
 # FONTOS: Itt megadjuk a v3 branchet!
-source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=v3")
+source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=easteregg")
 sha256sums=('SKIP')
 
 # Debug funkció
@@ -35,18 +35,39 @@ prepare() {
     echo "=== nvidia-driver-assistant mappa tartalma ==="
     ls -la "${srcdir}/nvidia-driver-assistant/" || echo "Nem létezik a mappa!"
     
-    # DEB fájl letöltése
-    echo "=== DEB letöltés ==="
-    deb_url="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
-    echo "URL: ${deb_url}"
+    # ELŐSZÖR: Próbáljuk a git repóból a DEB fájlt
+    echo "=== DEB fájl keresése a git repóban ==="
+    deb_file_in_repo="${srcdir}/nvidia-driver-assistant/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
     
-    if wget --timeout=30 --tries=3 "${deb_url}"; then
-        echo "✓ DEB letöltve"
+    if [ -f "${deb_file_in_repo}" ]; then
+        echo "✓ DEB fájl megtalálva a git repóban: ${deb_file_in_repo}"
+        cp "${deb_file_in_repo}" "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+        echo "✓ DEB fájl másolva a jelenlegi mappába"
         ls -lh "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
     else
-        echo "✗ DEB letöltés sikertelen!"
-        echo "Alternatív próbálkozás curl-lel..."
-        curl -L -O "${deb_url}" || echo "Curl is sikertelen"
+        echo "✗ DEB fájl nem található a git repóban, online letöltés próbálkozása..."
+        
+        # HA NINCS A REPÓBAN: Online letöltés (safety net)
+        echo "=== DEB letöltés online forrásból ==="
+        deb_url="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+        echo "URL: ${deb_url}"
+        
+        if wget --timeout=30 --tries=3 "${deb_url}"; then
+            echo "✓ DEB letöltve online forrásból"
+            ls -lh "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+        else
+            echo "✗ Online DEB letöltés sikertelen!"
+            echo "Alternatív próbálkozás curl-lel..."
+            curl -L -O "${deb_url}" || echo "Curl is sikertelen"
+            
+            # Végső ellenőrzés
+            if [ ! -f "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb" ]; then
+                echo "✗ VÉGSŐ HIBA: DEB fájl sehol sem található!"
+                echo "Ellenőrizd, hogy a git repó gyökerében van-e a következő fájl:"
+                echo "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+                return 1
+            fi
+        fi
     fi
     
     # Mappa létrehozása
