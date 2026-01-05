@@ -1,17 +1,105 @@
+# ============ GYORS EMLÉKEZTETŐ ============
+# 
+# MINDIG ELLENŐRIZD A DEB FÁJL NEVÉT:
+# nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb
+#
+# HA EZ A FÁJL NEM TALÁLHATÓ:
+# 1. Ellenőrizd a _realver és _pkgrel értékeket
+# 2. Nézd meg a GitHub repo gyökerében, hogy milyen DEB fájl van
+# 3. Ha más a DEB fájl neve, módosítsd a _realver-t vagy _pkgrel-t!
+#
+# HA ÚJ CSOMAGOT AKARSZ:
+# - Ha módosítottál valamit: pkgrel NÖVELÉSE
+# - Ha új DEB fájl van: pkgrel VISSZA 1-RE
+
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 # Minimal PKGBUILD for GitHub Actions with debug
 pkgname=nvidia-driver-assistant
-pkgver=2026.01.05.1
-_realver=0.23.48.01
-pkgrel=1
-_pkgrel=1
+
+# ============ FONTOS: VERZIÓSZÁMOK KEZELÉSE ============
+# 
+# 1. pkgver = Dátum + Buildszám formátumban (ÉÉÉÉ.HH.NN.BB)
+#    - Ha az NAPON belül többször építesz, növeld a BB számot!
+#    - Példa: 2026.01.05.1 (első build), 2026.01.05.2 (második build)
+#    - Másik napon: 2026.01.06.1 (nullázódik a buildszám)
+#
+# 2. pkgrel = Arch/Manjaro csomag release száma
+#    - MINDEN változásnál növeld, ha a DEB fájl VÁLTOZATLAN!
+#    - Ha új PKGBUILD, új patch, új show-driver script, stb.
+#    - Új DEB fájlnál vissza kell állni 1-re!
+#
+# 3. _realver = NVIDIA hivatalos DEB fájl verziója
+#    - Csak akkor változtasd, ha NVIDIA új DEB verziót ad ki!
+#    - Példa: 0.23.48.01 → 0.23.48.02
+#
+# 4. _pkgrel = NVIDIA hivatalos DEB fájl release száma
+#    - Csak akkor változtasd, ha NVIDIA új release-t ad ki ugyanazon verzióban!
+#    - Példa: 0.23.48.01-1 → 0.23.48.01-2
+#
+# ============ MIKOR MIT KELL MÓDOSÍTANI? ============
+#
+# ESET 1: NAPI ÉPÍTÉS (semmi sem változott, csak idő múlik)
+#   - pkgver: dátum frissítése (2026.01.06.1)
+#   - pkgrel: 1 (minden nap első buildje)
+#   - _realver: változatlan
+#   - _pkgrel: változatlan
+#
+# ESET 2: UGYANAZON A NAPON TÖBBSZÖR ÉPÍTESZ
+#   - pkgver: dátum ugyanaz, de növeld a buildszámot (2026.01.05.2)
+#   - pkgrel: változatlan (mert ugyanaz a PKGBUILD)
+#   - _realver: változatlan
+#   - _pkgrel: változatlan
+#
+# ESET 3: MÓDOSÍTOTTAD A PKGBUILD-ot (vagy patch/show-driver)
+#   - pkgver: dátum + buildszám (2026.01.05.1) - lehet új nap is!
+#   - pkgrel: NÖVELD! (1 → 2)
+#   - _realver: változatlan
+#   - _pkgrel: változatlan
+#
+# ESET 4: ÚJ NVIDIA DEB VERZIÓ (pl. 0.23.48.02)
+#   - pkgver: dátum + buildszám (2026.01.06.1) - új nap!
+#   - pkgrel: VISSZA 1-RE! (mert új DEB fájl)
+#   - _realver: frissítsd! (0.23.48.01 → 0.23.48.02)
+#   - _pkgrel: 1 (vagy amit a NVIDIA ad)
+#
+# ESET 5: ÚJ NVIDIA DEB RELEASE (pl. 0.23.48.01-2)
+#   - pkgver: dátum + buildszám (2026.01.06.1)
+#   - pkgrel: VISSZA 1-RE!
+#   - _realver: változatlan
+#   - _pkgrel: frissítsd! (1 → 2)
+#
+# ============ JELENLEGI ÉRTÉKEK ============
+# EZEKET KELL MÓDOSÍTANI AZ ESETEK SZERINT!
+
+pkgver=2026.01.05.1  # ÉV.HÓNAP.NAP.BUILDSZÁM - Ha több build egy nap: növeld az utolsó számot!
+_realver=0.23.48.01  # NVIDIA DEB fájl verziója - Csak akkor változtasd, ha új NVIDIA verzió jön!
+pkgrel=2             # Arch csomag release - Növeld, ha módosítod a PKGBUILD-ot/patch-et!
+_pkgrel=1            # NVIDIA DEB fájl release - Csak akkor változtasd, ha NVIDIA új release-t ad ki!
+
+# ============ PÉLDA: MA MÓDOSÍTOTTAD A PATCH-ET ============
+# pkgver=2026.01.05.2    # ugyanaz a nap, de második build
+# pkgrel=2               # mert módosítottad a PKGBUILD-ot/patch-et
+# _realver=0.23.48.01    # változatlan
+# _pkgrel=1              # változatlan
+
+# ============ PÉLDA: HOLNAP REGGELI AUTOMATIKUS BUILD ============
+# pkgver=2026.01.06.1    # új nap, első build
+# pkgrel=1               # mert csak a dátum változott
+# _realver=0.23.48.01    # változatlan
+# _pkgrel=1              # változatlan
+
+# ============ PÉLDA: NVIDIA KIADOTT EGY ÚJ VERZIÓT ============
+# pkgver=2026.01.06.1    # új nap
+# pkgrel=1               # VISSZA 1-RE! új DEB fájl
+# _realver=0.23.48.02    # FRISSÍTSD! új NVIDIA verzió
+# _pkgrel=1              # 1, mert új verzió
+
 pkgdesc="NVIDIA driver assistant with user-protection overrides for legacy GPU support and architecture-aware driver selection"
 arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT AND LicenseRef-custom')
 depends=('python')
-makedepends=('git' 'wget' 'binutils')
-# FONTOS: Itt megadjuk a v3 branchet!
+makedepends=('git' 'wget' 'binutils' 'patch')
 source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=easteregg")
 sha256sums=('SKIP')
 
@@ -24,6 +112,13 @@ _debug() {
     echo "pkgdir: ${pkgdir}"
 }
 
+# ============ MÓDOSÍTÁSI LOG ============
+# Írd ide, hogy mikor mit változtattál:
+# 2026.01.05 - Első verzió
+# 2026.01.05 - Javítottam a patch alkalmazást
+# 2026.01.06 - Új NVIDIA DEB verzió 0.23.48.02
+# stb...
+
 prepare() {
     set -x  # Minden parancsot kiír
     
@@ -35,7 +130,10 @@ prepare() {
     echo "=== nvidia-driver-assistant mappa tartalma ==="
     ls -la "${srcdir}/nvidia-driver-assistant/" || echo "Nem létezik a mappa!"
     
-    # ELŐSZÖR: Próbáljuk a git repóból a DEB fájlt
+    # ============ DEB FÁJL KERESÉSE ============
+    # A DEB fájl neve: nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb
+    # Ha ezt módosítod, akkor a fájl neve is változik!
+    
     echo "=== DEB fájl keresése a git repóban ==="
     deb_file_in_repo="${srcdir}/nvidia-driver-assistant/nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
     
@@ -65,6 +163,7 @@ prepare() {
                 echo "✗ VÉGSŐ HIBA: DEB fájl sehol sem található!"
                 echo "Ellenőrizd, hogy a git repó gyökerében van-e a következő fájl:"
                 echo "nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
+                echo "VAGY módosítsd a _realver és _pkgrel értékeket a PKGBUILD-ban!"
                 return 1
             fi
         fi
@@ -79,6 +178,8 @@ prepare() {
         echo "✓ DEB kicsomagolva"
     else
         echo "✗ DEB kicsomagolás sikertelen!"
+        echo "Lehet, hogy rossz a DEB fájl neve? Ellenőrizd:"
+        echo "Jelenlegi: nvidia-driver-assistant_${_realver}-${_pkgrel}_all.deb"
         return 1
     fi
     
@@ -95,24 +196,61 @@ prepare() {
         echo "✗ Nincs patch fájl!"
         echo "Keresés patch fájlra:"
         find "${srcdir}/" -name "*.patch" -type f
+        return 1
     fi
     
-    # data.tar.xz kicsomagolása
+    # data.tar.xz kicsomagolása - ELŐSZÖR KIBONTANI!
+    echo "=== data.tar.xz kicsomagolása ==="
     if [ -f "data.tar.xz" ]; then
-        echo "=== data.tar.xz kicsomagolás ==="
+        # Kicsomagolás
         tar -xf data.tar.xz
         echo "✓ data.tar.xz kicsomagolva"
+        
+        # Nézzük meg, hol van a Python script
+        echo "=== Python script keresése ==="
+        find . -name "*nvidia-driver-assistant*" -type f 2>/dev/null | head -5
+    else
+        echo "✗ data.tar.xz nem található!"
+        return 1
     fi
     
-    # Patch alkalmazása
+    # Patch alkalmazása - MOST MÁR A KIBONTOtt fájlokra!
     echo "=== Patch alkalmazás ==="
-    if patch --dry-run -Np1 -i "${patch_file}" > /dev/null 2>&1; then
-        patch -Np1 -i "${patch_file}"
-        echo "✓ Patch alkalmazva"
+    
+    # Keressük a Python scriptet
+    python_script=""
+    if [ -f "usr/bin/nvidia-driver-assistant" ]; then
+        python_script="usr/bin/nvidia-driver-assistant"
     else
-        echo "✗ Patch alkalmazás sikertelen (talán már alkalmazva?)"
-        patch -Np1 -i "${patch_file}" || true
+        python_script=$(find usr -name "*nvidia-driver-assistant*" -type f 2>/dev/null | head -1)
     fi
+    
+    if [ -f "${python_script}" ]; then
+        echo "✓ Python script megtalálva: ${python_script}"
+        
+        # Biztonsági másolat
+        cp "${python_script}" "${python_script}.orig"
+        
+        # Próbáljuk alkalmazni a patch-et
+        if patch --dry-run -Np1 -i "${patch_file}" > /dev/null 2>&1; then
+            patch -Np1 -i "${patch_file}"
+            echo "✓ Patch alkalmazva"
+            
+            # Ellenőrizzük a változást
+            echo "=== Különbség az eredeti és patch-elt között ==="
+            diff -u "${python_script}.orig" "${python_script}" | head -30 || true
+        else
+            echo "✗ Patch alkalmazás sikertelen (talán már alkalmazva?)"
+            # Próbáljuk meg újra, de ne hibázzon ki
+            patch -Np1 -i "${patch_file}" || echo "Patch nem alkalmazható"
+        fi
+    else
+        echo "✗ Python script nem található a kibontott fájlokban!"
+    fi
+    
+    # Töröljük a DEB archívum fájlokat, hogy ne lehessen újra kibontani
+    echo "=== DEB archívum fájlok törlése ==="
+    rm -f data.tar.xz control.tar.xz debian-binary _gpgbuilder 2>/dev/null || true
     
     _debug "END PREPARE"
     set +x
@@ -130,36 +268,46 @@ package() {
     
     cd "${work_dir}"
     
-    # Fájlok kicsomagolása ha szükséges
-    if [ -f "data.tar.xz" ]; then
-        echo "=== data.tar.xz újrakicsomagolás ==="
-        tar -xf data.tar.xz -C "${work_dir}/"
-    fi
-    
     # Fájlstruktúra
     echo "=== Fájlstruktúra a munkakönyvtárban ==="
-    find "${work_dir}" -type f | head -30
+    find "${work_dir}" -type f | head -20
     
     # show-driver ellenőrzése
     echo "=== show-driver ellenőrzés ==="
     show_driver="${srcdir}/nvidia-driver-assistant/show-driver"
     if [ -f "${show_driver}" ]; then
         echo "✓ show-driver található: ${show_driver}"
-        cat "${show_driver}" | head -5
+        echo "Tartalma (első 5 sor):"
+        head -5 "${show_driver}"
     else
         echo "✗ show-driver nem található!"
-        echo "Keresés show-driver fájlra:"
-        find "${srcdir}/" -name "show-driver" -type f
+        echo "FIGYELEM: show-driver nélkül nem lesz nvidia-recommended-driver parancs!"
     fi
     
-    # Bináris telepítése
-    echo "=== Bináris telepítés ==="
-    if [ -f "usr/bin/${pkgname}" ]; then
-        install -Dm755 "usr/bin/${pkgname}" -t "${pkgdir}/usr/bin/"
+    # Bináris telepítése (Python script)
+    echo "=== Python script telepítése ==="
+    
+    # Keressük a Python scriptet
+    python_script=""
+    if [ -f "usr/bin/nvidia-driver-assistant" ]; then
+        python_script="usr/bin/nvidia-driver-assistant"
+    else
+        python_script=$(find usr -name "*nvidia-driver-assistant*" -type f 2>/dev/null | head -1)
+    fi
+    
+    if [ -f "${python_script}" ]; then
+        echo "✓ Python script találva: ${python_script}"
+        
+        # Végső ellenőrzés
+        echo "=== Script végső tartalma (első 10 sor) ==="
+        head -10 "${python_script}"
+        
+        # Telepítés
+        install -Dm755 "${python_script}" -t "${pkgdir}/usr/bin/"
         echo "✓ ${pkgname} telepítve"
     else
-        echo "✗ ${pkgname} nem található!"
-        find "${work_dir}" -name "${pkgname}" -type f
+        echo "✗ Python script nem található!"
+        return 1
     fi
     
     # JSON fájlok
