@@ -71,9 +71,9 @@ pkgname=nvidia-driver-assistant
 # ============ JELENLEGI ÉRTÉKEK ============
 # EZEKET KELL MÓDOSÍTANI AZ ESETEK SZERINT!
 
-pkgver=2026.01.05.1  # ÉV.HÓNAP.NAP.BUILDSZÁM - Ha több build egy nap: növeld az utolsó számot!
+pkgver=2026.01.05.1
 _realver=0.23.48.01  # NVIDIA DEB fájl verziója - Csak akkor változtasd, ha új NVIDIA verzió jön!
-pkgrel=2             # Arch csomag release - Növeld, ha módosítod a PKGBUILD-ot/patch-et!
+pkgrel=2
 _pkgrel=1            # NVIDIA DEB fájl release - Csak akkor változtasd, ha NVIDIA új release-t ad ki!
 
 # ============ PÉLDA: MA MÓDOSÍTOTTAD A PATCH-ET ============
