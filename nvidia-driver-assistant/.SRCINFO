@@ -1,6 +1,6 @@
 pkgbase = nvidia-driver-assistant
 	pkgdesc = NVIDIA driver assistant with user-protection overrides for legacy GPU support and architecture-aware driver selection
-	pkgver = 2026.01.04.1
+	pkgver = 2026.01.05.1
 	pkgrel = 1
 	url = https://github.com/megvadulthangya/nvidia-driver-assistant
 	arch = any
