@@ -3,7 +3,7 @@
 
 _pkgname=awesome-freedesktop
 pkgname=$_pkgname-git
-pkgver=r117.ac9de0e  # Ez automatikusan frissül a pkgver() függvényben
+pkgver=r118.c82ad29
 pkgrel=1
 epoch=1
 pkgdesc="Freedesktop.org compliant desktop entries and menu for Awesome WM"
