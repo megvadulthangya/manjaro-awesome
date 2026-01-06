@@ -17,6 +17,7 @@ echo "[DEBUG] Push URL: $SSH_REPO_URL"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
+    "gghelper"
     "gtk2"
     "awesome-freedesktop-git"
     "lain-git"
