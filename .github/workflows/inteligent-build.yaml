@@ -1,4 +1,4 @@
-name: Manjaro Repo Smart Inteligent.... ?Builder
+name: Manjaro Repo Smart Builder 2
 
 on:
   workflow_dispatch:
@@ -35,7 +35,8 @@ jobs:
             unzip p7zip gnupg \
             dbus polkit \
             systemd systemd-sysvcompat \
-            pacman-contrib arch-install-scripts
+            pacman-contrib arch-install-scripts \
+            shellcheck  # Shell script ellenőrzés
             
           # Builder user létrehozása
           useradd -m builder
@@ -51,6 +52,12 @@ jobs:
           # Debug kikapcsolása és tömörítés javítása
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          
+          # Shell script syntax check a biztonság kedvéért
+          echo "=== SHELL SCRIPT SYNTAX CHECK ==="
+          if command -v shellcheck > /dev/null 2>&1; then
+            find . -name "*.sh" -type f -exec shellcheck {} \; || true
+          fi
 
       - name: Setup SSH for Builder
         run: |
@@ -71,4 +78,10 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           chmod +x ./ci-intelligent-build.sh
+          
+          # Syntax check először
+          echo "=== SYNTAX CHECK ==="
+          bash -n ./ci-intelligent-build.sh && echo "✓ Syntax OK" || echo "✗ Syntax error"
+          
+          # Futtatás
           su builder -c ./ci-intelligent-build.sh

@@ -16,7 +16,6 @@ echo "[INTELLIGENT BUILD] Repo gyökér: $REPO_ROOT"
 echo "[INTELLIGENT BUILD] Push URL: $SSH_REPO_URL"
 
 # --- CSOMAGOK LISTÁJA ---
-# MOST CSAK A NEVEKET KELL MEGADNI - A FÜGGŐSÉGEK AUTOMATA
 LOCAL_PACKAGES=(
     "gghelper"
     "gtk2"
@@ -31,7 +30,6 @@ LOCAL_PACKAGES=(
     "grayjay-bin"
 )
 
-# AUR csomagok
 AUR_PACKAGES=(
     "libinput-gestures"
     "qt5-styleplugins"
@@ -94,20 +92,21 @@ if ! command -v yay &> /dev/null; then
         if makepkg -si --noconfirm 2>/dev/null; then
             log_succ "Yay telepítve."
         else
-            # Alternatív módszer
             log_warn "Alternatív yay telepítés..."
-            pacman -S --noconfirm go
-            go install github.com/Jguer/yay@latest 2>/dev/null || true
+            pacman -S --noconfirm go 2>/dev/null || true
+            if command -v go &> /dev/null; then
+                go install github.com/Jguer/yay@latest 2>/dev/null || true
+            fi
         fi
         cd /tmp
-        rm -rf yay
+        rm -rf yay 2>/dev/null || true
     fi
     cd "$REPO_ROOT"
 fi
 
 # 3. SZERVER LISTA LEKÉRÉSE
 log_info "Szerver tartalmának lekérdezése..."
-if ssh $SSH_OPTS $VPS_USER@$VPS_HOST "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
+if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
     log_succ "Szerver lista letöltve."
 else
     touch "$REPO_ROOT/remote_files.txt"
@@ -115,7 +114,7 @@ fi
 
 # 4. DB LETÖLTÉS
 log_info "Adatbázis letöltése..."
-scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
 # Segédfüggvények
 
@@ -123,7 +122,7 @@ scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_R
 is_on_server() {
     local pkgname="$1"
     local version="$2"
-    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt"; then
+    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
         return 0
     else
         return 1
@@ -137,7 +136,7 @@ install_build_deps_intelligent() {
     
     log_dep "Függőségek analízise: $(basename "$pkg_dir")"
     
-    cd "$pkg_dir"
+    cd "$pkg_dir" || return 1
     
     # 1. Kinyerjük a függőségeket a PKGBUILD-ből
     local depends_list=()
@@ -147,33 +146,38 @@ install_build_deps_intelligent() {
     if [ -f PKGBUILD ]; then
         # Source the PKGBUILD in a controlled way
         {
-            source PKGBUILD > /dev/null 2>&1
+            # shellcheck disable=SC1091
+            source PKGBUILD > /dev/null 2>&1 || true
             
             # Függőségek összegyűjtése
-            if [ -n "${depends[@]}" ]; then
+            if [ -n "${depends[*]}" ]; then
                 depends_list+=("${depends[@]}")
             fi
             
-            if [ -n "${makedepends[@]}" ]; then
+            if [ -n "${makedepends[*]}" ]; then
                 makedepends_list+=("${makedepends[@]}")
             fi
             
-            if [ -n "${checkdepends[@]}" ]; then
+            if [ -n "${checkdepends[*]}" ]; then
                 checkdepends_list+=("${checkdepends[@]}")
             fi
-        } || true
+        } 
         
         # Alternatív módszer: makepkg --printsrcinfo használata
         if command -v makepkg > /dev/null 2>&1; then
             if makepkg --printsrcinfo 2>/dev/null > /tmp/.srcinfo; then
                 # depends kinyerése
-                local srcinfo_depends=$(grep -E '^\s*depends\s*=' /tmp/.srcinfo | sed 's/^.*=\s*//' | tr '\n' ' ')
-                local srcinfo_makedepends=$(grep -E '^\s*makedepends\s*=' /tmp/.srcinfo | sed 's/^.*=\s*//' | tr '\n' ' ')
+                local srcinfo_depends
+                srcinfo_depends=$(grep -E '^\s*depends\s*=' /tmp/.srcinfo 2>/dev/null | sed 's/^.*=\s*//' | tr '\n' ' ')
+                local srcinfo_makedepends
+                srcinfo_makedepends=$(grep -E '^\s*makedepends\s*=' /tmp/.srcinfo 2>/dev/null | sed 's/^.*=\s*//' | tr '\n' ' ')
                 
                 if [ -n "$srcinfo_depends" ]; then
+                    # shellcheck disable=SC2206
                     depends_list+=($srcinfo_depends)
                 fi
                 if [ -n "$srcinfo_makedepends" ]; then
+                    # shellcheck disable=SC2206
                     makedepends_list+=($srcinfo_makedepends)
                 fi
             fi
@@ -181,7 +185,8 @@ install_build_deps_intelligent() {
     fi
     
     # 2. Egyedi függőség-kezelés ismert problémás csomagokhoz
-    local pkg_name=$(basename "$pkg_dir")
+    local pkg_name
+    pkg_name=$(basename "$pkg_dir")
     case "$pkg_name" in
         gtk2)
             makedepends_list+=("gtk-doc" "docbook-xsl" "libxslt" "gobject-introspection")
@@ -195,8 +200,12 @@ install_build_deps_intelligent() {
     esac
     
     # 3. Duplikációk eltávolítása
-    depends_list=($(echo "${depends_list[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
-    makedepends_list=($(echo "${makedepends_list[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+    if [ ${#depends_list[@]} -gt 0 ]; then
+        depends_list=($(printf "%s\n" "${depends_list[@]}" | sort -u))
+    fi
+    if [ ${#makedepends_list[@]} -gt 0 ]; then
+        makedepends_list=($(printf "%s\n" "${makedepends_list[@]}" | sort -u))
+    fi
     
     # 4. Logoljuk a talált függőségeket
     if [ ${#depends_list[@]} -gt 0 ]; then
@@ -216,7 +225,8 @@ install_build_deps_intelligent() {
         local deps_to_install=()
         for dep in "${all_deps[@]}"; do
             # Tisztítjuk a függőség nevet (eltávolítjuk a >, <, = jeleket)
-            local clean_dep=$(echo "$dep" | sed 's/[<=>].*//')
+            local clean_dep
+            clean_dep=$(echo "$dep" | sed 's/[<=>].*//')
             
             if ! pacman -Qi "$clean_dep" > /dev/null 2>&1; then
                 deps_to_install+=("$clean_dep")
@@ -229,7 +239,7 @@ install_build_deps_intelligent() {
             log_dep "Telepítendő: ${deps_to_install[*]}"
             
             # AUR csomagok esetén yay-t használunk
-            if [ "$is_aur" == "true" ]; then
+            if [ "$is_aur" = "true" ]; then
                 # AUR helper használata
                 if command -v yay > /dev/null 2>&1; then
                     for dep in "${deps_to_install[@]}"; do
@@ -278,7 +288,7 @@ install_build_deps_intelligent() {
         sudo pacman -S --needed --noconfirm "${missing_tools[@]}" 2>/dev/null || true
     fi
     
-    cd - > /dev/null
+    cd - > /dev/null || return 1
 }
 
 # Intelligens AUR klónozó (javított)
@@ -286,7 +296,7 @@ clone_aur_intelligent() {
     local pkg="$1"
     local max_retries=2
     
-    for attempt in $(seq 1 $max_retries); do
+    for attempt in $(seq 1 "$max_retries"); do
         log_debug "AUR klónozás ($attempt/$max_retries): $pkg"
         
         # 1. Próbáljuk a fő AUR URL-t
@@ -302,7 +312,7 @@ clone_aur_intelligent() {
             fi
         fi
         
-        if [ $attempt -lt $max_retries ]; then
+        if [ "$attempt" -lt "$max_retries" ]; then
             sleep 5
         fi
     done
@@ -319,14 +329,14 @@ build_package_intelligent() {
     log_info "Csomag feldolgozása: $pkg"
     log_info "========================================"
     
-    cd "$REPO_ROOT"
+    cd "$REPO_ROOT" || return 1
 
     local pkg_dir=""
     
-    if [ "$is_aur" == "true" ]; then
+    if [ "$is_aur" = "true" ]; then
         # AUR csomag
         mkdir -p build_aur
-        cd build_aur
+        cd build_aur || return 1
         
         if [ -d "$pkg" ]; then 
             rm -rf "$pkg"
@@ -334,8 +344,8 @@ build_package_intelligent() {
         
         if ! clone_aur_intelligent "$pkg"; then
             log_err "AUR klónozás sikertelen: $pkg"
-            cd "$REPO_ROOT"
-            return
+            cd "$REPO_ROOT" || return 1
+            return 1
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
@@ -343,16 +353,16 @@ build_package_intelligent() {
         # Helyi csomag
         if [ ! -d "$pkg" ]; then 
             log_err "Helyi mappa nem található: $pkg"
-            return
+            return 1
         fi
         pkg_dir="$REPO_ROOT/$pkg"
-        cd "$pkg"
+        cd "$pkg" || return 1
     fi
     
     # 1. INTELLIGENS FÜGGŐSÉG TELEPÍTÉS
     install_build_deps_intelligent "$pkg_dir" "$is_aur"
     
-    cd "$pkg_dir"
+    cd "$pkg_dir" || return 1
     
     # 2. FORRÁS ELLENŐRZÉS
     log_debug "Források ellenőrzése..."
@@ -367,12 +377,12 @@ build_package_intelligent() {
             if makepkg -od --noconfirm 2>&1; then
                 log_succ "Most már működik!"
             else
-                cd "$REPO_ROOT"
-                return
+                cd "$REPO_ROOT" || return 1
+                return 1
             fi
         else
-            cd "$REPO_ROOT"
-            return
+            cd "$REPO_ROOT" || return 1
+            return 1
         fi
     fi
     
@@ -382,8 +392,8 @@ build_package_intelligent() {
     
     if [ -f PKGBUILD ]; then
         # Kinyerjük a verziót a PKGBUILD-ből
-        full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"")
-        rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"")
+        full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
+        rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
     fi
     
     if [ -z "$full_ver" ]; then
@@ -398,8 +408,8 @@ build_package_intelligent() {
     # 4. SKIP LOGIKA
     if [ "$current_version" != "unknown-1" ] && is_on_server "$pkg" "$current_version"; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
-        cd "$REPO_ROOT"
-        return
+        cd "$REPO_ROOT" || return 1
+        return 0
     fi
     
     # 5. ÉPÍTÉS
@@ -428,18 +438,18 @@ build_package_intelligent() {
         done
         
         # Git push (csak saját csomagoknál)
-        if [ "$is_aur" == "false" ] && [ "$pkg" != "gtk2" ]; then
+        if [ "$is_aur" = "false" ] && [ "$pkg" != "gtk2" ]; then
             log_info "Git repo frissítése..."
             
             if [ -f PKGBUILD ] && [ -f .SRCINFO ]; then
                 TEMP_GIT_DIR="/tmp/git_publish_$pkg"
-                rm -rf "$TEMP_GIT_DIR"
+                rm -rf "$TEMP_GIT_DIR" 2>/dev/null || true
                 
                 if git clone "$SSH_REPO_URL" "$TEMP_GIT_DIR" 2>/dev/null; then
                     mkdir -p "$TEMP_GIT_DIR/$pkg"
                     cp PKGBUILD "$TEMP_GIT_DIR/$pkg/" 2>/dev/null
                     cp .SRCINFO "$TEMP_GIT_DIR/$pkg/" 2>/dev/null
-                    cd "$TEMP_GIT_DIR"
+                    cd "$TEMP_GIT_DIR" || continue
                     
                     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
                         git add "$pkg/PKGBUILD" "$pkg/.SRCINFO" 2>/dev/null
@@ -447,8 +457,8 @@ build_package_intelligent() {
                         git push 2>/dev/null && log_succ "Git push sikeres"
                     fi
                     
-                    cd "$pkg_dir"
-                    rm -rf "$TEMP_GIT_DIR"
+                    cd "$pkg_dir" || return 1
+                    rm -rf "$TEMP_GIT_DIR" 2>/dev/null || true
                 fi
             fi
         fi
@@ -456,16 +466,16 @@ build_package_intelligent() {
         log_err "Build hiba: $pkg"
         
         # Hibaanalízis
-        if grep -q "error:" /tmp/makepkg_build.log; then
+        if grep -q "error:" /tmp/makepkg_build.log 2>/dev/null; then
             log_warn "Utolsó hibák:"
-            grep -i "error:" /tmp/makepkg_build.log | tail -5
+            grep -i "error:" /tmp/makepkg_build.log 2>/dev/null | tail -5
         fi
     fi
     
-    cd "$REPO_ROOT"
+    cd "$REPO_ROOT" || return 1
     
     # Takarítás
-    if [ "$is_aur" == "true" ]; then 
+    if [ "$is_aur" = "true" ]; then 
         rm -rf "build_aur/$pkg" 2>/dev/null || true
     fi
 }
@@ -497,7 +507,7 @@ done
 # FELTÖLTÉS ÉS RENDSZERFRISSÍTÉS
 # ================================
 
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 # Ellenőrizzük van-e épített csomag
 if [ -z "$(ls -A $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null)" ]; then
@@ -508,7 +518,7 @@ fi
 log_info "=== FELTÖLTÉS ÉS ADATBÁZIS FRISSÍTÉS ==="
 
 # Adatbázis frissítése
-cd "$OUTPUT_DIR"
+cd "$OUTPUT_DIR" || exit 1
 log_info "Épített csomagok: $(ls *.pkg.tar.* 2>/dev/null | wc -l) db"
 
 if [ -f "${REPO_DB_NAME}.db.tar.gz" ]; then
@@ -521,14 +531,14 @@ fi
 
 # Feltöltés
 log_info "Feltöltés a szerverre..."
-cd ..
+cd "$REPO_ROOT" || exit 1
 
-if scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/ 2>/dev/null; then
+if scp $SSH_OPTS "$OUTPUT_DIR"/* "$VPS_USER@$VPS_HOST:$REMOTE_DIR/" 2>/dev/null; then
     log_succ "Feltöltés sikeres!"
 else
     # Újrapróbálás
     sleep 3
-    if scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/ 2>/dev/null; then
+    if scp $SSH_OPTS "$OUTPUT_DIR"/* "$VPS_USER@$VPS_HOST:$REMOTE_DIR/" 2>/dev/null; then
         log_succ "Második próbálkozás sikeres!"
     else
         log_err "Feltöltés sikertelen!"
@@ -539,8 +549,8 @@ fi
 # Opcionális takarítás
 if [ -f packages_to_clean.txt ] && [ -s packages_to_clean.txt ]; then
     log_info "Régi csomagok takarítása..."
-    while read pkg_to_clean; do
-        ssh $SSH_OPTS $VPS_USER@$VPS_HOST \
+    while read -r pkg_to_clean || [ -n "$pkg_to_clean" ]; do
+        ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" \
             "cd $REMOTE_DIR && ls -t ${pkg_to_clean}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f" 2>/dev/null || true
     done < packages_to_clean.txt
 fi
