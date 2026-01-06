@@ -20,7 +20,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           
-          # Telepítjük a csomagokat
+          # Telepítjük a csomagokat - EXTRA CSOMAGOK HOZZÁADVA
           pacman -Syu --noconfirm --needed \
             git rsync openssh base-devel jq \
             appstream appstream-glib \
@@ -34,7 +34,12 @@ jobs:
             fontconfig \
             libxml2 \
             clang llvm lld \
-            curl wget ca-certificates  # ⬅️ Hozzáadva: curl, wget, tanúsítványok
+            curl wget ca-certificates \
+            gtk-doc docbook-xsl libxslt \
+            atk cairo pango gdk-pixbuf2 libxcursor libxinerama libxrandr \
+            libxi libxcomposite libxdamage libxkbcommon wayland \
+            python-docutils python-mako python-markdown \
+            gobject-introspection  # ⬅️ Ezek a gtk2 build-hez kellenek
           
           # Debug kikapcsolása és tömörítés javítása
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
@@ -63,6 +68,9 @@ jobs:
           echo ""
           echo "3. GNOME repo elérhetőség:"
           timeout 10 curl -I "https://github.com/GNOME/gtk/archive/refs/tags/2.24.33.tar.gz" || echo "curl timeout"
+          echo ""
+          echo "4. AUR elérhetőség teszt:"
+          timeout 10 curl -I "https://aur.archlinux.org" || echo "curl timeout"
           echo "=== DIAGNOSZTIKA VÉGE ==="
 
       - name: Setup SSH for Builder
@@ -87,6 +95,8 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          # Hozzáadjuk a GitHub PAT-ot (opcionális, de javítja a rate limit-et)
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           chmod +x ./ci-smart-build.sh
           su builder -c ./ci-smart-build.sh
