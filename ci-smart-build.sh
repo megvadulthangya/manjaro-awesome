@@ -78,6 +78,7 @@ log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 log_succ() { echo -e "\e[32m[OK]\e[0m $1"; }
 log_skip() { echo -e "\e[33m[SKIP]\e[0m $1"; }
 log_err()  { echo -e "\e[31m[HIBA]\e[0m $1"; }
+log_debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 
 # 2. YAY TELEPÍTÉSE
 if ! command -v yay &> /dev/null; then
@@ -98,7 +99,7 @@ else
     touch "$REPO_ROOT/remote_files.txt"
 fi
 
-# 4. DB LETÖLTÉS (Csak a kicsi adatbázis fájl kell a frissítéshez)
+# 4. DB LETÖLTÉS
 log_info "Adatbázis letöltése..."
 scp $SSH_OPTS $VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
@@ -136,9 +137,21 @@ build_package() {
         cd "$pkg"
     fi
 
-    # 1. GYORS ELLENŐRZÉS
-    if ! makepkg -od --noconfirm > /dev/null 2>&1; then
+    # 1. RÉSZLETEZETT FORRÁS ELLENŐRZÉS
+    log_debug "Források ellenőrzése a(z) $pkg számára..."
+    if ! makepkg -od --noconfirm; then  # ⬅️ CSENDES MÓD KIKAPCSOLVA
          log_err "Forrás letöltési/verzió hiba: $pkg"
+         # További diagnosztika
+         log_debug "Közvetlen URL teszt curl-lel:"
+         if [ -f PKGBUILD ]; then
+             source PKGBUILD
+             for src in "${source[@]}"; do
+                 if [[ $src == http* ]]; then
+                     echo "  Tesztelés: $src"
+                     curl -I --connect-timeout 10 "$src" || echo "  Sikertelen"
+                 fi
+             done
+         fi
          if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
          return
     fi
@@ -155,8 +168,7 @@ build_package() {
 
     local current_version="${full_ver}-${rel_ver}"
 
-    # --- SKIP LOGIKA (KÖNNYŰSÚLYÚ) ---
-    # Ha a listában benne van a név, akkor kész. Nem töltünk le semmit!
+    # --- SKIP LOGIKA ---
     if is_on_server "$pkg" "$current_version"; then
         log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
         if [ "$is_aur" == "true" ]; then cd "$REPO_ROOT"; fi
@@ -166,7 +178,7 @@ build_package() {
     # --- 2. ÉPÍTÉS ---
     log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
     
-    # Függőségek előtelepítése yay-vel (ha kell)
+    # Függőségek előtelepítése yay-vel
     if [ "$is_aur" == "true" ]; then
         log_info "Függőségek ellenőrzése (AUR)..."
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//') 2>/dev/null || true
@@ -177,7 +189,7 @@ build_package() {
         echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
         log_succ "$pkg építése sikeres."
 
-        # --- GIT PUSH (CLONE MÓDSZER) ---
+        # --- GIT PUSH ---
         if [ "$is_aur" == "false" ]; then
             log_info "PKGBUILD frissítése és Git Push..."
             
@@ -217,8 +229,7 @@ build_package() {
     if [ "$is_aur" == "true" ]; then rm -rf "build_aur/$pkg"; fi
 }
 
-# --- FŐ CIKLUSOK (AUR ELŐBB!) ---
-
+# --- FŐ CIKLUSOK ---
 log_info "--- AUR CSOMAGOK ---"
 rm -rf build_aur
 for pkg in "${AUR_PACKAGES[@]}"; do
@@ -241,14 +252,8 @@ fi
 log_info "Adatbázis frissítése..."
 cd "$OUTPUT_DIR"
 
-# 1. HIBAJAVÍTÁS: Nem töröljük a régi DB-t, hanem frissítjük!
-# A script elején már letöltöttük a DB-t (4. lépés), így az itt van.
-# Ha véletlenül nincs itt, akkor a repo-add létrehoz egy újat (első futás).
-
-# Fontos: A repo-add-nak relatív vagy abszolút útvonal kell a meglévő adatbázishoz
 if [ -f "${REPO_DB_NAME}.db.tar.gz" ]; then
     log_info "Meglévő adatbázis bővítése..."
-    # Csak az új fájlokat adjuk hozzá, a régiek benne maradnak az adatbázisban
     repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.zst
 else
     log_info "Új adatbázis létrehozása..."
@@ -257,7 +262,6 @@ fi
 
 log_info "Feltöltés a szerverre..."
 cd ..
-# Feltöltjük az új csomagokat ÉS a frissített adatbázist
 scp $SSH_OPTS $OUTPUT_DIR/* $VPS_USER@$VPS_HOST:$REMOTE_DIR/
 
 log_info "Takarítás a szerveren..."
