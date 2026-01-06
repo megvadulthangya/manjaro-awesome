@@ -1,6 +1,6 @@
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Maintainer: Jan de Groot <jgc@archlinux.org>
-# Modified for GitHub Actions Gyöngyösi Gábor - auto-downloads everything from Arch Linux GitLab
+# Modified for local build with pre-downloaded patch files
 
 pkgname=gtk2
 pkgver=2.24.33
@@ -38,17 +38,17 @@ makedepends=(
   gtk-doc
 )
 
-# AUTO-DOWNLOAD EVERYTHING from Arch Linux GitLab packaging repo
+# USE LOCAL FILES (not URLs) since you've already downloaded them
 source=(
-  # 1. GTK source from GitHub mirror
+  # GTK source from GitHub mirror
   "https://github.com/GNOME/gtk/archive/refs/tags/${pkgver}.tar.gz"
-  
-  # 2. Hook and patch files from Arch Linux official packaging repo (GitLab)
-  "gtk-query-immodules-2.0.hook::https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/gtk-query-immodules-2.0.hook"
-  "0001-Lower-severity-of-XID-collision-warnings.patch::https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/0001-Lower-severity-of-XID-collision-warnings.patch"
-  "0002-Stop-looking-for-modules-in-cwd.patch::https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/0002-Stop-looking-for-modules-in-cwd.patch"
+  # Local files in the same directory
+  "gtk-query-immodules-2.0.hook"
+  "0001-Lower-severity-of-XID-collision-warnings.patch"
+  "0002-Stop-looking-for-modules-in-cwd.patch"
 )
 
+# GTK tarball checksum + SKIP for local files
 sha256sums=('dedfaf04952434c5e3e1ce4de373ac7474d12da2d99b0afc947ef1983df64601'
             'SKIP'
             'SKIP'
@@ -57,7 +57,7 @@ sha256sums=('dedfaf04952434c5e3e1ce4de373ac7474d12da2d99b0afc947ef1983df64601'
 prepare() {
   cd "gtk-${pkgver}"
   
-  # Apply patches
+  # Apply local patch files
   patch -Np1 -i ../0001-Lower-severity-of-XID-collision-warnings.patch
   patch -Np1 -i ../0002-Stop-looking-for-modules-in-cwd.patch
   
@@ -106,7 +106,7 @@ gtk-font-name = "Adwaita Sans 11"
 END
 
   # Install the hook file
-  install -Dm644 ../gtk-query-immodules-2.0.hook -t "$pkgdir/usr/share/libalpm/hooks"
+  install -Dm644 gtk-query-immodules-2.0.hook -t "$pkgdir/usr/share/libalpm/hooks"
 
   # Built by GTK 4, shared with GTK 2/3
   rm "$pkgdir/usr/bin/gtk-update-icon-cache"
