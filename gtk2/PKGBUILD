@@ -1,6 +1,6 @@
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Maintainer: Jan de Groot <jgc@archlinux.org>
-# Modified for local build with GitHub mirror source
+# Modified for GitHub Actions - auto-downloads everything Gyöngyösi Gábor 
 
 pkgname=gtk2
 pkgver=2.24.33
@@ -33,19 +33,25 @@ depends=(
   shared-mime-info
 )
 makedepends=(
-  git
   glib2-devel
   gobject-introspection
   gtk-doc
 )
-# Using GitHub mirror instead of GitLab (more reliable for CI/CD)
+
+# AUTO-DOWNLOAD EVERYTHING from official Arch sources
 source=(
+  # 1. GTK source from GitHub mirror
   "https://github.com/GNOME/gtk/archive/refs/tags/${pkgver}.tar.gz"
-  gtk-query-immodules-2.0.hook
-  0001-Lower-severity-of-XID-collision-warnings.patch
-  0002-Stop-looking-for-modules-in-cwd.patch
+  
+  # 2. Hook file from Arch Linux official packaging repo
+  "https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/gtk-query-immodules-2.0.hook"
+  
+  # 3. Patch files from Arch Linux official packaging repo
+  "https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/0001-Lower-severity-of-XID-collision-warnings.patch"
+  "https://gitlab.archlinux.org/archlinux/packaging/packages/gtk2/-/raw/main/0002-Stop-looking-for-modules-in-cwd.patch"
 )
-# IMPORTANT: You MUST get the actual checksum for the tarball
+
+# Checksums - SKIP for hook and patches as they come from trusted Arch sources
 sha256sums=('dedfaf04952434c5e3e1ce4de373ac7474d12da2d99b0afc947ef1983df64601'
             'SKIP'
             'SKIP'
@@ -54,9 +60,9 @@ sha256sums=('dedfaf04952434c5e3e1ce4de373ac7474d12da2d99b0afc947ef1983df64601'
 prepare() {
   cd "gtk-${pkgver}"
   
-  # Apply security patches
-  git apply -3 ../0001-Lower-severity-of-XID-collision-warnings.patch
-  git apply -3 ../0002-Stop-looking-for-modules-in-cwd.patch
+  # Apply patches downloaded from Arch Linux
+  patch -Np1 -i ../0001-Lower-severity-of-XID-collision-warnings.patch
+  patch -Np1 -i ../0002-Stop-looking-for-modules-in-cwd.patch
   
   # Fix for automake
   sed -i '/AM_INIT_AUTOMAKE/s/]/ foreign]/' configure.ac
@@ -102,7 +108,8 @@ gtk-theme-name = "Adwaita"
 gtk-font-name = "Adwaita Sans 11"
 END
 
-  install -Dm644 gtk-query-immodules-2.0.hook -t "$pkgdir/usr/share/libalpm/hooks"
+  # Install the downloaded hook file
+  install -Dm644 ../gtk-query-immodules-2.0.hook -t "$pkgdir/usr/share/libalpm/hooks"
 
   # Built by GTK 4, shared with GTK 2/3
   rm "$pkgdir/usr/bin/gtk-update-icon-cache"
