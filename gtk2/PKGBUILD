@@ -1,6 +1,6 @@
 # Maintainer: Jan Alexander Steffens (heftig) <heftig@archlinux.org>
 # Maintainer: Jan de Groot <jgc@archlinux.org>
-# Modified for local build with SKIP checksums
+# Modified for local build with GitHub mirror source
 
 pkgname=gtk2
 pkgver=2.24.33
@@ -38,25 +38,27 @@ makedepends=(
   gobject-introspection
   gtk-doc
 )
-# Use direct GitLab URL - NO AUR CAPTCHA!
+# Using GitHub mirror instead of GitLab (more reliable for CI/CD)
 source=(
-  "git+https://gitlab.gnome.org/GNOME/gtk.git#tag=$pkgver"
+  "https://github.com/GNOME/gtk/archive/refs/tags/${pkgver}.tar.gz"
   gtk-query-immodules-2.0.hook
   0001-Lower-severity-of-XID-collision-warnings.patch
   0002-Stop-looking-for-modules-in-cwd.patch
 )
-# SKIP ALL checksums for CI/CD
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
-# VAGY ha a patch-eket is SKIP-elnéd:
-# b2sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+# IMPORTANT: You MUST get the actual checksum for the tarball
+sha256sums=('dedfaf04952434c5e3e1ce4de373ac7474d12da2d99b0afc947ef1983df64601'
+            'SKIP'
+            'SKIP'
+            'SKIP')
 
 prepare() {
-  cd gtk
+  cd "gtk-${pkgver}"
+  
+  # Apply security patches
   git apply -3 ../0001-Lower-severity-of-XID-collision-warnings.patch
-
-  # CVE-2024-6655
   git apply -3 ../0002-Stop-looking-for-modules-in-cwd.patch
-
+  
+  # Fix for automake
   sed -i '/AM_INIT_AUTOMAKE/s/]/ foreign]/' configure.ac
   autoreconf -fvi
 }
@@ -72,7 +74,7 @@ build() {
 
   CFLAGS+=" -Wno-error=implicit-int -Wno-error=incompatible-pointer-types"
 
-  cd gtk
+  cd "gtk-${pkgver}"
   ./configure "${configure_options[@]}"
   sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
   make
@@ -92,7 +94,7 @@ package() {
   )
   install=gtk2.install
 
-  make -C gtk DESTDIR="$pkgdir" install
+  make -C "gtk-${pkgver}" DESTDIR="$pkgdir" install
 
   install -Dm644 /dev/stdin "$pkgdir/usr/share/gtk-2.0/gtkrc" <<END
 gtk-icon-theme-name = "Adwaita"
