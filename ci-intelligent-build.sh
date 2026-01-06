@@ -429,13 +429,17 @@ build_package_intelligent() {
     
     if timeout 3600 makepkg $makepkg_flags 2>&1 | tee /tmp/makepkg_build.log; then
         # Sikeres build
-        for pkgfile in *.pkg.tar.* 2>/dev/null; do
+        # FONTOS: A 2>/dev/null-t ki kell venni a for loopból!
+        # Helyette használjunk nullglob-ot vagy ellenőrizzük, hogy létezik-e fájl
+        shopt -s nullglob  # Ha nincs egyező fájl, a glob üres listát ad
+        for pkgfile in *.pkg.tar.*; do
             if [ -f "$pkgfile" ]; then
                 mv "$pkgfile" "$REPO_ROOT/$OUTPUT_DIR/"
                 log_succ "$pkg építése sikeres: $pkgfile"
                 echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
             fi
         done
+        shopt -u nullglob  # Visszaállítjuk
         
         # Git push (csak saját csomagoknál)
         if [ "$is_aur" = "false" ] && [ "$pkg" != "gtk2" ]; then
@@ -510,7 +514,11 @@ done
 cd "$REPO_ROOT" || exit 1
 
 # Ellenőrizzük van-e épített csomag
-if [ -z "$(ls -A $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null)" ]; then
+shopt -s nullglob
+pkg_files=("$OUTPUT_DIR"/*.pkg.tar.*)
+shopt -u nullglob
+
+if [ ${#pkg_files[@]} -eq 0 ]; then
     log_succ "Nincs új csomag - minden naprakész!"
     exit 0
 fi
@@ -560,5 +568,8 @@ log_succ "INTELLIGENS BUILD RENDSZER SIKERESEN BEFEJEZVE!"
 log_info "Idő: $(date)"
 log_info "Összegzés:"
 log_info "  - Összes feldolgozott csomag: $(( ${#LOCAL_PACKAGES[@]} + ${#AUR_PACKAGES[@]} ))"
-log_info "  - Sikeresen épített csomagok: $(ls -1 $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null | wc -l)"
+shopt -s nullglob
+pkg_count=("$OUTPUT_DIR"/*.pkg.tar.*)
+shopt -u nullglob
+log_info "  - Sikeresen épített csomagok: ${#pkg_count[@]}"
 log_info "========================================"
