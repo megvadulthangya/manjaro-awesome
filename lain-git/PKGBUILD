@@ -3,7 +3,7 @@
 
 _pkgname=lain
 pkgname=$_pkgname-git
-pkgver=r1771.07cf82e  # Ez automatikusan frissül a pkgver() függvényben
+pkgver=r1797.88f5a8a
 pkgrel=1
 epoch=1
 pkgdesc="Layouts, asynchronous widgets and utilities for Awesome WM"
