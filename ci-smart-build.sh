@@ -17,26 +17,26 @@ echo "[DEBUG] Push URL: $SSH_REPO_URL"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
+    "gtk2"
+    "awesome-freedesktop-git"
+    "lain-git"
     "awesome-rofi"
     "nordic-backgrounds"
     "awesome-copycats-manjaro"
     "i3lock-fancy-git"
     "ttf-font-awesome-5"
     "nvidia-driver-assistant"
+    "grayjay-bin"
 )
 
 AUR_PACKAGES=(
-    "gtk2"
     "libinput-gestures"
     "qt5-styleplugins"
     "urxvt-resize-font-git"
     "i3lock-color"
     "raw-thumbnailer"
-    "grayjay-bin"
     "gsconnect"
-    "lain-git"
     "awesome-git"
-    "awesome-freedesktop-git"
     "tilix-git"
     "tamzen-font"
     "betterlockscreen"
