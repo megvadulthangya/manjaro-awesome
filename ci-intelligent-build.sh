@@ -83,33 +83,48 @@ log_debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 log_warn() { echo -e "\e[33m[FIGYELEM]\e[0m $1"; }
 log_dep()  { echo -e "\e[36m[FÜGGŐSÉG]\e[0m $1"; }
 
-# 2. YAY TELEPÍTÉSE (ha nincs)
-if ! command -v yay &> /dev/null; then
-    log_info "Yay telepítése (intelligens AUR helper)..."
-    cd /tmp
-    if git clone https://aur.archlinux.org/yay.git 2>/dev/null; then
-        cd yay
-        # Teljesen automatikus yay telepítés
-        yes | makepkg -si --noconfirm 2>/dev/null || {
-            log_warn "Alternatív yay telepítés..."
-            pacman -S --noconfirm go 2>/dev/null || true
-            if command -v go &> /dev/null; then
-                go install github.com/Jguer/yay@latest 2>/dev/null || true
-            fi
-        }
+# 2. YAY TELEPÍTÉSE ÉS KONFIGURÁLÁSA
+install_yay() {
+    if ! command -v yay &> /dev/null; then
+        log_info "Yay telepítése..."
         cd /tmp
-        rm -rf yay 2>/dev/null || true
+        if git clone https://aur.archlinux.org/yay.git 2>/dev/null; then
+            cd yay
+            # Teljesen automatikus yay telepítés
+            echo -e "y\ny\ny\n" | makepkg -si --noconfirm 2>&1 | grep -v "warning:" || {
+                log_warn "Alternatív yay telepítés..."
+                pacman -S --noconfirm go 2>/dev/null || true
+                if command -v go &> /dev/null; then
+                    go install github.com/Jguer/yay@latest 2>/dev/null || true
+                fi
+            }
+            cd /tmp
+            rm -rf yay 2>/dev/null || true
+        fi
+        cd "$REPO_ROOT"
     fi
-    cd "$REPO_ROOT"
-fi
+    
+    # Yay konfigurálása TELJESEN AUTOMATA módra
+    if command -v yay &> /dev/null; then
+        log_info "Yay konfigurálása automatikus módra..."
+        # Alap konfiguráció
+        yay -Y --gendb --noconfirm 2>/dev/null || true
+        yay -Y --devel --save --noconfirm 2>/dev/null || true
+        yay -Y --combinedupgrade --save --noconfirm 2>/dev/null || true
+        yay -Y --nocleanmenu --save --noconfirm 2>/dev/null || true
+        yay -Y --nodiffmenu --save --noconfirm 2>/dev/null || true
+        yay -Y --noeditmenu --save --noconfirm 2>/dev/null || true
+        yay -Y --removemake --save --noconfirm 2>/dev/null || true
+        yay -Y --upgrademenu --save --noconfirm 2>/dev/null || true
+        
+        # Provider választások előre beállítása
+        log_info "Provider beállítások..."
+        # Jack: válasszuk a jack2-t (1-es opció)
+        echo -e "1\n" | yay -S --noconfirm jack2 2>/dev/null || true
+    fi
+}
 
-# Yay konfigurálása nem interaktív módra
-if command -v yay &> /dev/null; then
-    log_info "Yay konfigurálása nem interaktív módra..."
-    yay -Y --gendb --noconfirm 2>/dev/null || true
-    yay -Y --devel --save --noconfirm 2>/dev/null || true
-    yay -Y --combinedupgrade --save --noconfirm 2>/dev/null || true
-fi
+install_yay
 
 # 3. SZERVER LISTA LEKÉRÉSE
 log_info "Szerver tartalmának lekérdezése..."
@@ -205,10 +220,12 @@ install_build_deps_intelligent() {
             makedepends_list+=("rust" "cargo")
             ;;
         qt5-styleplugins)
-            # qt5-styleplugins speciális kezelése - ne építsük a gtk2-t
             log_warn "qt5-styleplugins: kihagyjuk a gtk2 függőséget (már építve)"
-            # Távolítsuk el a gtk2-t a függőségekből
             depends_list=("${depends_list[@]/gtk2}")
+            ;;
+        simplescreenrecorder)
+            log_warn "simplescreenrecorder: jack -> jack2 konverzió"
+            depends_list=("${depends_list[@]/jack/jack2}")
             ;;
     esac
     
@@ -246,6 +263,11 @@ install_build_deps_intelligent() {
                 continue
             fi
             
+            # Provider konverziók
+            case "$clean_dep" in
+                jack) clean_dep="jack2" ;;  # jack -> jack2
+            esac
+            
             if ! pacman -Qi "$clean_dep" > /dev/null 2>&1; then
                 deps_to_install+=("$clean_dep")
             else
@@ -256,34 +278,49 @@ install_build_deps_intelligent() {
         if [ ${#deps_to_install[@]} -gt 0 ]; then
             log_dep "Telepítendő: ${deps_to_install[*]}"
             
-            # AUR csomagok esetén yay-t használunk
-            if [ "$is_aur" = "true" ]; then
-                # AUR helper használata - TELJESEN AUTOMATA
+            # Különbség tétel AUR és hivatalos csomagok között
+            local official_deps=()
+            local aur_deps=()
+            
+            for dep in "${deps_to_install[@]}"; do
+                # Ellenőrizzük, hogy hivatalos csomag-e
+                if pacman -Si "$dep" > /dev/null 2>&1; then
+                    official_deps+=("$dep")
+                else
+                    aur_deps+=("$dep")
+                fi
+            done
+            
+            # Hivatalos csomagok telepítése (PRIORITÁS)
+            if [ ${#official_deps[@]} -gt 0 ]; then
+                log_dep "Hivatalos csomagok telepítése: ${official_deps[*]}"
+                # Automatikus válasz a provider kérdésekre
+                for dep in "${official_deps[@]}"; do
+                    case "$dep" in
+                        jack2)
+                            log_dep "jack2 telepítése (auto válasz: 1)"
+                            echo -e "1\n" | sudo pacman -S --needed --noconfirm jack2 2>/dev/null || \
+                                log_warn "jack2 telepítése sikertelen"
+                            ;;
+                        *)
+                            sudo pacman -S --needed --noconfirm "$dep" 2>/dev/null || \
+                                log_warn "$dep telepítése sikertelen"
+                            ;;
+                    esac
+                done
+            fi
+            
+            # AUR csomagok telepítése (csak ha tényleg AUR)
+            if [ ${#aur_deps[@]} -gt 0 ]; then
+                log_dep "AUR csomagok telepítése: ${aur_deps[*]}"
                 if command -v yay > /dev/null 2>&1; then
-                    for dep in "${deps_to_install[@]}"; do
+                    for dep in "${aur_deps[@]}"; do
                         log_dep "AUR függőség: $dep"
-                        # Teljesen automatikus, nem kérdez
-                        yay -S --asdeps --needed --noconfirm --nocleanmenu --nodiffmenu --cleanafter "$dep" 2>/dev/null || \
+                        # Teljesen automatikus yay - minden kérdésre automatikus válasz
+                        echo -e "\n\n\n\n\n" | yay -S --asdeps --needed --noconfirm --nocleanmenu --nodiffmenu --noeditmenu --removemake --cleanafter "$dep" 2>/dev/null || \
                             log_warn "Nem sikerült telepíteni: $dep (esetleg nem AUR csomag?)"
                     done
                 fi
-            fi
-            
-            # Arch hivatalos csomagok telepítése
-            if pacman -Sp "${deps_to_install[@]}" > /dev/null 2>&1; then
-                sudo pacman -S --needed --noconfirm "${deps_to_install[@]}" 2>/dev/null || \
-                    log_warn "Egyes függőségek telepítése sikertelen"
-            else
-                # Ha nem hivatalos csomagok, próbáljuk AUR-ból
-                for dep in "${deps_to_install[@]}"; do
-                    if ! pacman -Si "$dep" > /dev/null 2>&1; then
-                        if command -v yay > /dev/null 2>&1; then
-                            log_dep "AUR-ból telepítés: $dep"
-                            # Teljesen automatikus
-                            yay -S --asdeps --needed --noconfirm --nocleanmenu --nodiffmenu --cleanafter "$dep" 2>/dev/null || true
-                        fi
-                    fi
-                done
             fi
         else
             log_dep "Minden függőség már telepítve van."
@@ -340,6 +377,42 @@ clone_aur_intelligent() {
     return 1
 }
 
+# Verzió ellenőrzés - megelőzi a dupla építést
+check_and_skip_early() {
+    local pkg="$1"
+    local pkg_dir="$2"
+    
+    cd "$pkg_dir" || return 1
+    
+    # Verzió kinyerése
+    local full_ver=""
+    local rel_ver=""
+    
+    if [ -f PKGBUILD ]; then
+        full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
+        rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
+    fi
+    
+    if [ -z "$full_ver" ]; then
+        full_ver="unknown"
+    fi
+    if [ -z "$rel_ver" ]; then
+        rel_ver="1"
+    fi
+    
+    local current_version="${full_ver}-${rel_ver}"
+    
+    # Korai skip logika - megelőzzük a teljes build-et
+    if [ "$current_version" != "unknown-1" ] && is_on_server "$pkg" "$current_version"; then
+        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN (korai skip)."
+        cd "$REPO_ROOT" || return 1
+        return 0
+    fi
+    
+    cd "$REPO_ROOT" || return 1
+    return 1
+}
+
 # Fő build funkció - TELJESEN AUTOMATA
 build_package_intelligent() {
     local pkg="$1"
@@ -369,6 +442,14 @@ build_package_intelligent() {
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
+        
+        # KORAI VERZIÓ ELLENŐRZÉS
+        if check_and_skip_early "$pkg" "$pkg_dir"; then
+            # Töröljük a klónozott mappát, mert nem kell
+            rm -rf "$pkg_dir" 2>/dev/null || true
+            cd "$REPO_ROOT" || return 1
+            return 0
+        fi
     else
         # Helyi csomag
         if [ ! -d "$pkg" ]; then 
@@ -376,13 +457,18 @@ build_package_intelligent() {
             return 1
         fi
         pkg_dir="$REPO_ROOT/$pkg"
+        
+        # KORAI VERZIÓ ELLENŐRZÉS
+        if check_and_skip_early "$pkg" "$pkg_dir"; then
+            return 0
+        fi
+        
         cd "$pkg" || return 1
     fi
     
-    # Speciális kezelés: ha már építettük a gtk2-t, ne építsük újra függőségként
+    # Speciális kezelés
     if [ "$pkg" = "qt5-styleplugins" ] && [ -f "$REPO_ROOT/$OUTPUT_DIR/gtk2"*.pkg.tar.* 2>/dev/null ]; then
         log_warn "qt5-styleplugins: gtk2 már építve, kihagyjuk a függőségépítést"
-        # Módosítsuk a PKGBUILD-ot, hogy ne függjön a gtk2-től
         if [ -f PKGBUILD ]; then
             sed -i 's/gtk2//g' PKGBUILD
             sed -i 's/'\''gtk2'\''//g' PKGBUILD
@@ -417,12 +503,11 @@ build_package_intelligent() {
         fi
     fi
     
-    # 3. VERZIÓ INFORMÁCIÓK
+    # 3. VERZIÓ INFORMÁCIÓK (már kinyertük korábban, de ellenőrizzük újra)
     local full_ver=""
     local rel_ver=""
     
     if [ -f PKGBUILD ]; then
-        # Kinyerjük a verziót a PKGBUILD-ből
         full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
         rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
     fi
@@ -436,9 +521,9 @@ build_package_intelligent() {
     
     local current_version="${full_ver}-${rel_ver}"
     
-    # 4. SKIP LOGIKA
+    # 4. FINOMABB SKIP LOGIKA
     if [ "$current_version" != "unknown-1" ] && is_on_server "$pkg" "$current_version"; then
-        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
+        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN (verzió ellenőrzés után)."
         cd "$REPO_ROOT" || return 1
         return 0
     fi
@@ -458,10 +543,9 @@ build_package_intelligent() {
         log_warn "Nagy csomag - időkorlát: $timeout_duration másodperc, teszt kihagyva"
     fi
     
-    # Nagyon nagy csomagok
-    if [[ "$pkg" == gtk2 ]]; then
-        timeout_duration=10800  # 3 óra GTK2-nek
-        log_warn "Nagyon nagy csomag (GTK2) - időkorlát: $timeout_duration másodperc"
+    if [[ "$pkg" == simplescreenrecorder ]]; then
+        timeout_duration=5400  # 1.5 óra
+        log_warn "simplescreenrecorder - időkorlát: $timeout_duration másodperc"
     fi
     
     # Build folyamat
@@ -478,32 +562,6 @@ build_package_intelligent() {
             fi
         done
         shopt -u nullglob
-        
-        # Git push (csak saját csomagoknál)
-        if [ "$is_aur" = "false" ] && [ "$pkg" != "gtk2" ]; then
-            log_info "Git repo frissítése..."
-            
-            if [ -f PKGBUILD ] && [ -f .SRCINFO ]; then
-                TEMP_GIT_DIR="/tmp/git_publish_$pkg"
-                rm -rf "$TEMP_GIT_DIR" 2>/dev/null || true
-                
-                if git clone "$SSH_REPO_URL" "$TEMP_GIT_DIR" 2>/dev/null; then
-                    mkdir -p "$TEMP_GIT_DIR/$pkg"
-                    cp PKGBUILD "$TEMP_GIT_DIR/$pkg/" 2>/dev/null
-                    cp .SRCINFO "$TEMP_GIT_DIR/$pkg/" 2>/dev/null
-                    cd "$TEMP_GIT_DIR" || continue
-                    
-                    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-                        git add "$pkg/PKGBUILD" "$pkg/.SRCINFO" 2>/dev/null
-                        git commit -m "Auto-update: $pkg to $current_version [skip ci]" 2>/dev/null
-                        git push 2>/dev/null && log_succ "Git push sikeres"
-                    fi
-                    
-                    cd "$pkg_dir" || return 1
-                    rm -rf "$TEMP_GIT_DIR" 2>/dev/null || true
-                fi
-            fi
-        fi
     else
         log_err "Build hiba: $pkg"
         
