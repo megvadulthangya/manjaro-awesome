@@ -89,19 +89,26 @@ if ! command -v yay &> /dev/null; then
     cd /tmp
     if git clone https://aur.archlinux.org/yay.git 2>/dev/null; then
         cd yay
-        if makepkg -si --noconfirm 2>/dev/null; then
-            log_succ "Yay telepítve."
-        else
+        # Teljesen automatikus yay telepítés
+        yes | makepkg -si --noconfirm 2>/dev/null || {
             log_warn "Alternatív yay telepítés..."
             pacman -S --noconfirm go 2>/dev/null || true
             if command -v go &> /dev/null; then
                 go install github.com/Jguer/yay@latest 2>/dev/null || true
             fi
-        fi
+        }
         cd /tmp
         rm -rf yay 2>/dev/null || true
     fi
     cd "$REPO_ROOT"
+fi
+
+# Yay konfigurálása nem interaktív módra
+if command -v yay &> /dev/null; then
+    log_info "Yay konfigurálása nem interaktív módra..."
+    yay -Y --gendb --noconfirm 2>/dev/null || true
+    yay -Y --devel --save --noconfirm 2>/dev/null || true
+    yay -Y --combinedupgrade --save --noconfirm 2>/dev/null || true
 fi
 
 # 3. SZERVER LISTA LEKÉRÉSE
@@ -197,6 +204,12 @@ install_build_deps_intelligent() {
         rust*|cargo*)
             makedepends_list+=("rust" "cargo")
             ;;
+        qt5-styleplugins)
+            # qt5-styleplugins speciális kezelése - ne építsük a gtk2-t
+            log_warn "qt5-styleplugins: kihagyjuk a gtk2 függőséget (már építve)"
+            # Távolítsuk el a gtk2-t a függőségekből
+            depends_list=("${depends_list[@]/gtk2}")
+            ;;
     esac
     
     # 3. Duplikációk eltávolítása
@@ -228,6 +241,11 @@ install_build_deps_intelligent() {
             local clean_dep
             clean_dep=$(echo "$dep" | sed 's/[<=>].*//')
             
+            # Üres string ellenőrzés
+            if [ -z "$clean_dep" ]; then
+                continue
+            fi
+            
             if ! pacman -Qi "$clean_dep" > /dev/null 2>&1; then
                 deps_to_install+=("$clean_dep")
             else
@@ -240,11 +258,12 @@ install_build_deps_intelligent() {
             
             # AUR csomagok esetén yay-t használunk
             if [ "$is_aur" = "true" ]; then
-                # AUR helper használata
+                # AUR helper használata - TELJESEN AUTOMATA
                 if command -v yay > /dev/null 2>&1; then
                     for dep in "${deps_to_install[@]}"; do
                         log_dep "AUR függőség: $dep"
-                        yay -S --asdeps --needed --noconfirm "$dep" 2>/dev/null || \
+                        # Teljesen automatikus, nem kérdez
+                        yay -S --asdeps --needed --noconfirm --nocleanmenu --nodiffmenu --cleanafter "$dep" 2>/dev/null || \
                             log_warn "Nem sikerült telepíteni: $dep (esetleg nem AUR csomag?)"
                     done
                 fi
@@ -260,7 +279,8 @@ install_build_deps_intelligent() {
                     if ! pacman -Si "$dep" > /dev/null 2>&1; then
                         if command -v yay > /dev/null 2>&1; then
                             log_dep "AUR-ból telepítés: $dep"
-                            yay -S --asdeps --needed --noconfirm "$dep" 2>/dev/null || true
+                            # Teljesen automatikus
+                            yay -S --asdeps --needed --noconfirm --nocleanmenu --nodiffmenu --cleanafter "$dep" 2>/dev/null || true
                         fi
                     fi
                 done
@@ -359,6 +379,17 @@ build_package_intelligent() {
         cd "$pkg" || return 1
     fi
     
+    # Speciális kezelés: ha már építettük a gtk2-t, ne építsük újra függőségként
+    if [ "$pkg" = "qt5-styleplugins" ] && [ -f "$REPO_ROOT/$OUTPUT_DIR/gtk2"*.pkg.tar.* 2>/dev/null ]; then
+        log_warn "qt5-styleplugins: gtk2 már építve, kihagyjuk a függőségépítést"
+        # Módosítsuk a PKGBUILD-ot, hogy ne függjön a gtk2-től
+        if [ -f PKGBUILD ]; then
+            sed -i 's/gtk2//g' PKGBUILD
+            sed -i 's/'\''gtk2'\''//g' PKGBUILD
+            sed -i 's/"gtk2"//g' PKGBUILD
+        fi
+    fi
+    
     # 1. INTELLIGENS FÜGGŐSÉG TELEPÍTÉS
     install_build_deps_intelligent "$pkg_dir" "$is_aur"
     
@@ -418,20 +449,27 @@ build_package_intelligent() {
     # Build flags intelligens beállítása
     local makepkg_flags="-si --noconfirm --clean"
     
-    # Nagy csomagoknál kihagyjuk a tesztet
+    # Nagy csomagoknál kihagyjuk a tesztet és növeljük az időkorlátot
+    local timeout_duration=3600  # 1 óra alapértelmezett
+    
     if [[ "$pkg" == *gtk* ]] || [[ "$pkg" == *qt* ]] || [[ "$pkg" == *chromium* ]]; then
         makepkg_flags="$makepkg_flags --nocheck"
-        log_warn "Nagy csomag - kihagyjuk az ellenőrzést"
+        timeout_duration=7200  # 2 óra nagy csomagoknak
+        log_warn "Nagy csomag - időkorlát: $timeout_duration másodperc, teszt kihagyva"
+    fi
+    
+    # Nagyon nagy csomagok
+    if [[ "$pkg" == gtk2 ]]; then
+        timeout_duration=10800  # 3 óra GTK2-nek
+        log_warn "Nagyon nagy csomag (GTK2) - időkorlát: $timeout_duration másodperc"
     fi
     
     # Build folyamat
     log_debug "makepkg futtatása: $makepkg_flags"
     
-    if timeout 3600 makepkg $makepkg_flags 2>&1 | tee /tmp/makepkg_build.log; then
+    if timeout $timeout_duration makepkg $makepkg_flags 2>&1 | tee /tmp/makepkg_build.log; then
         # Sikeres build
-        # FONTOS: A 2>/dev/null-t ki kell venni a for loopból!
-        # Helyette használjunk nullglob-ot vagy ellenőrizzük, hogy létezik-e fájl
-        shopt -s nullglob  # Ha nincs egyező fájl, a glob üres listát ad
+        shopt -s nullglob
         for pkgfile in *.pkg.tar.*; do
             if [ -f "$pkgfile" ]; then
                 mv "$pkgfile" "$REPO_ROOT/$OUTPUT_DIR/"
@@ -439,7 +477,7 @@ build_package_intelligent() {
                 echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
             fi
         done
-        shopt -u nullglob  # Visszaállítjuk
+        shopt -u nullglob
         
         # Git push (csak saját csomagoknál)
         if [ "$is_aur" = "false" ] && [ "$pkg" != "gtk2" ]; then
@@ -473,6 +511,12 @@ build_package_intelligent() {
         if grep -q "error:" /tmp/makepkg_build.log 2>/dev/null; then
             log_warn "Utolsó hibák:"
             grep -i "error:" /tmp/makepkg_build.log 2>/dev/null | tail -5
+        fi
+        
+        # Timeout ellenőrzés
+        if [ $? -eq 124 ]; then
+            log_err "BUILD TIMEOUT: $pkg túllépte az időkorlátot ($timeout_duration másodperc)"
+            log_warn "A csomag túl nagy/nem fejeződött be időben. Kihagyjuk."
         fi
     fi
     
