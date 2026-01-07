@@ -1,46 +1,82 @@
+#!/bin/bash
+
 # Maintainer: Gyöngyösi Gábor <gabor AT gshoots DOT hu>
-pkgname=gghelper-git  # -git suffix ajánlott fejlesztői csomagokhoz
-pkgver=r$(date +%Y%m%d).$(git ls-remote --heads origin master | cut -c1-7)
+_pkgname=gghelper
+pkgname=${_pkgname}-git
+pkgver=r0.0.0
 pkgrel=1
-pkgdesc="Git workflow assistant with GitHub Actions conflict resolution (Git version)"
+pkgdesc="Git workflow assistant with GitHub Actions conflict resolution"
 arch=('any')
 url="https://github.com/megvadulthangya/gghelper"
 license=('MIT')
 depends=('python' 'git')
 makedepends=('git')
+provides=("${_pkgname}")
+conflicts=("${_pkgname}")
 
-# Közvetlenül a git repo-ból
+# Git forrás - mindig a legújabbat szedi le
 source=("git+https://github.com/megvadulthangya/gghelper.git")
 sha256sums=('SKIP')
 
-# Verziószám a commit dátumából és hash-ből
 pkgver() {
-  cd "$srcdir/gghelper"
-  printf "%s.%s" "$(git log -1 --format='%cd' --date=format:'%Y%m%d' HEAD)" \
-  "$(git rev-parse --short HEAD)"
+  cd "$srcdir/$_pkgname"
+  
+  # Ha van git tag, akkor használjuk, különben commit szám + hash
+  if git describe --tags 2>/dev/null | grep -q '.'; then
+    # Tag formátum: v1.2.3 -> 1.2.3
+    git describe --tags | sed 's/^v//;s/-/./g'
+  else
+    # Nincs tag: r123.abc1234 formátum
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  fi
 }
 
 package() {
-  cd "$srcdir/gghelper"
+  cd "$srcdir/$_pkgname"
   
-  # Create directories
+  # Könyvtárak létrehozása
   install -dm755 "$pkgdir/usr/bin"
-  install -dm755 "$pkgdir/usr/share/gghelper"
+  install -dm755 "$pkgdir/usr/share/$_pkgname"
   install -dm755 "$pkgdir/usr/share/licenses/$pkgname"
   install -dm755 "$pkgdir/usr/share/doc/$pkgname"
   
-  # Install main script
-  install -Dm755 gghelper.py "$pkgdir/usr/share/gghelper/gghelper.py"
+  # Fő szkript telepítése
+  if [ -f "gghelper.py" ]; then
+    install -Dm755 gghelper.py "$pkgdir/usr/share/$_pkgname/gghelper.py"
+  fi
   
-  # Install bash wrapper
-  install -Dm755 gghelper "$pkgdir/usr/bin/gghelper"
+  # Wrapper script telepítése (ha létezik)
+  if [ -f "gghelper" ] && [ -x "gghelper" ]; then
+    install -Dm755 gghelper "$pkgdir/usr/bin/gghelper"
+  else
+    # Ha nincs wrapper, készítünk egyet
+    cat > "$pkgdir/usr/bin/gghelper" << 'EOF'
+#!/bin/bash
+exec python /usr/share/gghelper/gghelper.py "$@"
+EOF
+    chmod 755 "$pkgdir/usr/bin/gghelper"
+  fi
   
-  # Install documentation
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  # Symlink Python szkripthez
+  ln -sf "/usr/share/$_pkgname/gghelper.py" "$pkgdir/usr/bin/gghelper.py"
   
-  # Install license
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # Dokumentáció telepítése
+  if [ -f "README.md" ]; then
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  fi
   
-  # Create symlink for direct Python execution
-  ln -sf "/usr/share/gghelper/gghelper.py" "$pkgdir/usr/bin/gghelper.py"
+  # LICENSE telepítése
+  if [ -f "LICENSE" ]; then
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  fi
+  
+  # Egyéb fájlok (ha vannak)
+  for file in *.txt *.rst *.md LICENSE* COPYING*; do
+    if [ -f "$file" ] && [ "$file" != "README.md" ]; then
+      install -Dm644 "$file" "$pkgdir/usr/share/doc/$pkgname/"
+    fi
+  done
+  
+  # .git mappa törlése (ha véletlenül benne maradt)
+  rm -rf "$pkgdir/usr/share/$_pkgname/.git" 2>/dev/null || true
 }
