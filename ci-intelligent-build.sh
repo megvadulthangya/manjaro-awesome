@@ -9,32 +9,41 @@ git config --global --add safe.directory '*'
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
 
-# --- FIX SSH URL ---
+# --- SECRETS ÉS KONFIGURÁCIÓ ---
+# Ezeket a GitHub Secrets-ből kell betölteni
+# VPS_USER, VPS_HOST, GITHUB_TOKEN, SSH_PRIVATE_KEY
 SSH_REPO_URL="git@github.com:megvadulthangya/manjaro-awesome.git"
+GIT_HTTPS_URL="https://github.com/megvadulthangya/manjaro-awesome.git"
+
+# SSH kulcs beállítása GitHub-hoz
+mkdir -p ~/.ssh
+if [ -n "$SSH_PRIVATE_KEY" ]; then
+    echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    chmod 600 ~/.ssh/id_rsa
+fi
+
+# GitHub host hozzáadása ismert hosts-hoz
+ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 
 echo "[INTELLIGENT BUILD] Repo gyökér: $REPO_ROOT"
-echo "[INTELLIGENT BUILD] Push URL: $SSH_REPO_URL"
+echo "[INTELLIGENT BUILD] VPS: $VPS_USER@$VPS_HOST"
 
 # --- CSOMAGOK LISTÁJA ---
-# MÁR HELYI CSOMAGOKKÁ ÁTALAKÍTVA
 LOCAL_PACKAGES=(
-    "gghelper"
     "gtk2"
-    "awesome-freedesktop-git"    # Helyi - epoch problémás
-    "lain-git"                   # Helyi - epoch problémás
+    "awesome-freedesktop-git"
+    "lain-git"
     "awesome-rofi"
     "nordic-backgrounds"
     "awesome-copycats-manjaro"
     "i3lock-fancy-git"
-    "ttf-font-awesome-5"         # Helyi - gyakran frissül
+    "ttf-font-awesome-5"
     "nvidia-driver-assistant"
     "grayjay-bin"
-    # További helyi csomagok
-    "awesome-git"                # Helyi - epoch problémás
+    "awesome-git"
 )
 
 AUR_PACKAGES=(
-    # Csak stabil, ritkán frissülő AUR csomagok
     "libinput-gestures"
     "qt5-styleplugins"
     "urxvt-resize-font-git"
@@ -68,14 +77,17 @@ AUR_PACKAGES=(
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="built_packages"
+VERSION_TRACKING_DIR="version_tracking"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
+mkdir -p "$REPO_ROOT/$VERSION_TRACKING_DIR"
 
 # --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
+git config --global pull.rebase false
 
 # Logging functions
 log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
@@ -85,6 +97,7 @@ log_err()  { echo -e "\e[31m[HIBA]\e[0m $1"; }
 log_debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 log_warn() { echo -e "\e[33m[FIGYELEM]\e[0m $1"; }
 log_dep()  { echo -e "\e[36m[FÜGGŐSÉG]\e[0m $1"; }
+log_git()  { echo -e "\e[36m[GIT]\e[0m $1"; }
 
 # 2. YAY TELEPÍTÉSE ÉS KONFIGURÁLÁSA
 install_yay() {
@@ -127,6 +140,7 @@ log_info "Szerver tartalmának lekérdezése..."
 if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
     log_succ "Szerver lista letöltve."
 else
+    log_warn "Nem sikerült lekérni a listát! (De folytatjuk)"
     touch "$REPO_ROOT/remote_files.txt"
 fi
 
@@ -134,264 +148,129 @@ fi
 log_info "Adatbázis letöltése..."
 scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# Segédfüggvények
+# --- SEGÉDFÜGGVÉNYEK ---
 
-# JAVÍTOTT: Ellenőrzi, hogy a csomag már a szerveren van-e (epoch támogatással)
+# Ellenőrzi, hogy a csomag már a szerveren van-e
 is_on_server() {
     local pkgname="$1"
-    local full_version="$2"  # Epoch-ot is tartalmazó teljes verzió
+    local version="$2"
     
     # Többféle formátumot is elfogadunk
     # 1. Teljes verzióval (epoch:pkgver-pkgrel)
-    if grep -q "^${pkgname}-${full_version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
+    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
         return 0
     fi
     
-    # 2. Ha a full_version tartalmaz epoch-ot, próbáljuk anélkül is
-    if [[ "$full_version" == *:* ]]; then
-        local version_without_epoch="${full_version#*:}"  # Eltávolítjuk az epoch részt
+    # 2. Ha a version tartalmaz epoch-ot, próbáljuk anélkül is
+    if [[ "$version" == *:* ]]; then
+        local version_without_epoch="${version#*:}"
         if grep -q "^${pkgname}-${version_without_epoch}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
             return 0
         fi
     fi
     
     # 3. Próbáljuk meg fordítva: ha nincs epoch, de a szerveren van
-    if [[ "$full_version" != *:* ]] && grep -q "^${pkgname}-[0-9]*:${full_version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
+    if [[ "$version" != *:* ]] && grep -q "^${pkgname}-[0-9]*:${version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
         return 0
     fi
     
     return 1
 }
 
-# Intelligens függőség felismerő és telepítő
-install_build_deps_intelligent() {
+# Verzió kinyerése PKGBUILD-ból
+extract_version_from_pkgbuild() {
     local pkg_dir="$1"
-    local is_aur="$2"
-    
-    log_dep "Függőségek analízise: $(basename "$pkg_dir")"
-    
     cd "$pkg_dir" || return 1
     
-    # 1. Kinyerjük a függőségeket a PKGBUILD-ből
-    local depends_list=()
-    local makedepends_list=()
-    local checkdepends_list=()
-    
-    if [ -f PKGBUILD ]; then
-        # Source the PKGBUILD in a controlled way
-        {
-            # shellcheck disable=SC1091
-            source PKGBUILD > /dev/null 2>&1 || true
-            
-            # Függőségek összegyűjtése
-            if [ -n "${depends[*]}" ]; then
-                depends_list+=("${depends[@]}")
-            fi
-            
-            if [ -n "${makedepends[*]}" ]; then
-                makedepends_list+=("${makedepends[@]}")
-            fi
-            
-            if [ -n "${checkdepends[*]}" ]; then
-                checkdepends_list+=("${checkdepends[@]}")
-            fi
-        } 
-        
-        # Alternatív módszer: makepkg --printsrcinfo használata
-        if command -v makepkg > /dev/null 2>&1; then
-            if makepkg --printsrcinfo 2>/dev/null > /tmp/.srcinfo; then
-                # depends kinyerése
-                local srcinfo_depends
-                srcinfo_depends=$(grep -E '^\s*depends\s*=' /tmp/.srcinfo 2>/dev/null | sed 's/^.*=\s*//' | tr '\n' ' ')
-                local srcinfo_makedepends
-                srcinfo_makedepends=$(grep -E '^\s*makedepends\s*=' /tmp/.srcinfo 2>/dev/null | sed 's/^.*=\s*//' | tr '\n' ' ')
-                
-                if [ -n "$srcinfo_depends" ]; then
-                    # shellcheck disable=SC2206
-                    depends_list+=($srcinfo_depends)
-                fi
-                if [ -n "$srcinfo_makedepends" ]; then
-                    # shellcheck disable=SC2206
-                    makedepends_list+=($srcinfo_makedepends)
-                fi
-            fi
-        fi
-    fi
-    
-    # 2. Egyedi függőség-kezelés ismert problémás csomagokhoz
-    local pkg_name
-    pkg_name=$(basename "$pkg_dir")
-    case "$pkg_name" in
-        gtk2)
-            makedepends_list+=("gtk-doc" "docbook-xsl" "libxslt" "gobject-introspection")
-            ;;
-        awesome-git|awesome-freedesktop-git|lain-git)
-            # "lgi" probléma kezelése
-            makedepends_list=($(echo "${makedepends_list[@]}" | tr ' ' '\n' | grep -v "^lgi$" | tr '\n' ' '))
-            depends_list=($(echo "${depends_list[@]}" | tr ' ' '\n' | grep -v "^lgi$" | tr '\n' ' '))
-            ;;
-        qt5-styleplugins)
-            log_warn "qt5-styleplugins: kihagyjuk a gtk2 függőséget (már építve)"
-            depends_list=("${depends_list[@]/gtk2}")
-            ;;
-    esac
-    
-    # 3. Duplikációk eltávolítása
-    if [ ${#depends_list[@]} -gt 0 ]; then
-        depends_list=($(printf "%s\n" "${depends_list[@]}" | sort -u))
-    fi
-    if [ ${#makedepends_list[@]} -gt 0 ]; then
-        makedepends_list=($(printf "%s\n" "${makedepends_list[@]}" | sort -u))
-    fi
-    
-    # 4. Logoljuk a talált függőségeket
-    if [ ${#depends_list[@]} -gt 0 ]; then
-        log_dep "Depends: ${depends_list[*]}"
-    fi
-    if [ ${#makedepends_list[@]} -gt 0 ]; then
-        log_dep "Makedepends: ${makedepends_list[*]}"
-    fi
-    
-    # 5. Telepítjük a függőségeket
-    local all_deps=("${depends_list[@]}" "${makedepends_list[@]}")
-    
-    if [ ${#all_deps[@]} -gt 0 ]; then
-        log_dep "Függőségek telepítése..."
-        
-        # Csak azok a csomagok, amik még nincsenek telepítve
-        local deps_to_install=()
-        for dep in "${all_deps[@]}"; do
-            # Tisztítjuk a függőség nevet (eltávolítjuk a >, <, = jeleket)
-            local clean_dep
-            clean_dep=$(echo "$dep" | sed 's/[<=>].*//')
-            
-            # Üres string ellenőrzés
-            if [ -z "$clean_dep" ]; then
-                continue
-            fi
-            
-            # Provider konverziók
-            case "$clean_dep" in
-                jack) clean_dep="jack2" ;;  # jack -> jack2
-                lgi) clean_dep="lua-lgi" ;; # lgi -> lua-lgi
-            esac
-            
-            if ! pacman -Qi "$clean_dep" > /dev/null 2>&1; then
-                deps_to_install+=("$clean_dep")
-            else
-                log_debug "Már telepítve: $clean_dep"
-            fi
-        done
-        
-        if [ ${#deps_to_install[@]} -gt 0 ]; then
-            log_dep "Telepítendő: ${deps_to_install[*]}"
-            
-            # Automatikus pacman telepítés
-            echo -e "y\ny\ny\ny\ny\ny\ny\ny\ny\ny\n" | sudo pacman -S --needed --noconfirm "${deps_to_install[@]}" 2>/dev/null || \
-                log_warn "Egyes függőségek telepítése sikertelen"
-        else
-            log_dep "Minden függőség már telepítve van."
-        fi
-    else
-        log_dep "Nincsenek explicit függőségek."
-    fi
-    
-    # 6. Automatikus build-eszközök telepítése
-    log_dep "Build eszközök ellenőrzése..."
-    local build_tools=("make" "gcc" "pkg-config" "autoconf" "automake" "libtool" "cmake" "meson" "ninja")
-    local missing_tools=()
-    
-    for tool in "${build_tools[@]}"; do
-        if ! command -v "$tool" > /dev/null 2>&1; then
-            missing_tools+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        log_dep "Hiányzó build eszközök: ${missing_tools[*]}"
-        echo -e "y\n" | sudo pacman -S --needed --noconfirm "${missing_tools[@]}" 2>/dev/null || true
-    fi
-    
-    cd - > /dev/null || return 1
-}
-
-# Intelligens AUR klónozó (javított)
-clone_aur_intelligent() {
-    local pkg="$1"
-    local max_retries=2
-    
-    for attempt in $(seq 1 "$max_retries"); do
-        log_debug "AUR klónozás ($attempt/$max_retries): $pkg"
-        
-        # 1. Próbáljuk a fő AUR URL-t
-        if git clone "https://aur.archlinux.org/$pkg.git" > /dev/null 2>&1; then
-            return 0
-        fi
-        
-        # 2. Próbáljuk yay-t (ha van)
-        if command -v yay > /dev/null 2>&1; then
-            log_debug "Yay használata AUR csomaghoz: $pkg"
-            if yay -G "$pkg" > /dev/null 2>&1; then
-                return 0
-            fi
-        fi
-        
-        if [ "$attempt" -lt "$max_retries" ]; then
-            sleep 5
-        fi
-    done
-    
-    return 1
-}
-
-# Verzió ellenőrzés - megelőzi a dupla építést
-check_and_skip_early() {
-    local pkg="$1"
-    local pkg_dir="$2"
-    
-    cd "$pkg_dir" || return 1
-    
-    # Verzió kinyerése - JAVÍTVA: epoch támogatással
-    local full_ver=""
-    local rel_ver=""
-    local epoch_val=""
+    local epoch_val="" pkgver_val="" pkgrel_val="1"
     
     if [ -f PKGBUILD ]; then
         # Kinyerjük az epoch-ot
         epoch_val=$(grep '^epoch=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
         
         # Kinyerjük a verziót
-        full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
-        rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
-    fi
-    
-    if [ -z "$full_ver" ]; then
-        full_ver="unknown"
-    fi
-    if [ -z "$rel_ver" ]; then
-        rel_ver="1"
+        pkgver_val=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
+        pkgrel_val=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
+        
+        # Ha üres valamelyik, próbáljuk source-olni
+        if [ -z "$pkgver_val" ]; then
+            # shellcheck disable=SC1091
+            source PKGBUILD 2>/dev/null || true
+            epoch_val="${epoch:-}"
+            pkgver_val="${pkgver:-}"
+            pkgrel_val="${pkgrel:-1}"
+        fi
     fi
     
     # Epoch kezelése
-    local current_version
     if [ -n "$epoch_val" ] && [ "$epoch_val" != "" ]; then
-        current_version="${epoch_val}:${full_ver}-${rel_ver}"
+        echo "${epoch_val}:${pkgver_val}-${pkgrel_val}"
     else
-        current_version="${full_ver}-${rel_ver}"
+        echo "${pkgver_val}-${pkgrel_val}"
     fi
     
-    # Korai skip logika - megelőzzük a teljes build-et
-    if [ "$current_version" != "unknown-1" ] && is_on_server "$pkg" "$current_version"; then
-        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN (korai skip)."
-        cd "$REPO_ROOT" || return 1
-        return 0
-    fi
-    
-    cd "$REPO_ROOT" || return 1
-    return 1
+    cd - > /dev/null || return 1
 }
 
-# Fő build funkció - TELJESEN AUTOMATA
+# Verzió mentése előtte-utána
+save_version() {
+    local pkg="$1"
+    local pkg_dir="$2"
+    local suffix="$3"
+    
+    local version_file="$REPO_ROOT/$VERSION_TRACKING_DIR/${pkg}_${suffix}.version"
+    extract_version_from_pkgbuild "$pkg_dir" > "$version_file"
+    
+    local version_content
+    version_content=$(cat "$version_file" 2>/dev/null || echo "N/A")
+    log_debug "Verzió mentve ($suffix): $pkg -> $version_content"
+}
+
+# Visszaírja a verziót a PKGBUILD-be, ha változott
+update_pkgbuild_if_changed() {
+    local pkg="$1"
+    local pkg_dir="$2"
+    
+    local before_file="$REPO_ROOT/$VERSION_TRACKING_DIR/${pkg}_before.version"
+    local after_file="$REPO_ROOT/$VERSION_TRACKING_DIR/${pkg}_after.version"
+    
+    if [ ! -f "$before_file" ] || [ ! -f "$after_file" ]; then
+        log_warn "Verziófájlok hiányoznak: $pkg"
+        return 1
+    fi
+    
+    local before_version after_version
+    before_version=$(cat "$before_file")
+    after_version=$(cat "$after_file")
+    
+    if [ "$before_version" != "$after_version" ]; then
+        log_info "VERZIÓVÁLTOZÁS: $pkg"
+        log_info "  Régi: $before_version"
+        log_info "  Új:   $after_version"
+        
+        cd "$pkg_dir" || return 1
+        
+        # Frissítjük a .SRCINFO fájlt
+        if [ -f PKGBUILD ]; then
+            makepkg --printsrcinfo > .SRCINFO 2>/dev/null || true
+            log_succ ".SRCINFO frissítve: $pkg"
+            
+            # Git-hez hozzáadjuk
+            git add PKGBUILD .SRCINFO 2>/dev/null || true
+            
+            # Verzióváltozás naplózása
+            echo "$pkg: $before_version -> $after_version" >> "$REPO_ROOT/version_changes.txt"
+        fi
+        
+        cd - > /dev/null || return 1
+        return 0
+    else
+        log_skip "Verzió változatlan: $pkg"
+        return 1
+    fi
+}
+
+# Intelligens build függvény - verzió követéssel
 build_package_intelligent() {
     local pkg="$1"
     local is_aur="$2"
@@ -413,21 +292,15 @@ build_package_intelligent() {
             rm -rf "$pkg"
         fi
         
-        if ! clone_aur_intelligent "$pkg"; then
+        log_info "AUR klónozás: $pkg"
+        if ! git clone "https://aur.archlinux.org/$pkg.git" 2>/dev/null; then
             log_err "AUR klónozás sikertelen: $pkg"
             cd "$REPO_ROOT" || return 1
             return 1
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
-        
-        # KORAI VERZIÓ ELLENŐRZÉS
-        if check_and_skip_early "$pkg" "$pkg_dir"; then
-            # Töröljük a klónozott mappát, mert nem kell
-            rm -rf "$pkg_dir" 2>/dev/null || true
-            cd "$REPO_ROOT" || return 1
-            return 0
-        fi
+        cd "$pkg" || return 1
     else
         # Helyi csomag
         if [ ! -d "$pkg" ]; then 
@@ -435,107 +308,69 @@ build_package_intelligent() {
             return 1
         fi
         pkg_dir="$REPO_ROOT/$pkg"
-        
-        # KORAI VERZIÓ ELLENŐRZÉS
-        if check_and_skip_early "$pkg" "$pkg_dir"; then
-            return 0
-        fi
-        
         cd "$pkg" || return 1
-    fi
-    
-    # Speciális kezelés
-    if [ "$pkg" = "qt5-styleplugins" ] && [ -f "$REPO_ROOT/$OUTPUT_DIR/gtk2"*.pkg.tar.* 2>/dev/null ]; then
-        log_warn "qt5-styleplugins: gtk2 már építve, kihagyjuk a függőségépítést"
-        if [ -f PKGBUILD ]; then
-            sed -i 's/gtk2//g' PKGBUILD
-            sed -i 's/'\''gtk2'\''//g' PKGBUILD
-            sed -i 's/"gtk2"//g' PKGBUILD
-        fi
-    fi
-    
-    # 1. INTELLIGENS FÜGGŐSÉG TELEPÍTÉS
-    install_build_deps_intelligent "$pkg_dir" "$is_aur"
-    
-    cd "$pkg_dir" || return 1
-    
-    # 2. FORRÁS ELLENŐRZÉS
-    log_debug "Források ellenőrzése..."
-    if ! makepkg -od --noconfirm 2>&1 | tee /tmp/makepkg_src.log; then
-        log_err "Forrás letöltési/verzió hiba: $pkg"
         
-        # Speciális hibakezelés
-        if grep -q "gtk-doc.make" /tmp/makepkg_src.log; then
-            log_warn "GTK-DOC hiba - telepítjük a hiányzó csomagokat..."
-            sudo pacman -S --noconfirm gtk-doc docbook-xsl libxslt 2>/dev/null || true
-            # Újrapróbáljuk
-            if makepkg -od --noconfirm 2>&1; then
-                log_succ "Most már működik!"
-            else
-                cd "$REPO_ROOT" || return 1
-                return 1
-            fi
-        else
-            cd "$REPO_ROOT" || return 1
-            return 1
-        fi
+        # ELŐTTE: Mentjük az eredeti verziót
+        save_version "$pkg" "$pkg_dir" "before"
     fi
     
-    # 3. VERZIÓ INFORMÁCIÓK - JAVÍTVA: epoch támogatással
-    local full_ver=""
-    local rel_ver=""
-    local epoch_val=""
-    
-    if [ -f PKGBUILD ]; then
-        # Kinyerjük az epoch-ot
-        epoch_val=$(grep '^epoch=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
-        
-        # Kinyerjük a verziót
-        full_ver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "")
-        rel_ver=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d "'\"" || echo "1")
-    fi
-    
-    if [ -z "$full_ver" ]; then
-        full_ver="unknown"
-    fi
-    if [ -z "$rel_ver" ]; then
-        rel_ver="1"
-    fi
-    
-    # Epoch kezelése
+    # Verzió ellenőrzés (korai skip)
     local current_version
-    if [ -n "$epoch_val" ] && [ "$epoch_val" != "" ]; then
-        current_version="${epoch_val}:${full_ver}-${rel_ver}"
-    else
-        current_version="${full_ver}-${rel_ver}"
-    fi
+    current_version=$(extract_version_from_pkgbuild "$pkg_dir")
     
-    # 4. FINOMABB SKIP LOGIKA
-    if [ "$current_version" != "unknown-1" ] && is_on_server "$pkg" "$current_version"; then
-        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN (verzió ellenőrzés után)."
-        cd "$REPO_ROOT" || return 1
+    if [ "$current_version" != "N/A" ] && [ "$current_version" != "-1" ] && is_on_server "$pkg" "$current_version"; then
+        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
+        if [ "$is_aur" = "true" ]; then
+            cd "$REPO_ROOT"
+            rm -rf "build_aur/$pkg" 2>/dev/null || true
+        else
+            cd "$REPO_ROOT"
+        fi
         return 0
     fi
     
-    # 5. ÉPÍTÉS
-    log_info "Építés: $pkg ($current_version)"
-    
-    # Build flags intelligens beállítása
-    local makepkg_flags="-si --noconfirm --clean"
-    
-    # Nagy csomagoknál kihagyjuk a tesztet
-    local timeout_duration=3600
-    
-    if [[ "$pkg" == *gtk* ]] || [[ "$pkg" == *qt* ]]; then
-        makepkg_flags="$makepkg_flags --nocheck"
-        timeout_duration=7200
-        log_warn "Nagy csomag - időkorlát: $timeout_duration másodperc"
+    # Függőségek telepítése
+    log_dep "Függőségek ellenőrzése..."
+    if [ "$is_aur" = "true" ]; then
+        # AUR csomag függőségei yay-vel
+        yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo 2>/dev/null | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//' | tr '\n' ' ') 2>/dev/null || true
+    else
+        # Helyi csomag függőségei
+        if [ -f PKGBUILD ]; then
+            # shellcheck disable=SC1091
+            source PKGBUILD 2>/dev/null || true
+            local all_deps=("${depends[@]}" "${makedepends[@]}")
+            if [ ${#all_deps[@]} -gt 0 ]; then
+                log_dep "Telepítendő függőségek: ${all_deps[*]}"
+                for dep in "${all_deps[@]}"; do
+                    # Tisztítjuk a függőség nevet
+                    local clean_dep
+                    clean_dep=$(echo "$dep" | sed 's/[<=>].*//')
+                    if [ -n "$clean_dep" ] && ! pacman -Qi "$clean_dep" > /dev/null 2>&1; then
+                        sudo pacman -S --noconfirm "$clean_dep" 2>/dev/null || true
+                    fi
+                done
+            fi
+        fi
     fi
     
-    # Build folyamat
-    log_debug "makepkg futtatása: $makepkg_flags"
+    # Forrás letöltés ellenőrzése
+    log_debug "Források letöltése..."
+    if ! makepkg -od --noconfirm 2>&1; then
+        log_err "Forrás letöltési hiba: $pkg"
+        if [ "$is_aur" = "true" ]; then
+            cd "$REPO_ROOT"
+            rm -rf "build_aur/$pkg" 2>/dev/null || true
+        else
+            cd "$REPO_ROOT"
+        fi
+        return 1
+    fi
     
-    if timeout $timeout_duration makepkg $makepkg_flags 2>&1 | tee /tmp/makepkg_build.log; then
+    # Építés
+    log_info "Építés: $pkg ($current_version)"
+    
+    if makepkg -si --noconfirm --clean --nocheck 2>&1; then
         # Sikeres build
         shopt -s nullglob
         for pkgfile in *.pkg.tar.*; do
@@ -546,14 +381,14 @@ build_package_intelligent() {
             fi
         done
         shopt -u nullglob
+        
+        # UTÁNA: Helyi csomagoknál mentjük az új verziót és frissítjük
+        if [ "$is_aur" = "false" ]; then
+            save_version "$pkg" "$pkg_dir" "after"
+            update_pkgbuild_if_changed "$pkg" "$pkg_dir"
+        fi
     else
         log_err "Build hiba: $pkg"
-        
-        # Timeout ellenőrzés
-        if [ $? -eq 124 ]; then
-            log_err "BUILD TIMEOUT: $pkg túllépte az időkorlátot"
-            log_warn "A csomag túl nagy/nem fejeződött be időben. Kihagyjuk."
-        fi
     fi
     
     cd "$REPO_ROOT" || return 1
@@ -564,6 +399,58 @@ build_package_intelligent() {
     fi
 }
 
+# --- GIT PUSH FUNKCIÓ (javított) ---
+git_push_changes() {
+    log_git "Git változások ellenőrzése..."
+    
+    cd "$REPO_ROOT" || return 1
+    
+    # Ellenőrizzük, van-e változás
+    if ! git status --porcelain | grep -q "."; then
+        log_git "Nincs változás a git repository-ban."
+        return 0
+    fi
+    
+    log_git "Változások észlelve:"
+    git status --porcelain
+    
+    # Összegyűjtjük a commit üzenetet
+    local commit_message="Auto-update: PKGBUILD version updates"
+    
+    if [ -s "$REPO_ROOT/version_changes.txt" ]; then
+        commit_message="$commit_message\n\n$(cat "$REPO_ROOT/version_changes.txt")"
+    fi
+    
+    # Hozzáadjuk az összes változást
+    git add .
+    
+    # Commit
+    log_git "Commit készítése..."
+    git commit -m "$commit_message"
+    
+    # Próbáljuk először HTTPS-el (ha van GITHUB_TOKEN)
+    if [ -n "$GITHUB_TOKEN" ]; then
+        log_git "Push HTTPS-el (GITHUB_TOKEN)..."
+        git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/megvadulthangya/manjaro-awesome.git"
+        if git push origin main 2>/dev/null; then
+            log_succ "Git push sikeres (HTTPS)!"
+            return 0
+        fi
+    fi
+    
+    # Ha HTTPS nem működik, próbáljuk SSH-val
+    log_git "Push SSH-val..."
+    git remote set-url origin "$SSH_REPO_URL"
+    if git push origin main 2>/dev/null; then
+        log_succ "Git push sikeres (SSH)!"
+        return 0
+    fi
+    
+    # Ha mindkettő sikertelen
+    log_err "Git push sikertelen mindkét módszerrel!"
+    return 1
+}
+
 # ================================
 # FŐ FUTTATÁS
 # ================================
@@ -571,6 +458,10 @@ build_package_intelligent() {
 log_info "=== INTELLIGENS BUILD RENDSZER ==="
 log_info "Kezdés: $(date)"
 log_info "Összes csomag: $(( ${#LOCAL_PACKAGES[@]} + ${#AUR_PACKAGES[@]} ))"
+
+# Verzióváltozások fájl inicializálása
+rm -f "$REPO_ROOT/version_changes.txt"
+touch "$REPO_ROOT/version_changes.txt"
 
 # AUR csomagok
 log_info "--- AUR CSOMAGOK (${#AUR_PACKAGES[@]}) ---"
@@ -600,6 +491,9 @@ shopt -u nullglob
 
 if [ ${#pkg_files[@]} -eq 0 ]; then
     log_succ "Nincs új csomag - minden naprakész!"
+    
+    # Mégis lehetnek PKGBUILD változások (verzió update nélkül is)
+    git_push_changes
     exit 0
 fi
 
@@ -617,13 +511,14 @@ else
     repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.* 2>/dev/null || log_err "repo-add hiba"
 fi
 
-# Feltöltés
+# Feltöltés a szerverre
 log_info "Feltöltés a szerverre..."
 cd "$REPO_ROOT" || exit 1
 
 if scp $SSH_OPTS "$OUTPUT_DIR"/* "$VPS_USER@$VPS_HOST:$REMOTE_DIR/" 2>/dev/null; then
     log_succ "Feltöltés sikeres!"
 else
+    # Második próbálkozás
     sleep 3
     if scp $SSH_OPTS "$OUTPUT_DIR"/* "$VPS_USER@$VPS_HOST:$REMOTE_DIR/" 2>/dev/null; then
         log_succ "Második próbálkozás sikeres!"
@@ -633,14 +528,21 @@ else
     fi
 fi
 
-# Takarítás
+# Régi csomagok takarítása a szerveren
 if [ -f packages_to_clean.txt ] && [ -s packages_to_clean.txt ]; then
-    log_info "Régi csomagok takarítása..."
+    log_info "Régi csomagok takarítása a szerveren..."
     while read -r pkg_to_clean || [ -n "$pkg_to_clean" ]; do
         ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" \
             "cd $REMOTE_DIR && ls -t ${pkg_to_clean}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f" 2>/dev/null || true
     done < packages_to_clean.txt
 fi
+
+# ================================
+# GIT PUSH A VÁLTOZÁSOKHOZ
+# ================================
+
+log_info "=== GIT VÁLTOZÁSOK PUSH ==="
+git_push_changes
 
 log_info "========================================"
 log_succ "INTELLIGENS BUILD RENDSZER SIKERESEN BEFEJEZVE!"
@@ -651,4 +553,10 @@ shopt -s nullglob
 pkg_count=("$OUTPUT_DIR"/*.pkg.tar.*)
 shopt -u nullglob
 log_info "  - Sikeresen épített csomagok: ${#pkg_count[@]}"
+if [ -s "$REPO_ROOT/version_changes.txt" ]; then
+    log_info "  - Frissített PKGBUILD-ok:"
+    cat "$REPO_ROOT/version_changes.txt" | while read -r line; do
+        log_info "    * $line"
+    done
+fi
 log_info "========================================"
