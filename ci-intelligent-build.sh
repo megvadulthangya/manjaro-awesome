@@ -39,7 +39,7 @@ AUR_PACKAGES=(
     "find-the-command"
     "p7zip-gui"
     "qownnotes"
-    "xorg-font-utils"  # KIHAGYVA: valószínűleg nem elérhető az AUR-ban
+    # "xorg-font-utils"  # KIHAGYVA: nem elérhető az AUR-ban
     "xnviewmp"
     "simplescreenrecorder"
     "gtkhash-thunar"
@@ -70,6 +70,7 @@ ok() { echo -e "\e[32m[OK]\e[0m $1"; }
 warn() { echo -e "\e[33m[WARN]\e[0m $1"; }
 error() { echo -e "\e[31m[ERROR]\e[0m $1"; }
 skip() { echo -e "\e[33m[SKIP]\e[0m $1"; }
+debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 
 # 1. YAY TELEPÍTÉS HA KELL
 if ! command -v yay &> /dev/null; then
@@ -84,10 +85,19 @@ if ! command -v yay &> /dev/null; then
     cd "$REPO_ROOT"
 fi
 
-# 2. SZERVER LISTA LEKÉRÉSE
+# 2. SZERVER LISTA LEKÉRÉSE - DEBUG INFÓVAL
 info "Szerver tartalmának lekérdezése..."
-if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "find $REMOTE_DIR -name '*.pkg.tar.*' -printf '%f\n' 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
+if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "find $REMOTE_DIR -name '*.pkg.tar.*' -type f -printf '%f\n' 2>/dev/null | sort" > "$REPO_ROOT/remote_files.txt"; then
     ok "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_files.txt") fájl)."
+    # Debug: mutassunk néhány fájlnevet
+    debug "Első 5 fájl a szerveren:"
+    head -5 "$REPO_ROOT/remote_files.txt" | while read -r line; do
+        debug "  $line"
+    done
+    debug "Utolsó 5 fájl a szerveren:"
+    tail -5 "$REPO_ROOT/remote_files.txt" | while read -r line; do
+        debug "  $line"
+    done
 else
     warn "Nem sikerült lekérni a listát"
     touch "$REPO_ROOT/remote_files.txt"
@@ -96,6 +106,24 @@ fi
 # 3. DB LETÖLTÉS
 info "Adatbázis letöltése..."
 scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+
+# --- DEBUG FUNKCIÓ: Ellenőrzi, hogy tényleg ott van-e a csomag ---
+debug_check_package_on_server() {
+    local pkgname="$1"
+    
+    # Egyszerű grep
+    if grep -q "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
+        debug "  ✅ $pkgname TALÁLHATÓ a szerveren"
+        # Mutassuk meg a találatot
+        local match
+        match=$(grep "^${pkgname}-" "$REPO_ROOT/remote_files.txt" | head -1)
+        debug "     Találat: $match"
+        return 0
+    else
+        debug "  ❌ $pkgname NEM található a szerveren"
+        return 1
+    fi
+}
 
 # --- HASH TRACKING ---
 get_package_hash() {
@@ -138,13 +166,31 @@ save_package_hash() {
     echo "${pkg}:${hash}" >> "$hash_file"
 }
 
+# --- JAVÍTOTT: Ellenőrzi, hogy van-e a csomagnak bármilyen verziója a szerveren ---
 is_any_version_on_server() {
     local pkgname="$1"
-    grep -q "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null
+    
+    # Üres fájl ellenőrzés
+    if [ ! -s "$REPO_ROOT/remote_files.txt" ]; then
+        debug "  Üres a remote_files.txt fájl"
+        return 1
+    fi
+    
+    # Debug: számoljuk meg, hány találat van
+    local match_count
+    match_count=$(grep -c "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null || echo 0)
+    
+    if [ "$match_count" -gt 0 ]; then
+        debug "  $pkgname: $match_count találat"
+        return 0
+    else
+        debug "  $pkgname: NINCS találat"
+        return 1
+    fi
 }
 
-# --- BUILD FUNKCIÓ - JAVÍTOTT ---
-build_package_final() {
+# --- BUILD FUNKCIÓ - DEBUG INFÓVAL ---
+build_package_with_debug() {
     local pkg="$1"
     local is_aur="$2"
     
@@ -152,11 +198,14 @@ build_package_final() {
     info "Csomag: $pkg"
     info "========================================"
     
-    # SKIP ha már a szerveren van
+    # DEBUG: Ellenőrizzük, hogy tényleg ott van-e
+    debug "Ellenőrzés: $pkg a szerveren?"
     if is_any_version_on_server "$pkg"; then
         skip "$pkg MÁR A SZERVEREN VAN - SKIP"
         return 0
     fi
+    
+    info "$pkg NINCS A SZERVEREN - ÉPÍTÉS"
     
     local pkg_dir=""
     local current_hash=""
@@ -167,12 +216,12 @@ build_package_final() {
     # AUR vagy helyi?
     if [ "$is_aur" = "true" ]; then
         mkdir -p "$REPO_ROOT/build_aur"
-        cd "$REPO_ROOT/build_aur" 2>/dev/null || return 0
+        cd "$REPO_ROOT/build_aur" 2>/dev/null || { warn "Nem lehet build_aur mappába menni"; return 0; }
         
         rm -rf "$pkg" 2>/dev/null
         info "AUR klónozás: $pkg"
         
-        # Próbáljuk klónozni, de ha sikertelen, akkor skip
+        # Próbáljuk klónozni
         if ! git clone "https://aur.archlinux.org/$pkg.git" 2>/dev/null; then
             error "AUR klónozás sikertelen: $pkg (nincs az AUR-ban?)"
             cd "$REPO_ROOT"
@@ -180,7 +229,7 @@ build_package_final() {
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
-        cd "$pkg" 2>/dev/null || { cd "$REPO_ROOT"; return 0; }
+        cd "$pkg" 2>/dev/null || { error "Nem lehet a $pkg mappába menni"; cd "$REPO_ROOT"; return 0; }
         
         # Ellenőrizzük, hogy van-e PKGBUILD
         if [ ! -f PKGBUILD ]; then
@@ -196,13 +245,14 @@ build_package_final() {
             return 0
         fi
         pkg_dir="$REPO_ROOT/$pkg"
-        cd "$pkg_dir" 2>/dev/null || return 0
+        cd "$pkg_dir" 2>/dev/null || { warn "Nem lehet a $pkg mappába menni"; return 0; }
     fi
     
     # Hash számítás
     current_hash=$(get_package_hash "$pkg_dir")
+    debug "Hash: $current_hash (tárolt: $stored_hash)"
     
-    # Hash ellenőrzés
+    # Hash ellenőrzés - ha van tárolt hash és az megegyezik, akkor skip
     if [ -n "$stored_hash" ] && [ "$current_hash" = "$stored_hash" ] && [ "$current_hash" != "no_hash" ]; then
         skip "$pkg HASH VÁLTOZATLAN - SKIP"
         cd "$REPO_ROOT"
@@ -211,7 +261,7 @@ build_package_final() {
     fi
     
     # Építés
-    info "Építés..."
+    info "Építés kezdése..."
     
     # Függőségek (csak AUR csomagoknál próbáljuk)
     if [ "$is_aur" = "true" ] && [ -f .SRCINFO ]; then
@@ -256,9 +306,9 @@ build_package_final() {
     rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
 }
 
-# --- FŐ FUTÁS ---
+# --- FŐ FUTÁS - DEBUG MÓD ---
 main() {
-    info "=== VÉGLEGES BUILD RENDSZER ==="
+    info "=== DEBUG BUILD RENDSZER ==="
     info "Kezdés: $(date)"
     info "Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
     info "AUR csomagok: ${#AUR_PACKAGES[@]}"
@@ -278,17 +328,33 @@ main() {
     rm -rf "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null
     touch "$REPO_ROOT/packages_to_clean.txt"
     
-    # HELYI CSOMAGOK
-    info "--- HELYI CSOMAGOK ---"
+    # DEBUG: Ellenőrizzük MINDEN csomagot
+    info "=== DEBUG: ÖSSZES CSOMAG ELLENŐRZÉSE ==="
+    debug "Szerveren lévő fájlok száma: $(wc -l < "$REPO_ROOT/remote_files.txt")"
+    
+    # Ellenőrizzük a helyi csomagokat
+    info "--- HELYI CSOMAGOK DEBUG ---"
     for pkg in "${LOCAL_PACKAGES[@]}"; do
-        build_package_final "$pkg" "false"
+        debug_check_package_on_server "$pkg"
+    done
+    
+    # Ellenőrizzük az AUR csomagokat
+    info "--- AUR CSOMAGOK DEBUG ---"
+    for pkg in "${AUR_PACKAGES[@]}"; do
+        debug_check_package_on_server "$pkg"
+    done
+    
+    # Építés - HELYI CSOMAGOK
+    info "--- HELYI CSOMAGOK ÉPÍTÉSE ---"
+    for pkg in "${LOCAL_PACKAGES[@]}"; do
+        build_package_with_debug "$pkg" "false"
         echo ""
     done
     
-    # AUR CSOMAGOK
-    info "--- AUR CSOMAGOK ---"
+    # Építés - AUR CSOMAGOK
+    info "--- AUR CSOMAGOK ÉPÍTÉSE ---"
     for pkg in "${AUR_PACKAGES[@]}"; do
-        build_package_final "$pkg" "true"
+        build_package_with_debug "$pkg" "true"
         echo ""
     done
     
