@@ -59,6 +59,25 @@ jobs:
             find . -name "*.sh" -type f -exec shellcheck {} \; || true
           fi
 
+      - name: Hálózati diagnosztika
+        run: |
+          echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
+          echo "1. Letöltő eszközök:"
+          command -v curl && curl --version | head -1
+          command -v wget && wget --version | head -1
+          echo ""
+          echo "2. GitHub elérhetőség teszt:"
+          timeout 10 curl -I https://github.com || echo "curl timeout"
+          echo ""
+          echo "3. GNOME repo elérhetőség:"
+          timeout 10 curl -I "https://github.com/GNOME/gtk/archive/refs/tags/2.24.33.tar.gz" || echo "curl timeout"
+          echo ""
+          echo "4. AUR elérhetőség teszt:"
+          timeout 10 curl -I "https://aur.archlinux.org" || echo "curl timeout"
+          echo "=== DIAGNOSZTIKA VÉGE ==="
+
+
+
       - name: Setup SSH for Builder
         run: |
           mkdir -p /home/builder/.ssh
