@@ -1,6 +1,6 @@
 # Maintainer: Gyöngyösi Gábor <gabor AT gshoots DOT hu>
 pkgname=gghelper-git  # -git suffix ajánlott fejlesztői csomagokhoz
-pkgver=r$(date +%Y%m%d).$(git ls-remote --heads origin main | cut -c1-7)
+pkgver=r$(date +%Y%m%d).$(git ls-remote --heads origin master | cut -c1-7)
 pkgrel=1
 pkgdesc="Git workflow assistant with GitHub Actions conflict resolution (Git version)"
 arch=('any')
