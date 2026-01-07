@@ -102,7 +102,6 @@ install_yay() {
         cd "$REPO_ROOT"
     fi
     
-    # Yay konfigurálása TELJESEN AUTOMATA módra
     if command -v yay &> /dev/null; then
         log_info "Yay konfigurálása automatikus módra..."
         yay -Y --gendb --noconfirm 2>/dev/null || true
@@ -118,10 +117,10 @@ install_yay() {
 
 install_yay
 
-# 3. SZERVER LISTA LEKÉRÉSE
+# 3. SZERVER LISTA LEKÉRÉSE - CSAK FÁJLOK, EGYSZERŰ LISTA
 log_info "Szerver tartalmának lekérdezése..."
 if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
-    log_succ "Szerver lista letöltve."
+    log_succ "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_files.txt") fájl)."
 else
     log_warn "Nem sikerült lekérni a listát! (De folytatjuk)"
     touch "$REPO_ROOT/remote_files.txt"
@@ -131,26 +130,21 @@ fi
 log_info "Adatbázis letöltése..."
 scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# Segédfüggvények
+# --- JÓ MŰKÖDŐ VERZIÓELLENŐRZÉS ---
 
-# JÓ MŰKÖDŐ VERZIÓ: Ellenőrzi, hogy a csomag már a szerveren van-e
-is_on_server() {
+# Ellenőrzi, hogy a csomag már a szerveren van-e PONTOS VERZIÓVAL
+is_on_server_exact_version() {
     local pkgname="$1"
-    local version="$2"
+    local exact_version="$2"
     
-    # EGYSZERŰ és HATÉKONY keresés
-    if grep -q "^${pkgname}-${version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
+    # Ha megtaláljuk a pontos verziót, akkor TRUE
+    if grep -q "^${pkgname}-${exact_version}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
         return 0
     fi
     
-    # Alternatív keresés: lehet, hogy a szerveren máshogy van elnevezve
-    if grep -q "${pkgname}-${version}" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
-        return 0
-    fi
-    
-    # Ha epoch-os a verzió, próbáljuk anélkül is
-    if [[ "$version" == *:* ]]; then
-        local version_without_epoch="${version#*:}"
+    # Ha epoch van a verzióban, próbáljuk anélkül is
+    if [[ "$exact_version" == *:* ]]; then
+        local version_without_epoch="${exact_version#*:}"
         if grep -q "^${pkgname}-${version_without_epoch}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null; then
             return 0
         fi
@@ -159,55 +153,60 @@ is_on_server() {
     return 1
 }
 
-# Verzió kinyerése PKGBUILD-ból (egyszerű és megbízható)
+# Verzió kinyerése PKGBUILD-ból (megbízhatóan)
 get_pkg_version() {
     local pkg_dir="$1"
+    
     cd "$pkg_dir" || return 1
     
-    local epoch="" pkgver="" pkgrel="1"
+    local version=""
     
     # Először próbáljuk a .SRCINFO fájlt
     if [ -f .SRCINFO ]; then
-        pkgver=$(grep "pkgver =" .SRCINFO | head -1 | awk '{print $3}')
-        pkgrel=$(grep "pkgrel =" .SRCINFO | head -1 | awk '{print $3}')
+        # Az igazi, épített verziót kell kinyerni
+        version=$(grep "pkgver =" .SRCINFO | head -1 | awk '{print $3}')
+        local pkgrel=$(grep "pkgrel =" .SRCINFO | head -1 | awk '{print $3}')
+        
+        if [ -n "$version" ] && [ -n "$pkgrel" ]; then
+            version="${version}-${pkgrel}"
+        fi
     fi
     
     # Ha nem sikerült, próbáljuk a PKGBUILD-ot
-    if [ -z "$pkgver" ] && [ -f PKGBUILD ]; then
-        # Egyszerű grep, nem source-olunk (biztonságos)
-        pkgver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
-        pkgrel=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
+    if [ -z "$version" ] && [ -f PKGBUILD ]; then
+        # Egyszerű grep, nem source-olunk
+        local pkgver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
+        local pkgrel=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
         
-        # Ha üres, default értékek
-        [ -z "$pkgver" ] && pkgver="unknown"
-        [ -z "$pkgrel" ] && pkgrel="1"
+        if [ -n "$pkgver" ]; then
+            version="${pkgver}-${pkgrel:-1}"
+        fi
     fi
     
     # Epoch kezelése
     if [ -f PKGBUILD ]; then
-        epoch=$(grep '^epoch=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
+        local epoch=$(grep '^epoch=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " \t'\"")
+        if [ -n "$epoch" ] && [ "$epoch" != "0" ]; then
+            version="${epoch}:${version}"
+        fi
     fi
     
-    # Verzió string összeállítása
-    local version_string
-    if [ -n "$epoch" ] && [ "$epoch" != "0" ]; then
-        version_string="${epoch}:${pkgver}-${pkgrel}"
-    else
-        version_string="${pkgver}-${pkgrel}"
-    fi
-    
-    echo "$version_string"
+    echo "$version"
     
     cd - > /dev/null || return 1
 }
 
-# PKGBUILD frissítése (csak verzió változás esetén)
-update_pkgbuild_version() {
+# PKGBUILD frissítése a ténylegesen épített verzióval
+update_pkgbuild_with_actual_version() {
     local pkg="$1"
-    local pkg_dir="$2"
-    local new_version="$3"
+    local built_pkg_file="$2"
     
-    cd "$pkg_dir" || return 1
+    if [ ! -f "$built_pkg_file" ]; then
+        log_warn "Nincs épített fájl: $pkg"
+        return 1
+    fi
+    
+    cd "$REPO_ROOT/$pkg" || return 1
     
     if [ ! -f PKGBUILD ]; then
         log_warn "Nincs PKGBUILD a(z) $pkg mappában"
@@ -215,24 +214,39 @@ update_pkgbuild_version() {
         return 1
     fi
     
-    # Kinyerjük a részleteket az új verzióból
-    local epoch_val new_pkgver new_pkgrel
+    # Kinyerjük a verziót az épített fájlnévből
+    local filename
+    filename=$(basename "$built_pkg_file")
+    
+    # Példa: tilix-git-1.9.4.r35.g1234567-1-x86_64.pkg.tar.zst
+    # Kinyerjük: 1.9.4.r35.g1234567-1
+    
+    local version_part
+    version_part=$(echo "$filename" | sed "s/^${pkg}-//" | sed "s/-x86_64.*//" | sed "s/-any.*//" | sed "s/\.pkg\.tar\..*//")
+    
+    if [ -z "$version_part" ]; then
+        log_warn "Nem sikerült kinyerni a verziót: $filename"
+        cd - > /dev/null || return 1
+        return 1
+    fi
+    
+    # Kinyerjük a részleteket
+    local epoch_val="" new_pkgver="" new_pkgrel="1"
     
     # Parse the version string
-    if [[ "$new_version" == *:* ]]; then
+    if [[ "$version_part" == *:* ]]; then
         # Contains epoch
-        epoch_val="${new_version%%:*}"
-        local rest="${new_version#*:}"
+        epoch_val="${version_part%%:*}"
+        local rest="${version_part#*:}"
         new_pkgver="${rest%%-*}"
         new_pkgrel="${rest##*-}"
     else
         # No epoch
-        epoch_val=""
-        new_pkgver="${new_version%%-*}"
-        new_pkgrel="${new_version##*-}"
+        new_pkgver="${version_part%%-*}"
+        new_pkgrel="${version_part##*-}"
     fi
     
-    log_debug "Frissítés: $pkg -> epoch:$epoch_val pkgver:$new_pkgver pkgrel:$new_pkgrel"
+    log_debug "PKGBUILD frissítés: $pkg -> pkgver:$new_pkgver pkgrel:$new_pkgrel"
     
     # Frissítjük a PKGBUILD-ot
     local changed=0
@@ -243,7 +257,6 @@ update_pkgbuild_version() {
             sed -i "s/^epoch=.*/epoch='$epoch_val'/" PKGBUILD
             changed=1
         else
-            # Ha nincs epoch sor, beszúrjuk pkgver elé
             sed -i "/^pkgver=/i epoch='$epoch_val'" PKGBUILD
             changed=1
         fi
@@ -264,13 +277,13 @@ update_pkgbuild_version() {
     if [ "$changed" -eq 1 ]; then
         # Frissítjük a .SRCINFO fájlt
         makepkg --printsrcinfo > .SRCINFO 2>/dev/null || true
-        log_succ "PKGBUILD frissítve: $pkg -> $new_version"
+        log_succ "PKGBUILD frissítve: $pkg -> $version_part"
         
         # Git-hez hozzáadjuk
         git add PKGBUILD .SRCINFO 2>/dev/null || true
         
         # Verzióváltozás naplózása
-        echo "$pkg: $new_version" >> "$REPO_ROOT/updated_packages.txt"
+        echo "$pkg: $version_part" >> "$REPO_ROOT/updated_packages.txt"
         
         cd - > /dev/null || return 1
         return 0
@@ -281,7 +294,7 @@ update_pkgbuild_version() {
     fi
 }
 
-# Fő build funkció - VISSZATÉRVE AZ EREDETI MŰKÖDŐ LOGIKÁHOZ
+# Fő build funkció - HELYESEN MŰKÖDŐ VERZIÓELLENŐRZÉSSEL
 build_package_smart() {
     local pkg="$1"
     local is_aur="$2"
@@ -291,7 +304,7 @@ build_package_smart() {
     log_info "========================================"
     
     cd "$REPO_ROOT" || return 1
-
+    
     local pkg_dir=""
     local current_version=""
     
@@ -323,10 +336,10 @@ build_package_smart() {
         cd "$pkg" || return 1
     fi
     
-    # 1. VERZIÓ MEGHATÁROZÁSA
+    # 1. VERZIÓ MEGHATÁROZÁSA (a jelenlegi PKGBUILD-ból)
     current_version=$(get_pkg_version "$pkg_dir")
     
-    if [ "$current_version" = "unknown-1" ] || [ -z "$current_version" ]; then
+    if [ -z "$current_version" ] || [ "$current_version" = "-1" ]; then
         log_err "Nem sikerült meghatározni a verziót: $pkg"
         if [ "$is_aur" = "true" ]; then
             cd "$REPO_ROOT"
@@ -337,9 +350,9 @@ build_package_smart() {
     
     log_debug "Aktuális verzió: $current_version"
     
-    # 2. VERZIÓ ELLENŐRZÉS - CSAK AKTOR ÉPÍTÜNK, HA VALÓBAN VÁLTOZOTT
-    if is_on_server "$pkg" "$current_version"; then
-        log_skip "$pkg ($current_version) -> MÁR A SZERVEREN VAN."
+    # 2. VERZIÓ ELLENŐRZÉS - CSAK AKTOR SKIP, HA UGYANAZ A VERZIÓ
+    if is_on_server_exact_version "$pkg" "$current_version"; then
+        log_skip "$pkg ($current_version) -> UGYANAZ A VERZIÓ MÁR A SZERVEREN."
         if [ "$is_aur" = "true" ]; then
             cd "$REPO_ROOT"
             rm -rf "build_aur/$pkg" 2>/dev/null || true
@@ -349,18 +362,12 @@ build_package_smart() {
         return 0
     fi
     
-    # 3. HA IDEGEN AUR CSOMAG, NEM FRISSÍTJÜK A PKGBUILD-OT
-    if [ "$is_aur" = "true" ]; then
-        log_info "AUR csomag, PKGBUILD nem frissül: $pkg"
-    fi
-    
-    # 4. ÉPÍTÉS
-    log_info "ÚJ VERZIÓ! Építés: $pkg ($current_version)"
+    # 3. HA NEM UGYANAZ A VERZIÓ, ÉPÍTJÜK
+    log_info "ÚJ VERZIÓ ÉSZLELVE! Építés: $pkg ($current_version)"
     
     # Függőségek ellenőrzése
     log_dep "Függőségek ellenőrzése..."
     if [ "$is_aur" = "true" ]; then
-        # AUR csomag függőségei
         yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo 2>/dev/null | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//' | tr '\n' ' ') 2>/dev/null || true
     fi
     
@@ -378,32 +385,23 @@ build_package_smart() {
     if makepkg -si --noconfirm --clean --nocheck 2>&1; then
         # Sikeres build
         shopt -s nullglob
+        local built_files=()
         for pkgfile in *.pkg.tar.*; do
             if [ -f "$pkgfile" ]; then
                 mv "$pkgfile" "$REPO_ROOT/$OUTPUT_DIR/"
+                built_files+=("$REPO_ROOT/$OUTPUT_DIR/$pkgfile")
                 log_succ "$pkg építése sikeres: $pkgfile"
                 echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
             fi
         done
         shopt -u nullglob
         
-        # 5. HA HELYI CSOMAG, FRISSÍTJÜK A PKGBUILD VERZIÓT
-        if [ "$is_aur" = "false" ]; then
-            # Megnézzük, hogy valóban változott-e a verzió építés után
-            local built_pkg_file
-            built_pkg_file=$(ls "$REPO_ROOT/$OUTPUT_DIR/${pkg}-"*.pkg.tar.* 2>/dev/null | head -1)
-            
-            if [ -n "$built_pkg_file" ]; then
-                # Kinyerjük a ténylegesen épített verziót a fájlnévből
-                local actual_version
-                actual_version=$(basename "$built_pkg_file" | sed "s/^${pkg}-//" | sed "s/-x86_64.*//" | sed "s/-any.*//")
-                
-                log_debug "Épített verzió: $actual_version"
-                
-                # Frissítjük a PKGBUILD-ot a tényleges verzióval
-                if update_pkgbuild_version "$pkg" "$pkg_dir" "$actual_version"; then
-                    log_succ "PKGBUILD verzió frissítve: $pkg -> $actual_version"
-                fi
+        # 4. HA HELYI CSOMAG, FRISSÍTJÜK A PKGBUILD VERZIÓT
+        if [ "$is_aur" = "false" ] && [ ${#built_files[@]} -gt 0 ]; then
+            # Az első épített fájlt használjuk
+            local first_built_file="${built_files[0]}"
+            if update_pkgbuild_with_actual_version "$pkg" "$first_built_file"; then
+                log_succ "PKGBUILD verzió frissítve"
             fi
         fi
     else
@@ -418,9 +416,9 @@ build_package_smart() {
     fi
 }
 
-# Git push funkció - egyszerűsítve
-git_push_changes() {
-    log_info "=== GIT VÁLTOZÁSOK PUSH ==="
+# Git push funkció - CSAK EGYSZER A VÉGÉN
+git_push_all_changes() {
+    log_info "=== GIT VÁLTOZÁSOK PUSH (EGYSZER A VÉGÉN) ==="
     
     cd "$REPO_ROOT" || return 1
     
@@ -451,6 +449,7 @@ git_push_changes() {
     log_info "Push to GitHub..."
     if git push "$SSH_REPO_URL" main 2>/dev/null; then
         log_succ "Git push sikeres!"
+        return 0
     else
         log_err "Git push sikertelen!"
         return 1
@@ -498,8 +497,8 @@ shopt -u nullglob
 if [ ${#pkg_files[@]} -eq 0 ]; then
     log_succ "Nincs új csomag - minden naprakész!"
     
-    # Még lehetnek PKGBUILD változások
-    git_push_changes
+    # Még lehetnek PKGBUILD változások (ha manuálisan módosítottál)
+    git_push_all_changes
     exit 0
 fi
 
@@ -543,8 +542,11 @@ if [ -f packages_to_clean.txt ] && [ -s packages_to_clean.txt ]; then
     done < packages_to_clean.txt
 fi
 
-# Git push a változásokhoz
-git_push_changes
+# ================================
+# GIT PUSH - CSAK EGYSZER A VÉGÉN!
+# ================================
+
+git_push_all_changes
 
 log_info "========================================"
 log_succ "BUILD RENDSZER SIKERESEN BEFEJEZVE!"
