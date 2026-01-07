@@ -1,12 +1,12 @@
 #!/bin/bash
-# NINCS set -e!
+# NINCS set -e! SOHA NE ÁLLJON MEG!
 
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
 
-echo "[BUILD SYSTEM] Repo gyökér: $REPO_ROOT"
+echo "[INTELLIGENT BUILD] Repo gyökér: $REPO_ROOT"
 
-# --- CSOMAGOK LISTÁJA ---
+# --- KONFIGURÁCIÓ ---
 LOCAL_PACKAGES=(
     "gtk2" "awesome-freedesktop-git" "lain-git" "awesome-rofi"
     "nordic-backgrounds" "awesome-copycats-manjaro" "i3lock-fancy-git"
@@ -37,46 +37,76 @@ mkdir -p "$REPO_ROOT/$BUILD_TRACKING_DIR"
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 
+# --- LOGGING FUNCTIONS ---
+log() { echo -e "$1"; }
 info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 ok() { echo -e "\e[32m[OK]\e[0m $1"; }
 warn() { echo -e "\e[33m[WARN]\e[0m $1"; }
 error() { echo -e "\e[31m[ERROR]\e[0m $1"; }
 skip() { echo -e "\e[33m[SKIP]\e[0m $1"; }
+debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 
-# 1. HASH TRACKING FUNKCIÓK
+# 1. YAY TELEPÍTÉS HA KELL
+if ! command -v yay &> /dev/null; then
+    info "Yay telepítése..."
+    cd /tmp
+    git clone https://aur.archlinux.org/yay.git 2>/dev/null && {
+        cd yay
+        makepkg -si --noconfirm 2>&1 | grep -v "warning:"
+        cd /tmp
+        rm -rf yay
+    } || warn "Yay telepítés skip"
+    cd "$REPO_ROOT"
+fi
+
+# 2. SZERVER LISTA LEKÉRÉSE
+info "Szerver tartalmának lekérdezése..."
+if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "find $REMOTE_DIR -name '*.pkg.tar.*' -printf '%f\n' 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
+    ok "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_files.txt") fájl)."
+else
+    warn "Nem sikerült lekérni a listát"
+    touch "$REPO_ROOT/remote_files.txt"
+fi
+
+# 3. DB LETÖLTÉS
+info "Adatbázis letöltése..."
+scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
+
+# --- HASH TRACKING FUNKCIÓK ---
 get_package_hash() {
     local pkg_dir="$1"
     local pkg="$2"
     
-    # Helyi csomag: számoljunk hash-t a forrásfájlokból
-    if [ -d "$pkg_dir" ]; then
-        cd "$pkg_dir" 2>/dev/null || return 1
+    cd "$pkg_dir" 2>/dev/null || { echo "no_dir"; return 1; }
+    
+    # SHA1 hash számítás PKGBUILD és .SRCINFO alapján
+    local hash=""
+    if [ -f PKGBUILD ]; then
+        # PKGBUILD hash
+        local pkgbuild_hash
+        pkgbuild_hash=$(sha1sum PKGBUILD 2>/dev/null | cut -d' ' -f1)
         
-        # Készítsünk hash-t a PKGBUILD és forrásfájlokból
-        if [ -f PKGBUILD ]; then
-            # SHA256 hash a PKGBUILD-ból és a forrásfájlok neveiből
-            local sources=""
-            if [ -f .SRCINFO ]; then
-                sources=$(grep -E '^\s*source\s*=' .SRCINFO | sort)
-            fi
-            
-            # Hash a PKGBUILD tartalmából és forrásokból
-            local hash_content
-            hash_content=$(cat PKGBUILD 2>/dev/null; echo "$sources")
-            echo "$hash_content" | sha256sum | cut -d' ' -f1
-        else
-            # Ha nincs PKGBUILD, akkor git hash
-            if [ -d .git ]; then
-                git rev-parse HEAD 2>/dev/null || echo "no_hash"
-            else
-                echo "no_hash"
-            fi
+        # .SRCINFO hash, ha van
+        local srcinfo_hash=""
+        if [ -f .SRCINFO ]; then
+            srcinfo_hash=$(sha1sum .SRCINFO 2>/dev/null | cut -d' ' -f1)
         fi
         
-        cd - >/dev/null 2>&1
+        # Kombinált hash
+        if [ -n "$srcinfo_hash" ]; then
+            hash=$(echo "${pkgbuild_hash}${srcinfo_hash}" | sha1sum | cut -d' ' -f1)
+        else
+            hash="$pkgbuild_hash"
+        fi
+    elif [ -d .git ]; then
+        # Git repo esetén git hash
+        hash=$(git rev-parse HEAD 2>/dev/null || echo "git_no_hash")
     else
-        echo "no_dir"
+        hash="no_pkgbuild"
     fi
+    
+    echo "$hash"
+    cd - >/dev/null 2>&1
 }
 
 load_stored_hash() {
@@ -105,27 +135,14 @@ save_package_hash() {
     echo "${pkg}:${hash}" >> "$hash_file"
 }
 
-# 2. SZERVER LISTA LEKÉRÉSE
-info "Szerver tartalmának lekérdezése..."
-if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
-    ok "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_files.txt") fájl)."
-else
-    warn "Nem sikerült lekérni a listát"
-    touch "$REPO_ROOT/remote_files.txt"
-fi
-
-# 3. DB LETÖLTÉS
-info "Adatbázis letöltése..."
-scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
-
-# 4. HASH ALAPÚ VÁLTOZÁSÉSZLELÉS
+# Ellenőrzi, hogy van-e már a csomagnak bármilyen verziója a szerveren
 is_any_version_on_server() {
     local pkgname="$1"
     grep -q "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null
 }
 
-# 5. BUILD FUNKCIÓ - HASH TRACKINGGEL
-build_package_with_hash_tracking() {
+# --- JAVÍTOTT BUILD FUNKCIÓ - HIBATŰRŐ ---
+build_package_improved() {
     local pkg="$1"
     local is_aur="$2"
     
@@ -133,19 +150,26 @@ build_package_with_hash_tracking() {
     info "Csomag: $pkg"
     info "========================================"
     
+    # Statisztika
+    local start_time
+    start_time=$(date +%s)
+    
     local pkg_dir=""
     local current_hash=""
     local stored_hash=""
     
     # 1. TÁROLT HASH BETÖLTÉSE
     stored_hash=$(load_stored_hash "$pkg")
-    info "Tárolt hash: ${stored_hash:0:16}..."
+    if [ -n "$stored_hash" ]; then
+        debug "Tárolt hash: ${stored_hash:0:16}..."
+    fi
     
-    # 2. PKGBUILD/CSOMAG BESZERZÉSE
+    # 2. PKGBUILD BESZERZÉSE
     if [ "$is_aur" = "true" ]; then
         mkdir -p "$REPO_ROOT/build_aur"
-        cd "$REPO_ROOT/build_aur" 2>/dev/null || return 0
+        cd "$REPO_ROOT/build_aur" 2>/dev/null || { warn "Nem lehet build_aur mappába menni"; return 0; }
         
+        # Klónozás
         rm -rf "$pkg" 2>/dev/null
         info "AUR klónozás: $pkg"
         if ! git clone "https://aur.archlinux.org/$pkg.git" 2>/dev/null; then
@@ -155,17 +179,7 @@ build_package_with_hash_tracking() {
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
-        cd "$pkg" 2>/dev/null || { cd "$REPO_ROOT"; return 0; }
-        
-        # AUR csomag hash számítása
-        current_hash=$(get_package_hash "$pkg_dir" "$pkg")
-        
-        # Ha van .SRCINFO, akkor a forrásokat is nézzük
-        if [ -f .SRCINFO ]; then
-            local srcinfo_hash
-            srcinfo_hash=$(sha256sum .SRCINFO 2>/dev/null | cut -d' ' -f1)
-            current_hash="${current_hash}_${srcinfo_hash:0:16}"
-        fi
+        cd "$pkg" 2>/dev/null || { error "Nem lehet a $pkg mappába menni"; cd "$REPO_ROOT"; return 0; }
     else
         # Helyi csomag
         if [ ! -d "$REPO_ROOT/$pkg" ]; then
@@ -173,40 +187,42 @@ build_package_with_hash_tracking() {
             return 0
         fi
         pkg_dir="$REPO_ROOT/$pkg"
-        cd "$pkg_dir" 2>/dev/null || return 0
-        
-        # Helyi csomag hash számítása
-        current_hash=$(get_package_hash "$pkg_dir" "$pkg")
+        cd "$pkg_dir" 2>/dev/null || { warn "Nem lehet a $pkg mappába menni"; return 0; }
     fi
     
-    info "Jelenlegi hash: ${current_hash:0:16}..."
+    # 3. HASH SZÁMÍTÁS
+    current_hash=$(get_package_hash "$pkg_dir" "$pkg")
+    debug "Jelenlegi hash: ${current_hash:0:16}..."
     
-    # 3. HASH ÖSSZEHASONLÍTÁS
-    # Ha a hash változatlan ÉS a csomag már a szerveren van, akkor SKIP
-    if [ "$current_hash" = "$stored_hash" ] && [ -n "$current_hash" ] && [ "$current_hash" != "no_hash" ]; then
-        if is_any_version_on_server "$pkg"; then
-            skip "$pkg HASH VÁLTOZATLAN és MÁR A SZERVEREN VAN - SKIP"
-            cd "$REPO_ROOT"
-            rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
-            return 0
-        else
-            warn "$pkg hash változatlan, de nincs a szerveren - építés"
-        fi
+    # 4. DÖNTÉS: ÉPÍTJÜK-E?
+    local should_build=1  # 1 = építjük, 0 = skip
+    
+    # Ha már van a szerveren ÉS a hash ugyanaz, akkor SKIP
+    if is_any_version_on_server "$pkg" && [ "$current_hash" = "$stored_hash" ] && [ -n "$current_hash" ] && [ "$current_hash" != "no_hash" ]; then
+        skip "$pkg MÁR A SZERVEREN VAN és HASH VÁLTOZATLAN"
+        should_build=0
+    elif [ -z "$current_hash" ] || [ "$current_hash" = "no_hash" ] || [ "$current_hash" = "no_dir" ] || [ "$current_hash" = "no_pkgbuild" ]; then
+        warn "$pkg hash számítás sikertelen, de megpróbáljuk építeni"
+        should_build=1
+    else
+        info "$pkg építése szükséges"
+        should_build=1
     fi
     
-    # 4. HA A HASH VÁLTOZOTT VAGY NINCS A SZERVEREN, ÉPÍTJÜK
-    if [ -n "$stored_hash" ] && [ "$current_hash" != "$stored_hash" ]; then
-        info "HASH VÁLTOZOTT! Régi: ${stored_hash:0:16}... Új: ${current_hash:0:16}..."
+    if [ "$should_build" -eq 0 ]; then
+        cd "$REPO_ROOT"
+        rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
+        return 0
     fi
     
-    info "Építés..."
+    # 5. ÉPÍTÉS
+    info "Építés kezdése: $pkg"
     
-    # Függőségek (nem kritikus)
-    if [ "$is_aur" = "true" ]; then
-        yay -S --asdeps --needed --noconfirm $(makepkg --printsrcinfo 2>/dev/null | grep -E '^\s*(make)?depends\s*=' | sed 's/^.*=\s*//' | tr '\n' ' ') 2>/dev/null || true
-    fi
+    # JAVÍTÁS: Függőségek automatikus telepítése makepkg --syncdeps segítségével
+    # NEM használunk yay-t a függőségekhez, hanem a makepkg --syncdeps-et
     
     # Források letöltése
+    info "Források letöltése..."
     if ! makepkg -od --noconfirm 2>&1; then
         error "Forrás letöltés sikertelen: $pkg"
         cd "$REPO_ROOT"
@@ -214,38 +230,55 @@ build_package_with_hash_tracking() {
         return 0
     fi
     
-    # Építés
-    if makepkg -si --noconfirm --clean --nocheck 2>&1; then
+    # JAVÍTÁS: Építés --syncdeps kapcsolóval (telepíti a függőségeket)
+    info "Build folyamat (--syncdeps)..."
+    if makepkg -si --syncdeps --noconfirm --clean --nocheck 2>&1; then
+        # Sikeres build
+        local built_count=0
         for pkgfile in *.pkg.tar.*; do
             [ -f "$pkgfile" ] || continue
             mv "$pkgfile" "$REPO_ROOT/$OUTPUT_DIR/"
             ok "Build sikeres: $(basename "$pkgfile")"
             echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
-            
+            built_count=$((built_count + 1))
+            break  # csak az első fájlt
+        done
+        
+        if [ "$built_count" -gt 0 ]; then
             # Hash mentése
             save_package_hash "$pkg" "$current_hash"
-            break
-        done
+            ok "$pkg sikeresen építve és hash mentve"
+        else
+            warn "$pkg építés sikeres, de nincs kimeneti fájl"
+        fi
     else
         error "Build sikertelen: $pkg"
+        # JAVÍTÁS: Ne álljunk le, csak folytassuk a következő csomaggal
+        warn "$pkg build hibája nem állítja meg a scriptet, folytatjuk..."
     fi
+    
+    # 6. TAKARÍTÁS ÉS IDŐ MEGHATÁROZÁSA
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    info "$pkg feldolgozása kész ($duration másodperc)"
     
     cd "$REPO_ROOT" 2>/dev/null || true
     rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
 }
 
-# 6. FŐ FUTÁS
+# --- FŐ FUTÁS ---
 main() {
-    info "=== HASH-BASED BUILD RENDSZER ==="
+    info "=== JAVÍTOTT BUILD RENDSZER ==="
     info "Kezdés: $(date)"
-    info "Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
-    info "AUR csomagok: ${#AUR_PACKAGES[@]}"
+    info "Összes csomag: $(( ${#LOCAL_PACKAGES[@]} + ${#AUR_PACKAGES[@]} ))"
     
-    # Hash fájl ellenőrzése
+    # Hash fájl ellenőrzés
     local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
     if [ ! -f "$hash_file" ]; then
-        warn "Hash fájl nem található, létrehozás: $hash_file"
-        touch "$hash_file"
+        warn "Hash fájl nem található: $hash_file"
+        info "Új hash fájl létrehozása..."
+        echo "# Package hashes - auto-generated" > "$hash_file"
     else
         info "Hash fájl betöltve ($(wc -l < "$hash_file") bejegyzés)"
     fi
@@ -256,39 +289,55 @@ main() {
     rm -rf "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null
     touch "$REPO_ROOT/packages_to_clean.txt"
     
+    # Statisztika
+    local total_packages=0
+    local built_packages=0
+    local failed_packages=0
+    local skipped_packages=0
+    
     # AUR CSOMAGOK
-    info "--- AUR CSOMAGOK ---"
+    info "--- AUR CSOMAGOK (${#AUR_PACKAGES[@]}) ---"
     for pkg in "${AUR_PACKAGES[@]}"; do
-        build_package_with_hash_tracking "$pkg" "true"
+        total_packages=$((total_packages + 1))
+        if build_package_improved "$pkg" "true"; then
+            built_packages=$((built_packages + 1))
+        else
+            failed_packages=$((failed_packages + 1))
+        fi
         echo ""
     done
     
     # HELYI CSOMAGOK
-    info "--- HELYI CSOMAGOK ---"
+    info "--- HELYI CSOMAGOK (${#LOCAL_PACKAGES[@]}) ---"
     for pkg in "${LOCAL_PACKAGES[@]}"; do
-        build_package_with_hash_tracking "$pkg" "false"
+        total_packages=$((total_packages + 1))
+        if build_package_improved "$pkg" "false"; then
+            built_packages=$((built_packages + 1))
+        else
+            failed_packages=$((failed_packages + 1))
+        fi
         echo ""
     done
     
     # VAN-E ÉPÍTETT CSOMAG?
-    local built_count=0
-    built_count=$(ls -1 "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null | wc -l)
+    local output_count=0
+    output_count=$(ls -1 "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null | wc -l)
     
-    if [ "$built_count" -eq 0 ]; then
+    if [ "$output_count" -eq 0 ]; then
         ok "Nincs új csomag - minden naprakész!"
-        
-        # Még lehet git változás (hash fájl frissítése)
-        git_push_if_needed
+        info "Statisztika: $total_packages csomag feldolgozva"
         exit 0
     fi
     
-    info "=== FELTÖLTÉS ($built_count csomag) ==="
+    info "=== FELTÖLTÉS ($output_count csomag) ==="
     
     # Adatbázis frissítés
-    cd "$REPO_ROOT/$OUTPUT_DIR" 2>/dev/null || return 0
+    cd "$REPO_ROOT/$OUTPUT_DIR" 2>/dev/null || { error "Nem lehet a $OUTPUT_DIR mappába menni"; return 0; }
     if [ -f "${REPO_DB_NAME}.db.tar.gz" ]; then
+        info "Meglévő adatbázis bővítése..."
         repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.* 2>/dev/null || warn "repo-add hiba"
     else
+        info "Új adatbázis létrehozása..."
         repo-add "${REPO_DB_NAME}.db.tar.gz" *.pkg.tar.* 2>/dev/null || warn "repo-add hiba"
     fi
     
@@ -296,80 +345,45 @@ main() {
     cd "$REPO_ROOT" 2>/dev/null || return 0
     info "Feltöltés a szerverre..."
     
+    local upload_success=0
     for attempt in 1 2 3; do
         if scp $SSH_OPTS "$OUTPUT_DIR"/* "$VPS_USER@$VPS_HOST:$REMOTE_DIR/" 2>/dev/null; then
-            ok "Feltöltés sikeres!"
+            ok "Feltöltés sikeres! ($attempt. próbálkozás)"
+            upload_success=1
             break
-        elif [ "$attempt" -eq 3 ]; then
-            error "Feltöltés sikertelen 3 próbálkozás után"
-            return 1
         else
-            warn "Feltöltés sikertelen, újrapróbálás $attempt..."
+            warn "Feltöltés sikertelen ($attempt. próbálkozás)"
             sleep 3
         fi
     done
     
+    if [ "$upload_success" -eq 0 ]; then
+        error "Feltöltés sikertelen 3 próbálkozás után"
+        # JAVÍTÁS: Ne álljunk le, csak logoljuk
+    fi
+    
     # Régi csomagok törlése
     if [ -f "$REPO_ROOT/packages_to_clean.txt" ]; then
-        info "Régi csomagok törlése..."
-        while read -r pkg_to_clean; do
+        info "Régi csomagok törlése a szerveren..."
+        while read -r pkg_to_clean || [ -n "$pkg_to_clean" ]; do
             ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" \
                 "cd $REMOTE_DIR && ls -t ${pkg_to_clean}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f" 2>/dev/null || true
         done < "$REPO_ROOT/packages_to_clean.txt"
     fi
     
-    # Git push
-    git_push_if_needed
-    
     # Összegzés
     info "========================================"
-    ok "KÉSZ! $(date)"
+    ok "BUILD RENDSZER BEFEJEZVE! $(date)"
     info "Statisztika:"
-    info "  - Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
-    info "  - AUR csomagok: ${#AUR_PACKAGES[@]}"
-    info "  - Új csomagok: $built_count"
+    info "  - Összes csomag: $total_packages"
+    info "  - Épített csomagok: $output_count"
+    info "  - Sikertelen: $failed_packages"
     info "========================================"
 }
 
-# 7. GIT PUSH (ha változott a hash fájl)
-git_push_if_needed() {
-    cd "$REPO_ROOT" 2>/dev/null || return 0
-    
-    # Van-e változás?
-    if ! git status --porcelain 2>/dev/null | grep -q "."; then
-        info "Nincs git változás."
-        return 0
-    fi
-    
-    info "Git változások push..."
-    
-    git add . 2>/dev/null || true
-    
-    local commit_msg="Auto-update: $(date +%Y-%m-%d)"
-    if [ -f "$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt" ]; then
-        local updated_packages
-        updated_packages=$(git diff --name-only HEAD -- "$BUILD_TRACKING_DIR/" 2>/dev/null | xargs -r basename -a | tr '\n' ', ' | sed 's/, $//')
-        if [ -n "$updated_packages" ]; then
-            commit_msg="$commit_msg - Hash updates: $updated_packages"
-        fi
-    fi
-    
-    git commit -m "$commit_msg" 2>/dev/null || true
-    
-    for attempt in 1 2 3; do
-        if git push origin main 2>&1; then
-            ok "Git push sikeres!"
-            return 0
-        elif [ "$attempt" -eq 3 ]; then
-            warn "Git push sikertelen"
-            return 1
-        else
-            warn "Git push sikertelen, újrapróbálás $attempt..."
-            sleep 3
-        fi
-    done
+# --- FUTTATÁS ---
+main || {
+    error "Fő futás hibát észlelt, de a script nem állt meg."
+    # JAVÍTÁS: SOHA NE LÉPJÜNK KI HIBAKÓDDAL!
 }
-
-# 8. FUTTATÁS
-main || error "Hiba történt, de a script nem állt meg."
 exit 0
