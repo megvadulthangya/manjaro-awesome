@@ -1,179 +1,131 @@
 #!/bin/bash
-# NINCS set -e! SOHA NE ÁLLJON MEG!
+# NINCS set -e!
 
-# --- 0. BIZTONSÁGI ZÁRAK FELOLDÁSA ---
-export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
-git config --global --add safe.directory '*'
-
-# --- 1. ÚTVONAL FIXÁLÁS ---
 cd "$(dirname "$0")"
 REPO_ROOT=$(pwd)
-
-# --- FIX SSH URL ---
-SSH_REPO_URL="git@github.com:megvadulthangya/manjaro-awesome.git"
 
 echo "[BUILD SYSTEM] Repo gyökér: $REPO_ROOT"
 
 # --- CSOMAGOK LISTÁJA ---
 LOCAL_PACKAGES=(
-    "gtk2"
-    "awesome-freedesktop-git"
-    "lain-git"
-    "awesome-rofi"
-    "nordic-backgrounds"
-    "awesome-copycats-manjaro"
-    "i3lock-fancy-git"
-    "ttf-font-awesome-5"
-    "nvidia-driver-assistant"
-    "grayjay-bin"
-    "awesome-git"
+    "gtk2" "awesome-freedesktop-git" "lain-git" "awesome-rofi"
+    "nordic-backgrounds" "awesome-copycats-manjaro" "i3lock-fancy-git"
+    "ttf-font-awesome-5" "nvidia-driver-assistant" "grayjay-bin" "awesome-git"
 )
 
 AUR_PACKAGES=(
-    "libinput-gestures"
-    "qt5-styleplugins"
-    "urxvt-resize-font-git"
-    "i3lock-color"
-    "raw-thumbnailer"
-    "gsconnect"
-    "tilix-git"
-    "tamzen-font"
-    "betterlockscreen"
-    "nordic-theme"
-    "nordic-darker-theme"
-    "geany-nord-theme"
-    "nordzy-icon-theme"
-    "oh-my-posh-bin"
-    "fish-done"
-    "find-the-command"
-    "p7zip-gui"
-    "qownnotes"
-    "xorg-font-utils"
-    "xnviewmp"
-    "simplescreenrecorder"
-    "gtkhash-thunar"
-    "a4tech-bloody-driver-git"
-    "nordic-bluish-accent-theme"
-    "nordic-bluish-accent-standard-buttons-theme"
-    "nordic-polar-standard-buttons-theme"
-    "nordic-standard-buttons-theme"
-    "nordic-darker-standard-buttons-theme"
+    "libinput-gestures" "qt5-styleplugins" "urxvt-resize-font-git" "i3lock-color"
+    "raw-thumbnailer" "gsconnect" "tilix-git" "tamzen-font" "betterlockscreen"
+    "nordic-theme" "nordic-darker-theme" "geany-nord-theme" "nordzy-icon-theme"
+    "oh-my-posh-bin" "fish-done" "find-the-command" "p7zip-gui" "qownnotes"
+    "xorg-font-utils" "xnviewmp" "simplescreenrecorder" "gtkhash-thunar"
+    "a4tech-bloody-driver-git" "nordic-bluish-accent-theme"
+    "nordic-bluish-accent-standard-buttons-theme" "nordic-polar-standard-buttons-theme"
+    "nordic-standard-buttons-theme" "nordic-darker-standard-buttons-theme"
 )
 
 REMOTE_DIR="/var/www/repo"
 REPO_DB_NAME="manjaro-awesome"
 OUTPUT_DIR="built_packages"
+BUILD_TRACKING_DIR=".buildtracking"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30"
 
 mkdir -p "$REPO_ROOT/$OUTPUT_DIR"
+mkdir -p "$REPO_ROOT/$BUILD_TRACKING_DIR"
 
-# --- GIT KONFIGURÁCIÓ ---
 git config --global user.name "GitHub Action Bot"
 git config --global user.email "action@github.com"
 
-# Logging functions
 info() { echo -e "\e[34m[INFO]\e[0m $1"; }
 ok() { echo -e "\e[32m[OK]\e[0m $1"; }
 warn() { echo -e "\e[33m[WARN]\e[0m $1"; }
 error() { echo -e "\e[31m[ERROR]\e[0m $1"; }
 skip() { echo -e "\e[33m[SKIP]\e[0m $1"; }
-debug() { echo -e "\e[35m[DEBUG]\e[0m $1"; }
 
-# 2. YAY TELEPÍTÉSE
-if ! command -v yay &> /dev/null; then
-    info "Yay telepítése..."
-    cd /tmp
-    git clone https://aur.archlinux.org/yay.git 2>/dev/null && {
-        cd yay
-        makepkg -si --noconfirm 2>&1 | grep -v "warning:"
-        cd /tmp
-        rm -rf yay
-    } || warn "Yay telepítés skip"
-    cd "$REPO_ROOT"
-fi
+# 1. HASH TRACKING FUNKCIÓK
+get_package_hash() {
+    local pkg_dir="$1"
+    local pkg="$2"
+    
+    # Helyi csomag: számoljunk hash-t a forrásfájlokból
+    if [ -d "$pkg_dir" ]; then
+        cd "$pkg_dir" 2>/dev/null || return 1
+        
+        # Készítsünk hash-t a PKGBUILD és forrásfájlokból
+        if [ -f PKGBUILD ]; then
+            # SHA256 hash a PKGBUILD-ból és a forrásfájlok neveiből
+            local sources=""
+            if [ -f .SRCINFO ]; then
+                sources=$(grep -E '^\s*source\s*=' .SRCINFO | sort)
+            fi
+            
+            # Hash a PKGBUILD tartalmából és forrásokból
+            local hash_content
+            hash_content=$(cat PKGBUILD 2>/dev/null; echo "$sources")
+            echo "$hash_content" | sha256sum | cut -d' ' -f1
+        else
+            # Ha nincs PKGBUILD, akkor git hash
+            if [ -d .git ]; then
+                git rev-parse HEAD 2>/dev/null || echo "no_hash"
+            else
+                echo "no_hash"
+            fi
+        fi
+        
+        cd - >/dev/null 2>&1
+    else
+        echo "no_dir"
+    fi
+}
 
-# 3. SZERVER LISTA LEKÉRÉSE - FÁJLOK ÉS VERSZIÓK
+load_stored_hash() {
+    local pkg="$1"
+    local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
+    
+    if [ -f "$hash_file" ]; then
+        grep "^${pkg}:" "$hash_file" 2>/dev/null | cut -d: -f2-
+    else
+        echo ""
+    fi
+}
+
+save_package_hash() {
+    local pkg="$1"
+    local hash="$2"
+    local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
+    
+    # Távolítsuk el a régi bejegyzést
+    if [ -f "$hash_file" ]; then
+        grep -v "^${pkg}:" "$hash_file" > "${hash_file}.tmp" 2>/dev/null || true
+        mv "${hash_file}.tmp" "$hash_file" 2>/dev/null || true
+    fi
+    
+    # Adjuk hozzá az újat
+    echo "${pkg}:${hash}" >> "$hash_file"
+}
+
+# 2. SZERVER LISTA LEKÉRÉSE
 info "Szerver tartalmának lekérdezése..."
-if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "find $REMOTE_DIR -name '*.pkg.tar.*' -type f -printf '%f\n' 2>/dev/null" > "$REPO_ROOT/remote_packages.txt"; then
-    ok "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_packages.txt") fájl)."
-    # Debug: mutassunk néhány csomagot
-    debug "Példák a szerveren:"
-    head -5 "$REPO_ROOT/remote_packages.txt" | while read line; do debug "  $line"; done
+if ssh $SSH_OPTS "$VPS_USER@$VPS_HOST" "ls -1 $REMOTE_DIR 2>/dev/null" > "$REPO_ROOT/remote_files.txt"; then
+    ok "Szerver lista letöltve ($(wc -l < "$REPO_ROOT/remote_files.txt") fájl)."
 else
-    warn "Nem sikerült lekérni a listát (új repo?)"
-    touch "$REPO_ROOT/remote_packages.txt"
+    warn "Nem sikerült lekérni a listát"
+    touch "$REPO_ROOT/remote_files.txt"
 fi
 
-# 4. DB LETÖLTÉS
+# 3. DB LETÖLTÉS
 info "Adatbázis letöltése..."
 scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# --- MŰKÖDŐ VERZIÓELLENŐRZÉS ---
-# Ez a funkció ELLENŐRZI, hogy a csomag MÁR A SZERVEREN VAN-E
-
-is_package_on_server() {
+# 4. HASH ALAPÚ VÁLTOZÁSÉSZLELÉS
+is_any_version_on_server() {
     local pkgname="$1"
-    local version_to_check="$2"
-    
-    # Ha nincs megadva verzió, akkor csak a név alapján keresünk
-    if [ -z "$version_to_check" ]; then
-        if grep -q "^${pkgname}-" "$REPO_ROOT/remote_packages.txt" 2>/dev/null; then
-            return 0  # true - van ilyen nevű csomag
-        else
-            return 1  # false - nincs ilyen nevű csomag
-        fi
-    fi
-    
-    # Verzióval együtt keresünk
-    # Escape special characters for grep
-    local escaped_version=$(echo "$version_to_check" | sed 's/[.[\*^$]/\\&/g')
-    
-    if grep -q "^${pkgname}-${escaped_version}-" "$REPO_ROOT/remote_packages.txt" 2>/dev/null; then
-        return 0  # true - pontosan ez a verzió van a szerveren
-    else
-        return 1  # false - nincs ez a verzió a szerveren
-    fi
+    grep -q "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null
 }
 
-# Verzió kinyerése a PKGBUILD-ból - EGYSZERŰEN
-get_pkgbuild_version() {
-    local pkg_dir="$1"
-    
-    cd "$pkg_dir" 2>/dev/null || { echo ""; return 1; }
-    
-    local pkgver="" pkgrel="1" epoch=""
-    
-    # PKGBUILD-ból olvassuk
-    if [ -f PKGBUILD ]; then
-        # Használjunk source-ot, de tiszta környezetben
-        pkgver=$(grep '^pkgver=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " '\"")
-        pkgrel=$(grep '^pkgrel=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " '\"")
-        epoch=$(grep '^epoch=' PKGBUILD | head -1 | cut -d= -f2 | tr -d " '\"")
-        
-        [ -z "$pkgrel" ] && pkgrel="1"
-    fi
-    
-    # Ha üres, próbáljuk .SRCINFO-t
-    if [ -z "$pkgver" ] && [ -f .SRCINFO ]; then
-        pkgver=$(grep "pkgver =" .SRCINFO | head -1 | awk '{print $3}')
-        pkgrel=$(grep "pkgrel =" .SRCINFO | head -1 | awk '{print $3}')
-    fi
-    
-    # Verzió string összeállítása
-    local version_string=""
-    if [ -n "$epoch" ] && [ "$epoch" != "0" ]; then
-        version_string="${epoch}:${pkgver}-${pkgrel}"
-    else
-        version_string="${pkgver}-${pkgrel}"
-    fi
-    
-    echo "$version_string"
-    cd - >/dev/null 2>&1
-}
-
-# Fő build funkció - MŰKÖDŐ VERZIÓELLENŐRZÉSSEL
-build_package_smart() {
+# 5. BUILD FUNKCIÓ - HASH TRACKINGGEL
+build_package_with_hash_tracking() {
     local pkg="$1"
     local is_aur="$2"
     
@@ -182,14 +134,18 @@ build_package_smart() {
     info "========================================"
     
     local pkg_dir=""
-    local pkg_version=""
+    local current_hash=""
+    local stored_hash=""
     
-    # 1. HELY AUR?
+    # 1. TÁROLT HASH BETÖLTÉSE
+    stored_hash=$(load_stored_hash "$pkg")
+    info "Tárolt hash: ${stored_hash:0:16}..."
+    
+    # 2. PKGBUILD/CSOMAG BESZERZÉSE
     if [ "$is_aur" = "true" ]; then
         mkdir -p "$REPO_ROOT/build_aur"
         cd "$REPO_ROOT/build_aur" 2>/dev/null || return 0
         
-        # Klónozás
         rm -rf "$pkg" 2>/dev/null
         info "AUR klónozás: $pkg"
         if ! git clone "https://aur.archlinux.org/$pkg.git" 2>/dev/null; then
@@ -200,6 +156,16 @@ build_package_smart() {
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
         cd "$pkg" 2>/dev/null || { cd "$REPO_ROOT"; return 0; }
+        
+        # AUR csomag hash számítása
+        current_hash=$(get_package_hash "$pkg_dir" "$pkg")
+        
+        # Ha van .SRCINFO, akkor a forrásokat is nézzük
+        if [ -f .SRCINFO ]; then
+            local srcinfo_hash
+            srcinfo_hash=$(sha256sum .SRCINFO 2>/dev/null | cut -d' ' -f1)
+            current_hash="${current_hash}_${srcinfo_hash:0:16}"
+        fi
     else
         # Helyi csomag
         if [ ! -d "$REPO_ROOT/$pkg" ]; then
@@ -208,29 +174,32 @@ build_package_smart() {
         fi
         pkg_dir="$REPO_ROOT/$pkg"
         cd "$pkg_dir" 2>/dev/null || return 0
+        
+        # Helyi csomag hash számítása
+        current_hash=$(get_package_hash "$pkg_dir" "$pkg")
     fi
     
-    # 2. VERZIÓ MEGHATÁROZÁSA A PKGBUILD-BÓL
-    pkg_version=$(get_pkgbuild_version "$pkg_dir")
+    info "Jelenlegi hash: ${current_hash:0:16}..."
     
-    if [ -z "$pkg_version" ] || [ "$pkg_version" = "-1" ]; then
-        warn "Verzió nem határozható meg: $pkg (de megpróbáljuk építeni)"
-        pkg_version="unknown"
-    else
-        info "PKGBUILD verzió: $pkg_version"
+    # 3. HASH ÖSSZEHASONLÍTÁS
+    # Ha a hash változatlan ÉS a csomag már a szerveren van, akkor SKIP
+    if [ "$current_hash" = "$stored_hash" ] && [ -n "$current_hash" ] && [ "$current_hash" != "no_hash" ]; then
+        if is_any_version_on_server "$pkg"; then
+            skip "$pkg HASH VÁLTOZATLAN és MÁR A SZERVEREN VAN - SKIP"
+            cd "$REPO_ROOT"
+            rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
+            return 0
+        else
+            warn "$pkg hash változatlan, de nincs a szerveren - építés"
+        fi
     fi
     
-    # 3. ELLENŐRZÉS: VAN-E MÁR A SZERVEREN?
-    # Itt a lényeg: NEM CSAK A VERZIÓT, HANEM A CSOMAG NEVET IS NÉZZÜK
-    if is_package_on_server "$pkg" "$pkg_version"; then
-        skip "$pkg ($pkg_version) MÁR A SZERVEREN VAN - NEM ÉPÍTJÜK ÚJRA"
-        cd "$REPO_ROOT"
-        rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
-        return 0
+    # 4. HA A HASH VÁLTOZOTT VAGY NINCS A SZERVEREN, ÉPÍTJÜK
+    if [ -n "$stored_hash" ] && [ "$current_hash" != "$stored_hash" ]; then
+        info "HASH VÁLTOZOTT! Régi: ${stored_hash:0:16}... Új: ${current_hash:0:16}..."
     fi
     
-    # 4. NEM VAGYOK A SZERVEREN -> ÉPÍTÉS
-    info "ÚJ VERZIÓ ($pkg_version) - Építés..."
+    info "Építés..."
     
     # Függőségek (nem kritikus)
     if [ "$is_aur" = "true" ]; then
@@ -245,31 +214,18 @@ build_package_smart() {
         return 0
     fi
     
-    # ÉPÍTÉS
+    # Építés
     if makepkg -si --noconfirm --clean --nocheck 2>&1; then
-        # Sikeres build
-        local built_file=""
         for pkgfile in *.pkg.tar.*; do
             [ -f "$pkgfile" ] || continue
             mv "$pkgfile" "$REPO_ROOT/$OUTPUT_DIR/"
-            built_file="$REPO_ROOT/$OUTPUT_DIR/$pkgfile"
             ok "Build sikeres: $(basename "$pkgfile")"
             echo "$pkg" >> "$REPO_ROOT/packages_to_clean.txt"
+            
+            # Hash mentése
+            save_package_hash "$pkg" "$current_hash"
             break
         done
-        
-        # Verzió kinyerése a fájlnévből
-        if [ -n "$built_file" ]; then
-            local actual_version=""
-            actual_version=$(basename "$built_file" | sed "s/^${pkg}-//" | sed "s/-x86_64.*//" | sed "s/-any.*//" | sed "s/\.pkg\.tar\..*//")
-            
-            info "Ténylegesen épített verzió: $actual_version"
-            
-            # Helyi csomag: PKGBUILD frissítés
-            if [ "$is_aur" = "false" ] && [ -n "$actual_version" ]; then
-                update_pkgbuild_version "$pkg" "$actual_version"
-            fi
-        fi
     else
         error "Build sikertelen: $pkg"
     fi
@@ -278,91 +234,39 @@ build_package_smart() {
     rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
 }
 
-# PKGBUILD frissítése
-update_pkgbuild_version() {
-    local pkg="$1"
-    local new_version="$2"
-    
-    [ -z "$new_version" ] && return 1
-    
-    cd "$REPO_ROOT/$pkg" 2>/dev/null || return 1
-    [ ! -f PKGBUILD ] && return 1
-    
-    # Parse version
-    local epoch="" pkgver="" pkgrel="1"
-    
-    if [[ "$new_version" == *:* ]]; then
-        epoch="${new_version%%:*}"
-        local rest="${new_version#*:}"
-        pkgver="${rest%%-*}"
-        pkgrel="${rest##*-}"
-    else
-        pkgver="${new_version%%-*}"
-        pkgrel="${new_version##*-}"
-    fi
-    
-    # Debug info
-    debug "Frissítés: epoch=$epoch, pkgver=$pkgver, pkgrel=$pkgrel"
-    
-    # Epoch frissítése
-    if [ -n "$epoch" ]; then
-        if grep -q "^epoch=" PKGBUILD; then
-            sed -i "s/^epoch=.*/epoch='$epoch'/" PKGBUILD
-        else
-            sed -i "/^pkgver=/i epoch='$epoch'" PKGBUILD
-        fi
-    fi
-    
-    # pkgver frissítése
-    if grep -q "^pkgver=" PKGBUILD; then
-        sed -i "s/^pkgver=.*/pkgver='$pkgver'/" PKGBUILD
-    fi
-    
-    # pkgrel frissítése
-    if grep -q "^pkgrel=" PKGBUILD; then
-        sed -i "s/^pkgrel=.*/pkgrel='$pkgrel'/" PKGBUILD
-    fi
-    
-    # .SRCINFO frissítése
-    makepkg --printsrcinfo > .SRCINFO 2>/dev/null || true
-    
-    # Git
-    git add PKGBUILD .SRCINFO 2>/dev/null || true
-    echo "$pkg: $new_version" >> "$REPO_ROOT/updated_packages.txt"
-    
-    ok "PKGBUILD frissítve: $new_version"
-    cd - >/dev/null 2>&1
-}
-
-# Fő futás
+# 6. FŐ FUTÁS
 main() {
-    info "=== BUILD RENDSZER ==="
+    info "=== HASH-BASED BUILD RENDSZER ==="
     info "Kezdés: $(date)"
-    info "Összes csomag: $(( ${#LOCAL_PACKAGES[@]} + ${#AUR_PACKAGES[@]} ))"
+    info "Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
+    info "AUR csomagok: ${#AUR_PACKAGES[@]}"
+    
+    # Hash fájl ellenőrzése
+    local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
+    if [ ! -f "$hash_file" ]; then
+        warn "Hash fájl nem található, létrehozás: $hash_file"
+        touch "$hash_file"
+    else
+        info "Hash fájl betöltve ($(wc -l < "$hash_file") bejegyzés)"
+    fi
     
     # Reset
-    rm -f "$REPO_ROOT/updated_packages.txt"
     rm -f "$REPO_ROOT/packages_to_clean.txt"
     rm -rf "$REPO_ROOT/build_aur" 2>/dev/null
     rm -rf "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null
-    touch "$REPO_ROOT/updated_packages.txt"
-    
-    # Statisztika
-    local total=0 built=0
+    touch "$REPO_ROOT/packages_to_clean.txt"
     
     # AUR CSOMAGOK
-    info "--- AUR CSOMAGOK (${#AUR_PACKAGES[@]}) ---"
+    info "--- AUR CSOMAGOK ---"
     for pkg in "${AUR_PACKAGES[@]}"; do
-        total=$((total + 1))
-        build_package_smart "$pkg" "true"
+        build_package_with_hash_tracking "$pkg" "true"
         echo ""
     done
     
     # HELYI CSOMAGOK
-    info "--- HELYI CSOMAGOK (${#LOCAL_PACKAGES[@]}) ---"
+    info "--- HELYI CSOMAGOK ---"
     for pkg in "${LOCAL_PACKAGES[@]}"; do
-        total=$((total + 1))
-        build_package_smart "$pkg" "false"
+        build_package_with_hash_tracking "$pkg" "false"
         echo ""
     done
     
@@ -372,6 +276,8 @@ main() {
     
     if [ "$built_count" -eq 0 ]; then
         ok "Nincs új csomag - minden naprakész!"
+        
+        # Még lehet git változás (hash fájl frissítése)
         git_push_if_needed
         exit 0
     fi
@@ -419,21 +325,17 @@ main() {
     info "========================================"
     ok "KÉSZ! $(date)"
     info "Statisztika:"
-    info "  - Összes csomag: $total"
+    info "  - Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
+    info "  - AUR csomagok: ${#AUR_PACKAGES[@]}"
     info "  - Új csomagok: $built_count"
-    if [ -s "$REPO_ROOT/updated_packages.txt" ]; then
-        info "  - Frissített PKGBUILD-ok:"
-        cat "$REPO_ROOT/updated_packages.txt" | while read line; do
-            info "    * $line"
-        done
-    fi
     info "========================================"
 }
 
-# Git push
+# 7. GIT PUSH (ha változott a hash fájl)
 git_push_if_needed() {
     cd "$REPO_ROOT" 2>/dev/null || return 0
     
+    # Van-e változás?
     if ! git status --porcelain 2>/dev/null | grep -q "."; then
         info "Nincs git változás."
         return 0
@@ -444,14 +346,18 @@ git_push_if_needed() {
     git add . 2>/dev/null || true
     
     local commit_msg="Auto-update: $(date +%Y-%m-%d)"
-    if [ -s "$REPO_ROOT/updated_packages.txt" ]; then
-        commit_msg="$commit_msg - $(cat "$REPO_ROOT/updated_packages.txt" | tr '\n' ', ' | sed 's/, $//')"
+    if [ -f "$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt" ]; then
+        local updated_packages
+        updated_packages=$(git diff --name-only HEAD -- "$BUILD_TRACKING_DIR/" 2>/dev/null | xargs -r basename -a | tr '\n' ', ' | sed 's/, $//')
+        if [ -n "$updated_packages" ]; then
+            commit_msg="$commit_msg - Hash updates: $updated_packages"
+        fi
     fi
     
     git commit -m "$commit_msg" 2>/dev/null || true
     
     for attempt in 1 2 3; do
-        if git push "$SSH_REPO_URL" main 2>&1; then
+        if git push origin main 2>&1; then
             ok "Git push sikeres!"
             return 0
         elif [ "$attempt" -eq 3 ]; then
@@ -464,6 +370,6 @@ git_push_if_needed() {
     done
 }
 
-# Futtatás
+# 8. FUTTATÁS
 main || error "Hiba történt, de a script nem állt meg."
 exit 0
