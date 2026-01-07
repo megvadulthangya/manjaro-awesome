@@ -4,22 +4,51 @@ REPO_ROOT=$(pwd)
 
 echo "[BUILD SYSTEM] Repo gyökér: $REPO_ROOT"
 
-# --- KONFIGURÁCIÓ ---
+# --- KONFIGURÁCIÓ - EREDETI FORMÁTUM ---
 LOCAL_PACKAGES=(
-    "gtk2" "awesome-freedesktop-git" "lain-git" "awesome-rofi"
-    "nordic-backgrounds" "awesome-copycats-manjaro" "i3lock-fancy-git"
-    "ttf-font-awesome-5" "nvidia-driver-assistant" "grayjay-bin" "awesome-git"
+    "gghelper"
+    "gtk2"
+    "awesome-freedesktop-git"
+    "lain-git"
+    "awesome-rofi"
+    "nordic-backgrounds"
+    "awesome-copycats-manjaro"
+    "i3lock-fancy-git"
+    "ttf-font-awesome-5"
+    "nvidia-driver-assistant"
+    "grayjay-bin"
 )
 
 AUR_PACKAGES=(
-    "libinput-gestures" "qt5-styleplugins" "urxvt-resize-font-git" "i3lock-color"
-    "raw-thumbnailer" "gsconnect" "tilix-git" "tamzen-font" "betterlockscreen"
-    "nordic-theme" "nordic-darker-theme" "geany-nord-theme" "nordzy-icon-theme"
-    "oh-my-posh-bin" "fish-done" "find-the-command" "p7zip-gui" "qownnotes"
-    "xorg-fonts-utils" "xnviewmp" "simplescreenrecorder" "gtkhash-thunar"
-    "a4tech-bloody-driver-git" "nordic-bluish-accent-theme"
-    "nordic-bluish-accent-standard-buttons-theme" "nordic-polar-standard-buttons-theme"
-    "nordic-standard-buttons-theme" "nordic-darker-standard-buttons-theme"
+    "libinput-gestures"
+    "qt5-styleplugins"
+    "urxvt-resize-font-git"
+    "i3lock-color"
+    "raw-thumbnailer"
+    "gsconnect"
+    "awesome-git"
+    "tilix-git"
+    "tamzen-font"
+    "betterlockscreen"
+    "nordic-theme"
+    "nordic-darker-theme"
+    "geany-nord-theme"
+    "nordzy-icon-theme"
+    "oh-my-posh-bin"
+    "fish-done"
+    "find-the-command"
+    "p7zip-gui"
+    "qownnotes"
+    "xorg-font-utils"  # KIHAGYVA: valószínűleg nem elérhető az AUR-ban
+    "xnviewmp"
+    "simplescreenrecorder"
+    "gtkhash-thunar"
+    "a4tech-bloody-driver-git"
+    "nordic-bluish-accent-theme"
+    "nordic-bluish-accent-standard-buttons-theme"
+    "nordic-polar-standard-buttons-theme"
+    "nordic-standard-buttons-theme"
+    "nordic-darker-standard-buttons-theme"
 )
 
 REMOTE_DIR="/var/www/repo"
@@ -68,13 +97,12 @@ fi
 info "Adatbázis letöltése..."
 scp $SSH_OPTS "$VPS_USER@$VPS_HOST:$REMOTE_DIR/${REPO_DB_NAME}.db.tar.gz" "$REPO_ROOT/$OUTPUT_DIR/" 2>/dev/null || true
 
-# --- EGYSZERŰ HASH TRACKING ---
+# --- HASH TRACKING ---
 get_package_hash() {
     local pkg_dir="$1"
     
     cd "$pkg_dir" 2>/dev/null || { echo "no_dir"; return 1; }
     
-    # SHA1 hash a PKGBUILD-ból
     if [ -f PKGBUILD ]; then
         sha1sum PKGBUILD 2>/dev/null | cut -d' ' -f1
     elif [ -d .git ]; then
@@ -102,13 +130,11 @@ save_package_hash() {
     local hash="$2"
     local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
     
-    # Távolítsuk el a régi bejegyzést
     if [ -f "$hash_file" ]; then
         grep -v "^${pkg}:" "$hash_file" > "${hash_file}.tmp" 2>/dev/null || true
         mv "${hash_file}.tmp" "$hash_file" 2>/dev/null || true
     fi
     
-    # Adjuk hozzá az újat
     echo "${pkg}:${hash}" >> "$hash_file"
 }
 
@@ -117,8 +143,8 @@ is_any_version_on_server() {
     grep -q "^${pkgname}-" "$REPO_ROOT/remote_files.txt" 2>/dev/null
 }
 
-# --- JAVÍTOTT BUILD FUNKCIÓ ---
-build_package_fixed() {
+# --- BUILD FUNKCIÓ - JAVÍTOTT ---
+build_package_final() {
     local pkg="$1"
     local is_aur="$2"
     
@@ -126,7 +152,7 @@ build_package_fixed() {
     info "Csomag: $pkg"
     info "========================================"
     
-    # Kihagyás, ha már a szerveren van
+    # SKIP ha már a szerveren van
     if is_any_version_on_server "$pkg"; then
         skip "$pkg MÁR A SZERVEREN VAN - SKIP"
         return 0
@@ -138,22 +164,33 @@ build_package_fixed() {
     
     stored_hash=$(load_stored_hash "$pkg")
     
-    # 1. PKGBUILD BESZERZÉSE
+    # AUR vagy helyi?
     if [ "$is_aur" = "true" ]; then
         mkdir -p "$REPO_ROOT/build_aur"
         cd "$REPO_ROOT/build_aur" 2>/dev/null || return 0
         
         rm -rf "$pkg" 2>/dev/null
         info "AUR klónozás: $pkg"
+        
+        # Próbáljuk klónozni, de ha sikertelen, akkor skip
         if ! git clone "https://aur.archlinux.org/$pkg.git" 2>/dev/null; then
-            error "AUR klónozás sikertelen: $pkg"
+            error "AUR klónozás sikertelen: $pkg (nincs az AUR-ban?)"
             cd "$REPO_ROOT"
             return 0
         fi
         
         pkg_dir="$REPO_ROOT/build_aur/$pkg"
         cd "$pkg" 2>/dev/null || { cd "$REPO_ROOT"; return 0; }
+        
+        # Ellenőrizzük, hogy van-e PKGBUILD
+        if [ ! -f PKGBUILD ]; then
+            error "Nincs PKGBUILD a csomagban: $pkg (hibás AUR csomag)"
+            cd "$REPO_ROOT"
+            rm -rf "$REPO_ROOT/build_aur/$pkg" 2>/dev/null
+            return 0
+        fi
     else
+        # Helyi csomag
         if [ ! -d "$REPO_ROOT/$pkg" ]; then
             warn "Helyi mappa nem található: $pkg"
             return 0
@@ -162,10 +199,10 @@ build_package_fixed() {
         cd "$pkg_dir" 2>/dev/null || return 0
     fi
     
-    # 2. HASH SZÁMÍTÁS
+    # Hash számítás
     current_hash=$(get_package_hash "$pkg_dir")
     
-    # 3. HASH ELLENŐRZÉS
+    # Hash ellenőrzés
     if [ -n "$stored_hash" ] && [ "$current_hash" = "$stored_hash" ] && [ "$current_hash" != "no_hash" ]; then
         skip "$pkg HASH VÁLTOZATLAN - SKIP"
         cd "$REPO_ROOT"
@@ -173,25 +210,19 @@ build_package_fixed() {
         return 0
     fi
     
-    # 4. ÉPÍTÉS
+    # Építés
     info "Építés..."
     
-    # JAVÍTÁS: Függőségek teleítése YAY-val
-    info "Függőségek telepítése yay-val..."
-    if [ "$is_aur" = "true" ]; then
-        # Kinyerjük a függőségeket a .SRCINFO-ból
-        if [ -f .SRCINFO ]; then
-            local deps=""
-            deps=$(grep -E '^\s*(make)?depends\s*=' .SRCINFO | sed 's/^.*=\s*//' | tr '\n' ' ')
-            if [ -n "$deps" ]; then
-                # Külön kezeljük a gtk2-t (azt mi építjük)
-                deps=$(echo "$deps" | sed 's/gtk2//g')
-                if [ -n "$deps" ]; then
-                    yay -S --asdeps --needed --noconfirm $deps 2>/dev/null || {
-                        warn "Egyes függőségek telepítése sikertelen, de folytatjuk..."
-                    }
-                fi
-            fi
+    # Függőségek (csak AUR csomagoknál próbáljuk)
+    if [ "$is_aur" = "true" ] && [ -f .SRCINFO ]; then
+        info "Függőségek ellenőrzése..."
+        # Kihagyjuk a gtk2-t, mert azt mi építjük
+        local deps
+        deps=$(grep -E '^\s*(make)?depends\s*=' .SRCINFO | sed 's/^.*=\s*//' | tr '\n' ' ' | sed 's/gtk2//g')
+        if [ -n "$deps" ]; then
+            yay -S --asdeps --needed --noconfirm $deps 2>/dev/null || {
+                warn "Egyes függőségek telepítése sikertelen, de folytatjuk..."
+            }
         fi
     fi
     
@@ -203,7 +234,7 @@ build_package_fixed() {
         return 0
     fi
     
-    # JAVÍTÁS: Build NOCHECK-kel, hogy ne próbáljon függőségeket telepíteni
+    # Build
     info "Build folyamat..."
     if makepkg -si --noconfirm --clean --nocheck 2>&1; then
         for pkgfile in *.pkg.tar.*; do
@@ -227,14 +258,18 @@ build_package_fixed() {
 
 # --- FŐ FUTÁS ---
 main() {
-    info "=== JAVÍTOTT BUILD RENDSZER ==="
+    info "=== VÉGLEGES BUILD RENDSZER ==="
     info "Kezdés: $(date)"
+    info "Helyi csomagok: ${#LOCAL_PACKAGES[@]}"
+    info "AUR csomagok: ${#AUR_PACKAGES[@]}"
     
-    # Hash fájl létrehozása ha nincs
+    # Hash fájl ellenőrzés
     local hash_file="$REPO_ROOT/$BUILD_TRACKING_DIR/package_hashes.txt"
     if [ ! -f "$hash_file" ]; then
         info "Új hash fájl létrehozása..."
         echo "# Package hashes - $(date)" > "$hash_file"
+    else
+        info "Hash fájl betöltve ($(wc -l < "$hash_file") bejegyzés)"
     fi
     
     # Reset
@@ -243,17 +278,17 @@ main() {
     rm -rf "$REPO_ROOT/$OUTPUT_DIR"/*.pkg.tar.* 2>/dev/null
     touch "$REPO_ROOT/packages_to_clean.txt"
     
-    # 1. ELŐSZÖR A HELYI CSOMAGOK (különösen gtk2)
-    info "--- HELYI CSOMAGOK ELŐSZÖR (${#LOCAL_PACKAGES[@]}) ---"
+    # HELYI CSOMAGOK
+    info "--- HELYI CSOMAGOK ---"
     for pkg in "${LOCAL_PACKAGES[@]}"; do
-        build_package_fixed "$pkg" "false"
+        build_package_final "$pkg" "false"
         echo ""
     done
     
-    # 2. UTÁNA AZ AUR CSOMAGOK
-    info "--- AUR CSOMAGOK UTÁNA (${#AUR_PACKAGES[@]}) ---"
+    # AUR CSOMAGOK
+    info "--- AUR CSOMAGOK ---"
     for pkg in "${AUR_PACKAGES[@]}"; do
-        build_package_fixed "$pkg" "true"
+        build_package_final "$pkg" "true"
         echo ""
     done
     
@@ -308,8 +343,8 @@ main() {
     # Összegzés
     info "========================================"
     ok "KÉSZ! $(date)"
-    info "Új csomagok: $output_count"
-    info "Hash fájl: $hash_file"
+    info "Statisztika:"
+    info "  - Új csomagok: $output_count"
     info "========================================"
 }
 
