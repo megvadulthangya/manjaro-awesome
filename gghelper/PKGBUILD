@@ -8,13 +8,14 @@ url="https://github.com/megvadulthangya/gghelper"
 license=('MIT')
 depends=('python' 'git')
 makedepends=('git')
-source=("gghelper.py"
-        "gghelper"
-        "README.md"
-        "LICENSE")
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+# EZ A SOR A FONTOS! A release tarball-t használja
+source=("https://github.com/megvadulthangya/gghelper/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')  # Először SKIP, majd a build generálja
 
 package() {
+  # A tarball kicsomagolva a "gghelper-2.0.0" mappát hozza létre
+  cd "$srcdir/gghelper-${pkgver}"
+  
   # Create directories
   install -dm755 "$pkgdir/usr/bin"
   install -dm755 "$pkgdir/usr/share/gghelper"
@@ -22,17 +23,17 @@ package() {
   install -dm755 "$pkgdir/usr/share/doc/$pkgname"
   
   # Install main script
-  install -Dm755 "$srcdir/gghelper.py" "$pkgdir/usr/share/gghelper/gghelper.py"
+  install -Dm755 gghelper.py "$pkgdir/usr/share/gghelper/gghelper.py"
   
   # Install bash wrapper
-  install -Dm755 "$srcdir/gghelper" "$pkgdir/usr/bin/gghelper"
+  install -Dm755 gghelper "$pkgdir/usr/bin/gghelper"
   
   # Install documentation
-  install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   
   # Install license
-  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   
-  # Create symlink for direct Python execution (optional)
+  # Create symlink for direct Python execution
   ln -sf "/usr/share/gghelper/gghelper.py" "$pkgdir/usr/bin/gghelper.py"
 }
