@@ -63,6 +63,7 @@ jobs:
         run: |
           echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
           echo "1. Letöltő eszközök:"
+          curl -s https://ipinfo.io/json | grep -E '"country"|"region"|"city"'
           command -v curl && curl --version | head -1
           command -v wget && wget --version | head -1
           echo ""
