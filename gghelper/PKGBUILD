@@ -1,20 +1,27 @@
 # Maintainer: Gyöngyösi Gábor <gabor AT gshoots DOT hu>
-pkgname=gghelper
-pkgver=2.0.0
+pkgname=gghelper-git  # -git suffix ajánlott fejlesztői csomagokhoz
+pkgver=r$(date +%Y%m%d).$(git ls-remote --heads origin main | cut -c1-7)
 pkgrel=1
-pkgdesc="Git workflow assistant with GitHub Actions conflict resolution"
+pkgdesc="Git workflow assistant with GitHub Actions conflict resolution (Git version)"
 arch=('any')
 url="https://github.com/megvadulthangya/gghelper"
 license=('MIT')
 depends=('python' 'git')
 makedepends=('git')
-# EZ A SOR A FONTOS! A release tarball-t használja
-source=("https://github.com/megvadulthangya/gghelper/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')  # Először SKIP, majd a build generálja
+
+# Közvetlenül a git repo-ból
+source=("git+https://github.com/megvadulthangya/gghelper.git")
+sha256sums=('SKIP')
+
+# Verziószám a commit dátumából és hash-ből
+pkgver() {
+  cd "$srcdir/gghelper"
+  printf "%s.%s" "$(git log -1 --format='%cd' --date=format:'%Y%m%d' HEAD)" \
+  "$(git rev-parse --short HEAD)"
+}
 
 package() {
-  # A tarball kicsomagolva a "gghelper-2.0.0" mappát hozza létre
-  cd "$srcdir/gghelper-${pkgver}"
+  cd "$srcdir/gghelper"
   
   # Create directories
   install -dm755 "$pkgdir/usr/bin"
