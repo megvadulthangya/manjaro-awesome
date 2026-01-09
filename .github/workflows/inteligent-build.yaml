@@ -2,8 +2,8 @@ name: Manjaro Repo Smart Builder 2
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 4 * * *'
+#  schedule:
+#    - cron: '0 4 * * *'
 
 jobs:
   build-and-deploy:
