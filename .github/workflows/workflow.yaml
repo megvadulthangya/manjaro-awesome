@@ -38,12 +38,12 @@ jobs:
           # Update system with minimal packages first
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
-            python python-pip python-meson \
+            python python-pip \
             python-requests python-gitpython python-yaml python-setuptools \
             pacman-contrib \
             curl wget ca-certificates \
             openssh rsync \
-            netcat iputils bind-tools
+            netcat iproute2
             
           # Create builder user
           useradd -m builder
