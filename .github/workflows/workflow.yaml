@@ -24,7 +24,6 @@ jobs:
           pacman-key --populate archlinux
           
           # Update system and install ALL required packages via pacman
-          # REMOVED: repo-tools (not needed, pacman-contrib has repo-add)
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
@@ -81,6 +80,54 @@ jobs:
           chown -R builder:builder /home/builder/.ssh
           echo "✅ SSH setup complete"
 
+      - name: Configure Pacman Repository
+        env:
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
+        run: |
+          echo "=== Configuring Pacman Repository ==="
+          echo "Repository: $REPO_NAME"
+          echo "Server URL: $REPO_SERVER_URL"
+          
+          # Backup original pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          # Check if repository already exists
+          if grep -q "\[$REPO_NAME\]" /etc/pacman.conf; then
+            echo "⚠️ Repository '$REPO_NAME' already exists in pacman.conf"
+            echo "Updating server URL if needed..."
+            
+            # Update server URL
+            sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
+          else
+            echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
+            
+            # Create repository configuration
+            REPO_CONFIG="\n[$REPO_NAME]\nServer = $REPO_SERVER_URL\nSigLevel = Optional TrustAll\n"
+            
+            # Find where to insert (before [community] or at end)
+            if grep -q "^\[community\]" /etc/pacman.conf; then
+              # Insert before [community]
+              sed -i "/^\[community\]/i $REPO_CONFIG" /etc/pacman.conf
+            elif grep -q "^\[extra\]" /etc/pacman.conf; then
+              # Insert after [extra]
+              sed -i "/^\[extra\]/a $REPO_CONFIG" /etc/pacman.conf
+            else
+              # Append at end
+              echo -e "$REPO_CONFIG" >> /etc/pacman.conf
+            fi
+          fi
+          
+          # Verify the configuration
+          echo "=== Pacman.conf repository section ==="
+          grep -A 2 "\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
+          
+          # Update pacman database
+          echo "Updating pacman database..."
+          pacman -Sy --noconfirm
+          
+          echo "✅ Pacman repository configuration complete"
+
       - name: Verify Environment
         run: |
           echo "=== Environment Verification ==="
@@ -96,8 +143,17 @@ jobs:
           python -c "import git; print('✓ gitpython', git.__version__)"
           python -c "import yaml; print('✓ pyyaml')"
           echo ""
-          echo "3. Directories:"
-          ls -la
+          echo "3. Repository configuration:"
+          REPO_NAME="${{ secrets.REPO_NAME || 'manjaro-awesome' }}"
+          echo "Looking for repository: $REPO_NAME"
+          if grep -q "\[$REPO_NAME\]" /etc/pacman.conf; then
+            echo "✅ Repository found in pacman.conf:"
+            grep -A 2 "\[$REPO_NAME\]" /etc/pacman.conf
+          else
+            echo "❌ Repository NOT found in pacman.conf"
+            echo "Current pacman.conf repositories:"
+            grep "^\[" /etc/pacman.conf
+          fi
           echo ""
           echo "✅ Verification complete"
 
@@ -119,6 +175,19 @@ jobs:
           # Show script info
           echo "=== Builder Script Info ==="
           head -20 builder.py
+          echo ""
+          
+          # Test repository access
+          echo "=== Testing repository access ==="
+          REPO_NAME="${{ secrets.REPO_NAME || 'manjaro-awesome' }}"
+          if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
+            echo "✅ Repository '$REPO_NAME' is accessible via pacman"
+            echo "Available packages in repository:"
+            pacman -Sl "$REPO_NAME" | head -20
+          else
+            echo "❌ Repository '$REPO_NAME' is NOT accessible via pacman"
+            echo "This will cause build issues!"
+          fi
           echo ""
           
           # Run as builder user
