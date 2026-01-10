@@ -10,6 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+      # Konténer hálózati beállítások javítása
+      options: --network host
+
+    # Környezeti változók a teljes job számára
+    env:
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+      REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+      REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
 
     steps:
       - name: Checkout Code
@@ -18,13 +29,6 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare Environment
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           echo "=== Starting Environment Preparation ==="
           echo "Repository: $REPO_NAME"
@@ -72,16 +76,13 @@ jobs:
           echo "✅ Environment preparation complete"
 
       - name: Setup SSH
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           echo "=== Current environment variables ==="
           env | grep -E "VPS|REPO|REMOTE" || echo "No VPS/REPO env vars found"
           echo ""
           
           mkdir -p /home/builder/.ssh
+          chmod 700 /home/builder/.ssh
           
           # Debug: Check if SSH key is set
           echo "=== Checking SSH key ==="
@@ -106,32 +107,64 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Add known hosts
+          # Create SSH config file for better control
+          cat > /home/builder/.ssh/config << EOF
+Host $VPS_HOST
+  HostName $VPS_HOST
+  User $VPS_USER
+  IdentityFile ~/.ssh/id_ed25519
+  Port 22
+  ConnectTimeout 30
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+  TCPKeepAlive yes
+  ControlMaster auto
+  ControlPath ~/.ssh/control-%r@%h:%p
+  ControlPersist 10m
+EOF
+          
+          chmod 600 /home/builder/.ssh/config
+          
+          # Add known hosts PROPERLY
           echo "=== Adding known hosts ==="
           if [ -n "$VPS_HOST" ]; then
             echo "Adding $VPS_HOST..."
-            ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || echo "⚠️ Failed to get key for $VPS_HOST"
+            ssh-keyscan -H "$VPS_HOST" > /home/builder/.ssh/known_hosts 2>/dev/null
+            if [ $? -eq 0 ]; then
+              echo "✅ SSH key for $VPS_HOST added to known_hosts"
+            else
+              echo "⚠️ Failed to get key for $VPS_HOST, trying with -t rsa,ecdsa,ed25519..."
+              ssh-keyscan -t rsa,ecdsa,ed25519 -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null
+            fi
           else
             echo "⚠️ VPS_HOST is empty!"
           fi
           
+          # Also add github.com for potential git operations
           echo "Adding github.com..."
-          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || echo "⚠️ Failed to get key for github.com"
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null
           
           chown -R builder:builder /home/builder/.ssh
           
-          # Test SSH key
-          echo "=== Testing SSH key ==="
-          ls -la /home/builder/.ssh/
-          echo "Key contents (first 100 chars):"
-          head -c 100 /home/builder/.ssh/id_ed25519
-          echo ""
+          # Test SSH key and connection
+          echo "=== Testing SSH connection ==="
+          echo "Testing connection to $VPS_USER@$VPS_HOST..."
+          
+          # First test basic connectivity with netcat
+          echo "1. Testing TCP connectivity to $VPS_HOST:22..."
+          if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
+            echo "✅ TCP port 22 is accessible"
+          else
+            echo "❌ Cannot reach $VPS_HOST on port 22"
+            echo "This suggests a network/firewall issue"
+          fi
+          
+          echo "2. Testing SSH connection..."
+          su builder -c "ssh -o ConnectTimeout=10 -o BatchMode=yes -v $VPS_USER@$VPS_HOST 'echo SSH_TEST_OK'" 2>&1 | head -50
+          
           echo "✅ SSH setup complete"
 
       - name: Configure Pacman Repository
-        env:
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           echo "=== Configuring Pacman Repository ==="
           echo "Repository: $REPO_NAME"
@@ -157,7 +190,7 @@ jobs:
           else
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
-            # Create repository configuration - USING echo -e FOR MULTI-LINE
+            # Create repository configuration
             echo "Creating repository configuration..."
             
             # Use a temporary file to avoid awk/sed issues
@@ -169,7 +202,6 @@ jobs:
             # Find where to insert (before [community] or at end)
             if grep -q "^\[community\]" /etc/pacman.conf; then
               echo "Inserting before [community] section..."
-              # Insert the content before [community]
               LINE_NUM=$(grep -n "^\[community\]" /etc/pacman.conf | cut -d: -f1)
               head -n $((LINE_NUM-1)) /etc/pacman.conf > /etc/pacman.conf.tmp
               cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
@@ -218,10 +250,6 @@ jobs:
           echo "✅ Pacman repository configuration complete"
 
       - name: Verify Network Connectivity
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
         run: |
           echo "=== Network Connectivity Tests ==="
           
@@ -233,12 +261,26 @@ jobs:
             echo "❌ No internet connectivity"
           fi
           
-          # Test SSH connectivity
+          # Test SSH connectivity with more detailed debugging
           echo ""
           echo "2. Testing SSH connectivity to $VPS_HOST..."
           if [ -n "$VPS_HOST" ] && [ -n "$VPS_USER" ]; then
             echo "Testing connection to $VPS_USER@$VPS_HOST..."
-            if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" "echo SSH_OK" 2>/dev/null; then
+            
+            # First check if host resolves
+            echo "Resolving $VPS_HOST..."
+            if getent hosts "$VPS_HOST" >/dev/null 2>&1; then
+              echo "✅ Hostname resolves: $(getent hosts $VPS_HOST)"
+            else
+              echo "❌ Cannot resolve hostname $VPS_HOST"
+            fi
+            
+            # Try with verbose output
+            echo "Attempting SSH connection (verbose mode)..."
+            timeout 15 ssh -vvv -o ConnectTimeout=10 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_SUCCESS" 2>&1 | grep -A5 -B5 "timeout\|connected\|refused\|denied\|Connection to" || true
+            
+            # Simple test
+            if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_OK" 2>/dev/null; then
               echo "✅ SSH connection successful"
             else
               echo "❌ SSH connection failed"
@@ -246,6 +288,15 @@ jobs:
               echo "  VPS_HOST: $VPS_HOST"
               echo "  VPS_USER: $VPS_USER"
               echo "  SSH key exists: $(ls -la /home/builder/.ssh/id_ed25519 2>/dev/null && echo 'Yes' || echo 'No')"
+              echo "  SSH key permissions: $(stat -c '%a %n' /home/builder/.ssh/id_ed25519 2>/dev/null || echo 'N/A')"
+              
+              # Show SSH config
+              echo "  SSH config:"
+              cat /home/builder/.ssh/config 2>/dev/null || echo "    No SSH config found"
+              
+              # Show known_hosts
+              echo "  Known hosts for $VPS_HOST:"
+              grep "$VPS_HOST" /home/builder/.ssh/known_hosts 2>/dev/null || echo "    Not in known_hosts"
             fi
           else
             echo "⚠️ VPS_HOST or VPS_USER not set"
@@ -268,16 +319,6 @@ jobs:
           echo "✅ Network tests complete"
 
       - name: Run Builder
-        env:
-          # SSH Connection
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          
-          # Repository Configuration
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           # Make script executable
           chmod +x builder.py
@@ -290,6 +331,18 @@ jobs:
           echo "REPO_NAME: $REPO_NAME"
           echo "REPO_SERVER_URL: $REPO_SERVER_URL"
           echo "REMOTE_DIR: $REMOTE_DIR"
+          echo ""
+          
+          # Show SSH info
+          echo "=== SSH Configuration ==="
+          ls -la /home/builder/.ssh/
+          echo "SSH config:"
+          cat /home/builder/.ssh/config 2>/dev/null || echo "No SSH config"
+          echo ""
+          
+          # Test SSH connection explicitly before builder
+          echo "=== Pre-build SSH Test ==="
+          su builder -c "ssh -o ConnectTimeout=10 $VPS_USER@$VPS_HOST 'echo PRE_BUILD_SSH_TEST_OK && hostname'" && echo "✅ SSH test successful" || echo "❌ SSH test failed"
           echo ""
           
           # Show script info
