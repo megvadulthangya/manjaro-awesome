@@ -23,17 +23,22 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           
-          # Update system and install essential packages
+          
+          # Telepítsük a Python modulokat pacman-al is
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
-            python python-pip python-setuptools \
+            python python-pip \
+            python-requests python-gitpython python-yaml \
             pacman-contrib \
             curl wget ca-certificates \
             openssh \
             rsync
-            
-          # Install required Python packages
-          pip install requests gitpython pyyaml
+          
+          # Ha még nem lenne elég, pip-el is
+          pip install --upgrade pip
+          pip install requests gitpython pyyaml        
+          
+          
           
           # Create builder user
           useradd -m builder
