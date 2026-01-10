@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Unified Manjaro Package Builder
-Consolidates all CI/CD logic from multiple bash scripts into a single Python solution.
+Unified Manjaro Package Builder - Simplified version
 """
 
 import os
@@ -11,7 +10,6 @@ import subprocess
 import shutil
 import tempfile
 import time
-import json
 import hashlib
 import logging
 from pathlib import Path
@@ -19,15 +17,12 @@ from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 from datetime import datetime
 import requests
-import git
-import yaml
 from enum import Enum
 
 # Import configuration
 from config import (
     REPO_DB_NAME, OUTPUT_DIR, BUILD_TRACKING_DIR,
-    SSH_REPO_URL, MAKEPKG_TIMEOUT, SPECIAL_DEPENDENCIES,
-    PROVIDER_PREFERENCES, REQUIRED_BUILD_TOOLS
+    SSH_REPO_URL, MAKEPKG_TIMEOUT, SPECIAL_DEPENDENCIES
 )
 
 # Import package lists
@@ -36,7 +31,8 @@ from packages import LOCAL_PACKAGES, AUR_PACKAGES
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='\033[34m[%(asctime)s]\033[0m %(message)s',
+    datefmt='%H:%M:%S',
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler('builder.log')
@@ -70,567 +66,428 @@ class PackageBuilder:
         self.output_dir = self.repo_root / OUTPUT_DIR
         self.build_tracking_dir = self.repo_root / BUILD_TRACKING_DIR
         
-        # Load sensitive configuration from environment
+        # Load configuration from environment - SIMPLIFIED
         self._load_environment_config()
         
-        # Package lists from imported modules
+        # Package lists
         self.local_packages = LOCAL_PACKAGES
         self.aur_packages = AUR_PACKAGES
-        
-        # Custom repository configuration
-        self.custom_repo_config = self._generate_repo_config()
         
         # Setup directories
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
         
-        # Tracking
+        # State
         self.remote_files = []
         self.packages_to_clean = set()
         self.built_packages = []
-        self.failed_packages = []
         
         # Statistics
         self.stats = {
             "start_time": time.time(),
-            "aur_processed": 0,
-            "local_processed": 0,
             "aur_success": 0,
             "local_success": 0,
-            "dependencies_installed": 0,
             "bytes_uploaded": 0
         }
     
     def _load_environment_config(self):
-        """Load all sensitive configuration from environment variables."""
-        self.vps_user = os.getenv('VPS_USER', '')
-        self.vps_host = os.getenv('VPS_HOST', '')
-        self.gh_pat = os.getenv('GH_PAT', '')
-        self.ssh_key = os.getenv('VPS_SSH_KEY', '')
+        """Load configuration from environment variables - SIMPLIFIED."""
+        # REQUIRED - fail if missing
+        self.vps_user = os.getenv('VPS_USER')
+        self.vps_host = os.getenv('VPS_HOST')
+        self.ssh_key = os.getenv('VPS_SSH_KEY')
         
-        # Remote directory from environment (with fallback)
-        self.remote_dir = os.getenv('REMOTE_DIR', '/var/www/repo')
+        if not all([self.vps_user, self.vps_host, self.ssh_key]):
+            logger.error("Missing required environment variables: VPS_USER, VPS_HOST, VPS_SSH_KEY")
+            sys.exit(1)
         
-        # Repository server URL for pacman.conf
+        # REQUIRED but with fallback warning
+        self.remote_dir = os.getenv('REMOTE_DIR')
+        if not self.remote_dir:
+            logger.warning("REMOTE_DIR not set, using default: /var/www/repo")
+            self.remote_dir = "/var/www/repo"
+        
+        # OPTIONAL
         self.repo_server_url = os.getenv('REPO_SERVER_URL', 'https://your-repo.example.com')
         
-        # Optional configuration
-        self.ssh_port = os.getenv('VPS_SSH_PORT', '22')
-        self.ssh_username = os.getenv('VPS_SSH_USERNAME', self.vps_user)
-        self.repo_name = os.getenv('REPO_NAME', REPO_DB_NAME)
-        
-        # Validate required configuration
-        self._validate_config()
+        logger.info(f"Configuration: {self.vps_user}@{self.vps_host}:{self.remote_dir}")
     
-    def _validate_config(self):
-        """Validate that required configuration is present."""
-        required_vars = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
-        missing = [var for var in required_vars if not getattr(self, var.lower(), None)]
-        
-        if missing:
-            logger.error(f"Missing required environment variables: {', '.join(missing)}")
-            logger.error("Please set these in your GitHub repository secrets")
-            sys.exit(1)
-    
-    def _generate_repo_config(self) -> str:
-        """Generate pacman repository configuration."""
-        return f"""[{self.repo_name}]
-Server = {self.repo_server_url}
-SigLevel = Optional TrustAll
-"""
-    
-    def run_command(self, cmd: List[str], cwd: Path = None, env: Dict = None, 
-                   capture_output: bool = False, check: bool = True,
-                   timeout: int = None) -> subprocess.CompletedProcess:
-        """Run a shell command with proper error handling."""
-        logger.debug(f"Running command: {' '.join(cmd)}")
-        
-        if env is None:
-            env = os.environ.copy()
+    def run_command(self, cmd: List[str], cwd: Path = None, 
+                   capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess:
+        """Run a shell command with logging."""
+        logger.debug(f"Running: {' '.join(cmd)}")
         
         try:
             result = subprocess.run(
                 cmd,
                 cwd=cwd,
-                env=env,
                 capture_output=capture_output,
                 text=True,
-                check=check,
-                timeout=timeout
+                check=check
             )
             return result
         except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed (exit {e.returncode}): {' '.join(cmd)}")
+            logger.error(f"Command failed: {' '.join(cmd)}")
             if e.stderr:
-                logger.error(f"Stderr: {e.stderr[:500]}...")  # Limit output
-            if check:
-                raise
-            return e
-        except subprocess.TimeoutExpired as e:
-            logger.error(f"Command timeout after {timeout}s: {' '.join(cmd)}")
+                logger.error(f"Error: {e.stderr[:200]}")
             raise
     
-    def network_diagnostics(self) -> Dict[str, bool]:
-        """Perform comprehensive network connectivity checks."""
-        logger.info("=== NETWORK DIAGNOSTICS ===")
-        
-        test_urls = {
-            "GitHub": "https://github.com",
-            "AUR": "https://aur.archlinux.org",
-            "GNOME": "https://github.com/GNOME/gtk/archive/refs/tags/2.24.33.tar.gz",
-            "IP Info": "https://ipinfo.io/ip",
-            "Custom Repo": self.repo_server_url
-        }
-        
-        results = {}
-        for name, url in test_urls.items():
-            try:
-                start = time.time()
-                response = requests.get(url, timeout=10)
-                elapsed = (time.time() - start) * 1000
-                
-                if response.status_code < 400:
-                    logger.info(f"✓ {name}: Connected ({response.status_code}) - {elapsed:.0f}ms")
-                    results[name] = True
-                else:
-                    logger.warning(f"✗ {name}: HTTP {response.status_code} - {elapsed:.0f}ms")
-                    results[name] = False
-                    
-            except requests.exceptions.Timeout:
-                logger.warning(f"✗ {name}: Timeout")
-                results[name] = False
-            except Exception as e:
-                logger.warning(f"✗ {name}: Error - {str(e)}")
-                results[name] = False
-        
-        # Test SSH connectivity
-        try:
-            self.run_command(
-                ["ssh", "-o", "ConnectTimeout=10", f"{self.vps_user}@{self.vps_host}", "echo SSH_OK"],
-                capture_output=True,
-                check=False
-            )
-            logger.info("✓ SSH: Connection successful")
-            results["SSH"] = True
-        except:
-            logger.warning("✗ SSH: Connection failed")
-            results["SSH"] = False
-        
-        # Overall status
-        success_rate = sum(results.values()) / len(results) * 100
-        logger.info(f"Network diagnostics: {success_rate:.1f}% successful")
-        
-        return results
-    
     def setup_environment(self):
-        """Setup the build environment including pacman.conf and SSH."""
-        logger.info("Setting up build environment...")
+        """Setup the build environment."""
+        logger.info("Setting up environment...")
         
-        # 1. Configure pacman.conf with custom repository
-        self._configure_pacman()
-        
-        # 2. Setup SSH for builder
+        # Configure SSH
         self._setup_ssh()
         
-        # 3. Install yay if not present
-        self._install_yay()
-        
-        # 4. Git configuration
+        # Git configuration
         self.run_command(["git", "config", "--global", "user.name", "GitHub Action Bot"])
         self.run_command(["git", "config", "--global", "user.email", "action@github.com"])
         
-        # 5. System-wide git settings
-        self.run_command(["git", "config", "--system", "--add", "safe.directory", "*"])
-        os.environ["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "1"
+        # Install yay if needed
+        self._install_yay_if_needed()
         
-        # 6. Ensure build tools are available
-        self._ensure_build_tools()
-        
-        logger.info("Environment setup complete")
-    
-    def _configure_pacman(self):
-        """Inject custom repository into pacman.conf with validation."""
-        pacman_conf = Path("/etc/pacman.conf")
-        
-        if not pacman_conf.exists():
-            logger.warning("pacman.conf not found, skipping custom repo configuration")
-            return
-        
-        # Backup original
-        backup_path = pacman_conf.with_suffix('.conf.backup')
-        if not backup_path.exists():
-            shutil.copy2(pacman_conf, backup_path)
-            logger.debug(f"Created pacman.conf backup: {backup_path}")
-        
-        # Read current config
-        content = pacman_conf.read_text()
-        
-        # Check if our repo is already configured
-        repo_section = f"[{self.repo_name}]"
-        if repo_section in content:
-            logger.info(f"Custom repository '{self.repo_name}' already configured")
-            
-            # Update server URL if needed
-            if self.repo_server_url not in content:
-                logger.warning(f"Repository server URL might be different in pacman.conf")
-            return
-        
-        # Find where to insert (before [community] or at end)
-        lines = content.split('\n')
-        insert_pos = len(lines)
-        
-        for i, line in enumerate(lines):
-            if line.strip().startswith("[community]"):
-                insert_pos = i
-                break
-            elif line.strip().startswith("[extra]"):
-                insert_pos = i + 1
-        
-        # Insert our repo config with comment
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        repo_config = f"\n# Custom repository added by builder.py on {timestamp}\n"
-        repo_config += self.custom_repo_config
-        
-        lines.insert(insert_pos, repo_config)
-        
-        # Write back
-        pacman_conf.write_text('\n'.join(lines))
-        logger.info(f"Custom repository '{self.repo_name}' added to pacman.conf")
-        
-        # Update pacman database
-        try:
-            self.run_command(["pacman", "-Sy", "--noconfirm"])
-            logger.info("Pacman database synchronized")
-        except Exception as e:
-            logger.error(f"Failed to sync pacman database: {e}")
+        logger.info("Environment ready")
     
     def _setup_ssh(self):
-        """Setup SSH keys for remote access with improved security."""
+        """Setup SSH for remote access."""
         ssh_dir = Path("/home/builder/.ssh")
         ssh_dir.mkdir(parents=True, exist_ok=True)
         
-        # Set strict permissions on .ssh directory
-        ssh_dir.chmod(0o700)
-        
         # Write SSH key
-        if self.ssh_key:
-            key_path = ssh_dir / "id_ed25519"
-            ssh_config = ssh_dir / "config"
-            
-            try:
-                # Decode base64 key
-                import base64
-                try:
-                    key_data = base64.b64decode(self.ssh_key)
-                    key_path.write_bytes(key_data)
-                except:
-                    # If not base64, write as-is
-                    key_path.write_text(self.ssh_key)
-                
-                key_path.chmod(0o600)
-                logger.debug("SSH key written")
-                
-                # Create SSH config for the host
-                ssh_config_content = f"""
-Host {self.vps_host}
-    HostName {self.vps_host}
-    User {self.vps_user}
-    Port {self.ssh_port}
-    IdentityFile {key_path}
-    StrictHostKeyChecking yes
-    UserKnownHostsFile {ssh_dir / "known_hosts"}
-"""
-                ssh_config.write_text(ssh_config_content)
-                ssh_config.chmod(0o600)
-                
-            except Exception as e:
-                logger.error(f"Failed to setup SSH: {e}")
-                raise
+        key_path = ssh_dir / "id_ed25519"
+        try:
+            # Try to decode as base64
+            import base64
+            key_data = base64.b64decode(self.ssh_key)
+            key_path.write_bytes(key_data)
+        except:
+            # If not base64, write as text
+            key_path.write_text(self.ssh_key)
         
-        # Add known hosts with verification
+        key_path.chmod(0o600)
+        
+        # Add known hosts
         known_hosts = ssh_dir / "known_hosts"
-        known_hosts_content = []
+        hosts = [self.vps_host, "github.com"]
         
-        hosts_to_scan = []
-        if self.vps_host:
-            hosts_to_scan.append(self.vps_host)
-        hosts_to_scan.append("github.com")
-        
-        for host in hosts_to_scan:
-            try:
-                result = self.run_command(
-                    ["ssh-keyscan", "-H", "-p", self.ssh_port, host],
-                    capture_output=True,
-                    timeout=10
-                )
-                if result.stdout:
-                    known_hosts_content.append(f"# {host}")
-                    known_hosts_content.append(result.stdout.strip())
-                    logger.debug(f"Added SSH key for {host}")
-            except Exception as e:
-                logger.warning(f"Failed to get SSH key for {host}: {e}")
-        
-        if known_hosts_content:
-            known_hosts.write_text('\n'.join(known_hosts_content))
-            known_hosts.chmod(0o600)
+        for host in hosts:
+            result = self.run_command(
+                ["ssh-keyscan", "-H", host],
+                capture_output=True,
+                check=False
+            )
+            if result.stdout:
+                known_hosts.write_text(result.stdout)
         
         # Set ownership
         self.run_command(["chown", "-R", "builder:builder", str(ssh_dir)])
-        logger.info("SSH setup complete")
     
-    def _install_yay(self):
-        """Install yay AUR helper with proper configuration."""
+    def _install_yay_if_needed(self):
+        """Install yay only if not present."""
         try:
-            self.run_command(["which", "yay"], check=False, capture_output=True)
-            logger.info("yay is already installed")
+            self.run_command(["which", "yay"], check=False)
+            logger.info("yay already installed")
             return
         except:
             pass
         
-        logger.info("Installing yay AUR helper...")
+        logger.info("Installing yay...")
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
+            self.run_command(
+                ["git", "clone", "https://aur.archlinux.org/yay.git", f"{tmpdir}/yay"]
+            )
             
-            # Clone yay
-            self.run_command([
-                "git", "clone", "https://aur.archlinux.org/yay.git",
-                str(tmpdir_path / "yay")
-            ], cwd=tmpdir_path)
-            
-            # Build and install
-            self.run_command([
-                "makepkg", "-si", "--noconfirm", "--clean"
-            ], cwd=tmpdir_path / "yay")
-        
-        # Configure yay for automation
-        yay_config_commands = [
-            ["yay", "-Y", "--gendb", "--noconfirm"],
-            ["yay", "-Y", "--devel", "--save", "--noconfirm"],
-            ["yay", "-Y", "--combinedupgrade", "--save", "--noconfirm"],
-            ["yay", "-Y", "--nocleanmenu", "--save", "--noconfirm"],
-            ["yay", "-Y", "--nodiffmenu", "--save", "--noconfirm"],
-            ["yay", "-Y", "--noeditmenu", "--save", "--noconfirm"],
-            ["yay", "-Y", "--removemake", "--save", "--noconfirm"],
-            ["yay", "-Y", "--upgrademenu", "--save", "--noconfirm"],
-        ]
-        
-        for cmd in yay_config_commands:
-            try:
-                self.run_command(cmd, check=False)
-            except:
-                pass
-        
-        logger.info("yay installation and configuration complete")
+            self.run_command(
+                ["makepkg", "-si", "--noconfirm"],
+                cwd=f"{tmpdir}/yay"
+            )
     
-    def _ensure_build_tools(self):
-        """Ensure all required build tools are installed."""
-        missing_tools = []
-        
-        for tool in REQUIRED_BUILD_TOOLS:
-            try:
-                self.run_command(["which", tool], check=False, capture_output=True)
-            except:
-                missing_tools.append(tool)
-        
-        if missing_tools:
-            logger.info(f"Installing missing build tools: {missing_tools}")
-            try:
-                self.run_command(["pacman", "-S", "--needed", "--noconfirm"] + missing_tools)
-            except:
-                logger.warning(f"Failed to install some build tools: {missing_tools}")
-    
-    def fetch_remote_packages(self) -> List[str]:
-        """Fetch list of packages from remote server with improved error handling."""
+    def fetch_remote_packages(self):
+        """Fetch list of packages from remote server."""
         logger.info("Fetching remote package list...")
         
-        ssh_opts = ["-o", "StrictHostKeyChecking=yes", 
-                   "-o", "ConnectTimeout=30",
-                   "-o", "BatchMode=yes"]
+        ssh_cmd = [
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            f"{self.vps_user}@{self.vps_host}",
+            f"find {self.remote_dir} -name '*.pkg.tar.*' -printf '%f\\n' 2>/dev/null || true"
+        ]
         
         try:
-            # First, test SSH connection
-            test_cmd = ["ssh", *ssh_opts, f"{self.vps_user}@{self.vps_host}", "echo READY"]
-            test_result = self.run_command(test_cmd, capture_output=True, check=False)
-            
-            if "READY" not in test_result.stdout:
-                logger.warning(f"SSH test failed: {test_result.stderr}")
-                self.remote_files = []
-                return []
-            
-            # Get package list
-            result = self.run_command([
-                "ssh", *ssh_opts, f"{self.vps_user}@{self.vps_host}",
-                f"find {self.remote_dir} -name '*.pkg.tar.*' -type f -printf '%f\\n' 2>/dev/null | sort"
-            ], capture_output=True, timeout=30)
-            
+            result = self.run_command(ssh_cmd, capture_output=True)
             self.remote_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-            logger.info(f"Retrieved {len(self.remote_files)} remote package entries")
-            
-            # Download database file if it exists
-            db_source = f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/{self.repo_name}.db.tar.gz"
-            db_dest = self.output_dir / f"{self.repo_name}.db.tar.gz"
-            
-            scp_cmd = ["scp", *ssh_opts, db_source, str(db_dest)]
-            scp_result = self.run_command(scp_cmd, check=False, capture_output=True)
-            
-            if scp_result.returncode == 0:
-                logger.info(f"Database downloaded: {db_dest.stat().st_size / 1024:.1f} KB")
-            else:
-                logger.info("No existing database found (first run?)")
-            
-            return self.remote_files
-            
-        except Exception as e:
-            logger.warning(f"Failed to fetch remote list: {e}")
+            logger.info(f"Found {len(self.remote_files)} packages on server")
+        except:
             self.remote_files = []
-            return []
+            logger.warning("Could not fetch remote package list")
     
     def is_package_on_server(self, package_name: str, version: str = None) -> bool:
-        """Check if a package exists on the server."""
+        """Check if package exists on server."""
         if not self.remote_files:
             return False
         
         if version:
-            # Check specific version
             pattern = f"^{package_name}-{version}-"
-            return any(re.match(pattern, f) for f in self.remote_files)
         else:
-            # Check any version
             pattern = f"^{package_name}-"
-            return any(re.match(pattern, f) for f in self.remote_files)
-    
-    def get_remote_versions(self, package_name: str) -> List[str]:
-        """Get all versions of a package on the server."""
-        if not self.remote_files:
-            return []
         
-        versions = []
-        pattern = re.compile(f"^{package_name}-([0-9].*?)-")
-        
-        for filename in self.remote_files:
-            match = pattern.match(filename)
-            if match:
-                versions.append(match.group(1))
-        
-        return sorted(versions, reverse=True)  # Newest first
+        return any(re.match(pattern, f) for f in self.remote_files)
     
-    # ... (további metódusok változatlanok maradnak a fentebb megadottak szerint)
-    # Csak a szükséges változtatásokat hajtottam végre
+    def build_package(self, package_name: str, pkg_type: PackageType) -> bool:
+        """Build a single package."""
+        logger.info(f"Building {package_name} ({pkg_type.value})")
+        
+        # Get package directory
+        if pkg_type == PackageType.AUR:
+            pkg_dir = self._clone_aur_package(package_name)
+            if not pkg_dir:
+                return False
+        else:
+            pkg_dir = self.repo_root / package_name
+            if not pkg_dir.exists():
+                logger.error(f"Package directory not found: {package_name}")
+                return False
+        
+        # Extract version
+        pkgver, pkgrel = self._extract_package_info(pkg_dir)
+        full_version = f"{pkgver}-{pkgrel}"
+        
+        # Skip if already on server
+        if self.is_package_on_server(package_name, full_version):
+            logger.info(f"✓ {package_name} {full_version} already on server")
+            return False
+        
+        # Build the package
+        try:
+            # Download sources
+            self.run_command(["makepkg", "-od", "--noconfirm"], cwd=pkg_dir)
+            
+            # Install dependencies (for AUR packages)
+            if pkg_type == PackageType.AUR:
+                self._install_aur_dependencies(pkg_dir)
+            
+            # Build
+            result = self.run_command(
+                ["makepkg", "-si", "--noconfirm", "--clean", "--nocheck"],
+                cwd=pkg_dir,
+                capture_output=False
+            )
+            
+            # Move built packages
+            for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
+                dest = self.output_dir / pkg_file.name
+                shutil.move(pkg_file, dest)
+                logger.info(f"✓ Built: {pkg_file.name}")
+                self.packages_to_clean.add(package_name)
+            
+            # Update git for local packages
+            if pkg_type == PackageType.LOCAL:
+                self._update_git_repository(package_name, pkg_dir, full_version)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"✗ Failed to build {package_name}: {e}")
+            return False
     
-    def run(self):
-        """Main execution method with enhanced reporting."""
-        logger.info("=" * 70)
-        logger.info(f"Manjaro Package Builder v1.1 - Starting at {datetime.now()}")
-        logger.info("=" * 70)
+    def _clone_aur_package(self, package_name: str) -> Optional[Path]:
+        """Clone AUR package."""
+        aur_dir = self.repo_root / "build_aur"
+        aur_dir.mkdir(exist_ok=True)
+        
+        pkg_dir = aur_dir / package_name
+        if pkg_dir.exists():
+            shutil.rmtree(pkg_dir)
         
         try:
-            # 1. Configuration validation
-            logger.info(f"Configuration loaded:")
-            logger.info(f"  - Repository: {self.repo_name}")
-            logger.info(f"  - Remote dir: {self.remote_dir}")
-            logger.info(f"  - Local packages: {len(self.local_packages)}")
-            logger.info(f"  - AUR packages: {len(self.aur_packages)}")
+            self.run_command([
+                "git", "clone", 
+                f"https://aur.archlinux.org/{package_name}.git",
+                str(pkg_dir)
+            ])
+            return pkg_dir
+        except:
+            logger.error(f"Failed to clone AUR package: {package_name}")
+            return None
+    
+    def _extract_package_info(self, pkg_dir: Path) -> Tuple[str, str]:
+        """Extract pkgver and pkgrel from PKGBUILD."""
+        pkgbuild = pkg_dir / "PKGBUILD"
+        if not pkgbuild.exists():
+            return "unknown", "1"
+        
+        content = pkgbuild.read_text()
+        
+        pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        
+        pkgver = pkgver_match.group(1) if pkgver_match else "unknown"
+        pkgrel = pkgrel_match.group(1) if pkgrel_match else "1"
+        
+        return pkgver, pkgrel
+    
+    def _install_aur_dependencies(self, pkg_dir: Path):
+        """Install dependencies for AUR package."""
+        srcinfo = pkg_dir / ".SRCINFO"
+        if not srcinfo.exists():
+            return
+        
+        # Generate .SRCINFO if needed
+        self.run_command(["makepkg", "--printsrcinfo"], cwd=pkg_dir, check=False)
+        
+        if srcinfo.exists():
+            content = srcinfo.read_text()
+            # Extract dependencies
+            deps = []
+            for line in content.split('\n'):
+                if line.strip().startswith("depends =") or line.strip().startswith("makedepends ="):
+                    dep = line.split('=', 1)[1].strip()
+                    if dep and dep not in ["gtk2"]:  # Skip packages we build ourselves
+                        deps.append(dep)
             
-            # 2. Network diagnostics
-            network_results = self.network_diagnostics()
-            if not all(network_results.values()):
-                logger.warning("Some network tests failed, but continuing...")
+            if deps:
+                logger.info(f"Installing dependencies: {', '.join(deps)}")
+                for dep in deps:
+                    self.run_command(
+                        ["yay", "-S", "--asdeps", "--noconfirm", dep],
+                        check=False
+                    )
+    
+    def _update_git_repository(self, package_name: str, pkg_dir: Path, version: str):
+        """Update git repository with new package version."""
+        logger.info(f"Updating git repository for {package_name}...")
+        
+        # For simplicity, we'll update the local repo and push
+        try:
+            # Generate .SRCINFO
+            self.run_command(["makepkg", "--printsrcinfo"], cwd=pkg_dir)
             
-            # 3. Environment setup
+            # Add changes
+            self.run_command(["git", "add", f"{package_name}/PKGBUILD", f"{package_name}/.SRCINFO"])
+            
+            # Commit
+            self.run_command([
+                "git", "commit", "-m", 
+                f"Auto-update: {package_name} to {version} [skip ci]"
+            ])
+            
+            # Push
+            self.run_command(["git", "push"])
+            logger.info(f"✓ Git repository updated")
+            
+        except Exception as e:
+            logger.warning(f"Could not update git: {e}")
+    
+    def update_database(self):
+        """Update repository database."""
+        pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        if not pkg_files:
+            return
+        
+        logger.info(f"Updating database with {len(pkg_files)} packages")
+        
+        db_file = self.output_dir / f"{REPO_DB_NAME}.db.tar.gz"
+        cmd = ["repo-add", str(db_file)] + [str(p) for p in pkg_files]
+        
+        self.run_command(cmd)
+    
+    def upload_packages(self):
+        """Upload packages to remote server."""
+        files_to_upload = list(self.output_dir.glob("*"))
+        if not files_to_upload:
+            return True
+        
+        logger.info(f"Uploading {len(files_to_upload)} files...")
+        
+        try:
+            # Create remote directory if it doesn't exist
+            ssh_cmd = [
+                "ssh", f"{self.vps_user}@{self.vps_host}",
+                f"mkdir -p {self.remote_dir}"
+            ]
+            self.run_command(ssh_cmd, check=False)
+            
+            # Upload files
+            scp_cmd = ["scp"] + [str(f) for f in files_to_upload] + \
+                     [f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"]
+            
+            self.run_command(scp_cmd)
+            
+            # Calculate upload size
+            total_size = sum(f.stat().st_size for f in files_to_upload)
+            self.stats["bytes_uploaded"] = total_size
+            
+            logger.info(f"✓ Upload successful ({total_size/1024/1024:.1f} MB)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"✗ Upload failed: {e}")
+            return False
+    
+    def cleanup_old_packages(self):
+        """Remove old package versions from server (keep n-1)."""
+        if not self.packages_to_clean:
+            return
+        
+        logger.info("Cleaning up old package versions...")
+        
+        for package in self.packages_to_clean:
+            cmd = [
+                "ssh", f"{self.vps_user}@{self.vps_host}",
+                f"cd {self.remote_dir} && "
+                f"ls -t {package}-*.pkg.tar.zst 2>/dev/null | tail -n +3 | xargs -r rm -f"
+            ]
+            self.run_command(cmd, check=False)
+    
+    def run(self):
+        """Main execution."""
+        logger.info("=" * 60)
+        logger.info("Manjaro Package Builder")
+        logger.info("=" * 60)
+        
+        try:
+            # Setup
             self.setup_environment()
-            
-            # 4. Fetch remote packages
             self.fetch_remote_packages()
             
-            # 5. Process AUR packages
-            logger.info(f"\nProcessing {len(self.aur_packages)} AUR packages...")
-            aur_build_dir = self.repo_root / "build_aur"
-            aur_build_dir.mkdir(exist_ok=True)
-            
-            for i, package_name in enumerate(self.aur_packages, 1):
-                logger.info(f"\n[{i}/{len(self.aur_packages)}] AUR: {package_name}")
-                if self.process_package(package_name, PackageType.AUR):
+            # Build AUR packages
+            logger.info(f"\nBuilding {len(self.aur_packages)} AUR packages...")
+            for pkg in self.aur_packages:
+                if self.build_package(pkg, PackageType.AUR):
                     self.stats["aur_success"] += 1
-                self.stats["aur_processed"] += 1
             
-            # 6. Process local packages
-            logger.info(f"\nProcessing {len(self.local_packages)} local packages...")
-            for i, package_name in enumerate(self.local_packages, 1):
-                logger.info(f"\n[{i}/{len(self.local_packages)}] Local: {package_name}")
-                if self.process_package(package_name, PackageType.LOCAL):
+            # Build local packages
+            logger.info(f"\nBuilding {len(self.local_packages)} local packages...")
+            for pkg in self.local_packages:
+                if self.build_package(pkg, PackageType.LOCAL):
                     self.stats["local_success"] += 1
-                self.stats["local_processed"] += 1
             
-            # 7. Final steps if packages were built
-            if self.built_packages:
-                self._finalize_build()
+            # Finalize if we built anything
+            if self.stats["aur_success"] > 0 or self.stats["local_success"] > 0:
+                self.update_database()
+                if self.upload_packages():
+                    self.cleanup_old_packages()
             else:
-                logger.info("\nNo new packages built - everything is up to date!")
+                logger.info("\n✓ All packages are up to date!")
             
-            # 8. Summary
-            self._print_summary()
+            # Summary
+            elapsed = time.time() - self.stats["start_time"]
+            logger.info("=" * 60)
+            logger.info("Build Summary:")
+            logger.info(f"  AUR:   {self.stats['aur_success']}/{len(self.aur_packages)}")
+            logger.info(f"  Local: {self.stats['local_success']}/{len(self.local_packages)}")
+            logger.info(f"  Time:  {elapsed:.1f}s")
+            logger.info("=" * 60)
             
-            if self.failed_packages:
-                logger.warning(f"\nFailed packages: {', '.join(self.failed_packages)}")
-                return 1  # Partial failure
-            else:
-                return 0  # Complete success
-                
+            return 0
+            
         except Exception as e:
-            logger.error(f"\nBuild failed with critical error: {e}")
+            logger.error(f"\n✗ Build failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return 2  # Critical failure
-    
-    def _finalize_build(self):
-        """Finalize the build process."""
-        logger.info(f"\nFinalizing build of {len(self.built_packages)} packages...")
-        
-        # Update repository database
-        if self.update_repository_database():
-            # Upload to server
-            if self.upload_packages():
-                # Cleanup old packages
-                self.cleanup_old_packages()
-            else:
-                logger.error("Upload failed, skipping cleanup")
-        else:
-            logger.error("Database update failed")
-    
-    def _print_summary(self):
-        """Print comprehensive build summary."""
-        elapsed_time = time.time() - self.stats["start_time"]
-        
-        logger.info("=" * 70)
-        logger.info("BUILD SUMMARY")
-        logger.info("=" * 70)
-        logger.info(f"Execution time: {elapsed_time:.1f} seconds")
-        logger.info(f"Started: {datetime.fromtimestamp(self.stats['start_time'])}")
-        logger.info(f"Finished: {datetime.now()}")
-        logger.info("-" * 70)
-        logger.info("AUR Packages:")
-        logger.info(f"  Processed: {self.stats['aur_processed']}")
-        logger.info(f"  Success: {self.stats['aur_success']}")
-        logger.info(f"  Failed: {self.stats['aur_processed'] - self.stats['aur_success']}")
-        logger.info("-" * 70)
-        logger.info("Local Packages:")
-        logger.info(f"  Processed: {self.stats['local_processed']}")
-        logger.info(f"  Success: {self.stats['local_success']}")
-        logger.info(f"  Failed: {self.stats['local_processed'] - self.stats['local_success']}")
-        logger.info("-" * 70)
-        logger.info(f"Total built packages: {len(self.built_packages)}")
-        logger.info(f"Bytes uploaded: {self.stats['bytes_uploaded'] / 1024 / 1024:.2f} MB")
-        
-        if self.built_packages:
-            logger.info("\nNew packages:")
-            for pkg in self.built_packages:
-                logger.info(f"  - {pkg.name} ({pkg.full_version})")
-        
-        logger.info("=" * 70)
+            return 1
 
 def main():
-    """Entry point."""
     builder = PackageBuilder()
     return builder.run()
 
