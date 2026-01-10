@@ -605,25 +605,45 @@ class PackageBuilder:
         else:
             logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
-    
+ 
+ 
     def upload_packages(self):
         """Upload packages to server."""
-        files = list(self.output_dir.glob("*"))
-        if not files:
+        pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        if not pkg_files:
             logger.warning("No files to upload")
             return False
         
-        logger.info(f"Uploading {len(files)} files...")
+        logger.info(f"Uploading {len(pkg_files)} files...")
         
         # First, create remote directory if it doesn't exist
         mkdir_cmd = f"ssh -o StrictHostKeyChecking=no vps 'mkdir -p \"{self.remote_dir}\"'"
         self.run_cmd(mkdir_cmd, check=False)
         
+        # Sanitize filenames for upload (replace colons with underscores)
+        sanitized_files = []
+        for pkg_file in pkg_files:
+            original_name = pkg_file.name
+            # Replace colon with underscore in filename
+            sanitized_name = original_name.replace(":", "_")
+            if sanitized_name != original_name:
+                sanitized_path = pkg_file.parent / sanitized_name
+                shutil.copy2(pkg_file, sanitized_path)
+                sanitized_files.append(sanitized_path)
+                logger.info(f"Sanitized filename: {original_name} -> {sanitized_name}")
+            else:
+                sanitized_files.append(pkg_file)
+        
         # Upload files using the 'vps' alias
-        files_str = " ".join([f'"{str(f)}"' for f in files])
+        files_str = " ".join([f'"{str(f)}"' for f in sanitized_files])
         cmd = f"scp -o StrictHostKeyChecking=no -B {files_str} vps:\"{self.remote_dir}/\""
         
         result = self.run_cmd(cmd, check=False, capture=True)
+        
+        # Clean up sanitized files
+        for file in sanitized_files:
+            if ":" in str(file):
+                file.unlink()
         
         if result and result.returncode == 0:
             logger.info("✅ Upload successful")
