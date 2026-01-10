@@ -3,7 +3,7 @@ name: Manjaro Package Builder
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 4 * * *'  # Daily at 4 AM UTC
 
 jobs:
   build-and-deploy:
@@ -14,36 +14,66 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get full history for git operations
 
       - name: Prepare Environment
         run: |
+          # Initialize pacman
           pacman-key --init
           pacman-key --populate archlinux
+          
+          # Update system and install essential packages
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
-            pacman-contrib
-          
+            pacman-contrib \
+            curl wget
+            
+          # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Set ownership
           chown -R builder:builder .
           
           # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
 
       - name: Setup SSH
         run: |
           mkdir -p /home/builder/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > /home/builder/.ssh/id_ed25519
           chmod 600 /home/builder/.ssh/id_ed25519
+          
+          # Add known hosts
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+          
           chown -R builder:builder /home/builder/.ssh
 
       - name: Run Builder
         env:
+          # SSH Connection
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          
+          # Repository Configuration (CRITICAL!)
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
           REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           chmod +x builder.py
           su builder -c "python3 builder.py"
+
+      - name: Upload Build Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-results
+          path: |
+            builder.log
+            built_packages/
+          retention-days: 7
