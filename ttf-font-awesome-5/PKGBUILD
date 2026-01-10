@@ -1,7 +1,7 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com> 
 pkgname=ttf-font-awesome-5
 pkgver=5.15.4
-pkgrel=1  # Megnöveltem 2-re, hogy frissítésnek érzékelje!
+pkgrel=1
 pkgdesc="Iconic font designed for Bootstrap (version 5)"
 arch=('any')
 url="https://fontawesome.com"
