@@ -272,17 +272,24 @@ jobs:
         run: |
           echo "=== Configuring Git for Builder User ==="
           
-          # Configure git to use the persisted credentials from actions/checkout
-          # This allows the builder user to push changes back to the repository
+          # Configure git for builder user to push changes back to repository
           echo "Configuring git for builder user..."
           
-          # Copy git config from root to builder user
-          mkdir -p /home/builder/.git
-          cp -r .git/* /home/builder/.git/ 2>/dev/null || true
-          chown -R builder:builder /home/builder/.git
+          # Set git config for builder user globally
+          sudo -u builder git config --global user.email "builder@github-actions"
+          sudo -u builder git config --global user.name "GitHub Actions Builder"
+          
+          # Configure git to use the same repository directory
+          echo "Setting up repository access for builder user..."
           
           # Ensure the builder user can write to the git directory
-          chmod -R u+rw .git
+          if [ -d "/github/workspace/.git" ]; then
+            chown -R builder:builder /github/workspace/.git
+            chmod -R u+rw /github/workspace/.git
+          fi
+          
+          # Also set ownership of the workspace
+          chown -R builder:builder "$GITHUB_WORKSPACE"
           
           echo "✅ Git configuration for builder user complete"
 
@@ -296,6 +303,7 @@ jobs:
           echo "Files in current directory:"
           ls -la
           echo ""
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
           
           # Test SSH connection one more time
           echo "=== Final SSH Test ==="
@@ -326,7 +334,7 @@ jobs:
           export REPO_NAME="$REPO_NAME"
           
           # Run as builder user
-          su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
+          su builder -c "cd '$GITHUB_WORKSPACE' && python3 builder.py 2>&1" | tee build_output.log
           
           BUILD_STATUS=$?
           echo ""
