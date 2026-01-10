@@ -38,7 +38,7 @@ jobs:
           # Update system with minimal packages first
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
-            python python-pip \
+            python python-pip python-meson \
             python-requests python-gitpython python-yaml python-setuptools \
             pacman-contrib \
             curl wget ca-certificates \
@@ -55,6 +55,12 @@ jobs:
           
           # Set ownership
           chown -R builder:builder "$(pwd)"
+          
+          # Create build directories with correct permissions
+          mkdir -p "$(pwd)/build_aur"
+          chown -R builder:builder "$(pwd)/build_aur"
+          mkdir -p "$(pwd)/built_packages"
+          chown -R builder:builder "$(pwd)/built_packages"
           
           # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
@@ -217,8 +223,19 @@ jobs:
             unzip p7zip gnupg \
             dbus polkit \
             systemd systemd-sysvcompat \
-            arch-install-scripts
+            arch-install-scripts \
+            ldc po4a dconf  # tilix-git specific dependencies
             
+          # Install yay for AUR dependencies
+          echo "=== Installing yay ==="
+          cd /tmp
+          git clone https://aur.archlinux.org/yay.git
+          cd yay
+          # Build as builder user
+          sudo -u builder makepkg -si --noconfirm
+          cd /
+          rm -rf /tmp/yay
+          
           echo "✅ Build dependencies installed"
 
       - name: Run Builder

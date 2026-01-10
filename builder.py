@@ -272,15 +272,18 @@ class PackageBuilder:
         """Build AUR package."""
         aur_dir = self.repo_root / "build_aur"
         aur_dir.mkdir(exist_ok=True)
+        # Ensure correct permissions
+        self.run_cmd(f"chown -R builder:builder {aur_dir}", check=False)
         
         pkg_dir = aur_dir / pkg_name
         if pkg_dir.exists():
-            shutil.rmtree(pkg_dir)
+            # Remove as builder user
+            self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
         
-        # Clone from AUR
+        # Clone from AUR as builder user
         print(f"Cloning {pkg_name} from AUR...")
         result = self.run_cmd(
-            f"git clone https://aur.archlinux.org/{pkg_name}.git {pkg_dir}",
+            f"sudo -u builder git clone https://aur.archlinux.org/{pkg_name}.git {pkg_dir}",
             check=False
         )
         
@@ -288,11 +291,14 @@ class PackageBuilder:
             logger.error(f"Failed to clone {pkg_name}")
             return False
         
+        # Ensure ownership
+        self.run_cmd(f"chown -R builder:builder {pkg_dir}", check=False)
+        
         # Check if PKGBUILD exists
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"No PKGBUILD found for {pkg_name}")
-            shutil.rmtree(pkg_dir)
+            self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
             return False
         
         # Extract version
@@ -307,7 +313,7 @@ class PackageBuilder:
             if self.package_exists(pkg_name, version):
                 logger.info(f"✅ {pkg_name} {version} already exists on server - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
-                shutil.rmtree(pkg_dir)
+                self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
                 return False
             
             # Check if any version exists (for logging)
@@ -328,38 +334,37 @@ class PackageBuilder:
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
-            # Download sources
+            # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd("makepkg -od --noconfirm", cwd=pkg_dir, check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
-                shutil.rmtree(pkg_dir)
+                self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
                 return False
             
             # Install AUR dependencies
             self._install_aur_deps(pkg_dir, pkg_name)
             
-            # Build package
+            # Build package as builder user
             print("Building package...")
             build_result = self.run_cmd(
-                "makepkg -si --noconfirm --clean --nocheck",
-                cwd=pkg_dir,
+                f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
                 capture=True,
                 check=False
             )
             
             if build_result.returncode == 0:
-                # Move built packages
+                # Move built packages as builder user
                 moved = False
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
-                    shutil.move(pkg_file, dest)
+                    self.run_cmd(f"sudo -u builder mv {pkg_file} {dest}", check=False)
                     self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
                 
-                # Cleanup
-                shutil.rmtree(pkg_dir)
+                # Cleanup as builder user
+                self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
@@ -369,13 +374,12 @@ class PackageBuilder:
                     return False
             else:
                 logger.error(f"Failed to build {pkg_name}: {build_result.stderr[:500]}")
-                shutil.rmtree(pkg_dir)
+                self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
                 return False
                 
         except Exception as e:
             logger.error(f"Error building {pkg_name}: {e}")
-            if pkg_dir.exists():
-                shutil.rmtree(pkg_dir, ignore_errors=True)
+            self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
             return False
     
     def _handle_qt5_styleplugins(self, pkg_dir):
@@ -413,7 +417,7 @@ class PackageBuilder:
                 self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         # Generate .SRCINFO
-        self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
+        self.run_cmd("sudo -u builder makepkg --printsrcinfo", cwd=pkg_dir, check=False)
         
         srcinfo = pkg_dir / ".SRCINFO"
         if not srcinfo.exists():
@@ -475,7 +479,7 @@ class PackageBuilder:
                 
                 # Strategy 3: Try yay for AUR dependencies
                 logger.info(f"Trying yay for {dep_clean}...")
-                yay_result = self.run_cmd(f"yay -S --asdeps --needed --noconfirm {dep_clean}", check=False, capture=True)
+                yay_result = self.run_cmd(f"sudo -u builder yay -S --asdeps --needed --noconfirm {dep_clean}", check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
@@ -535,28 +539,27 @@ class PackageBuilder:
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
-            # Download sources
+            # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd("makepkg -od --noconfirm", cwd=pkg_dir, check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
             
-            # Build package
+            # Build package as builder user
             print("Building package...")
             build_result = self.run_cmd(
-                "makepkg -si --noconfirm --clean --nocheck",
-                cwd=pkg_dir,
+                f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
                 capture=True,
                 check=False
             )
             
             if build_result.returncode == 0:
-                # Move built packages
+                # Move built packages as builder user
                 moved = False
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
-                    shutil.move(pkg_file, dest)
+                    self.run_cmd(f"sudo -u builder mv {pkg_file} {dest}", check=False)
                     self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
