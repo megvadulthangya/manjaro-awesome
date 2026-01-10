@@ -18,7 +18,18 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare Environment
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
+          echo "=== Starting Environment Preparation ==="
+          echo "Repository: $REPO_NAME"
+          echo "Server URL: $REPO_SERVER_URL"
+          
           # Initialize pacman
           pacman-key --init
           pacman-key --populate archlinux
@@ -146,26 +157,30 @@ jobs:
           else
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
-            # Create repository configuration - CORRECTED without extra 'n'
-            REPO_CONFIG="[$REPO_NAME]
-Server = $REPO_SERVER_URL
-SigLevel = Optional TrustAll
-"
+            # Create repository configuration - USING echo -e FOR MULTI-LINE
+            echo "Creating repository configuration..."
+            
+            # Use a temporary file to avoid awk/sed issues
+            TEMP_FILE=$(mktemp)
+            echo "[$REPO_NAME]" > "$TEMP_FILE"
+            echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
+            echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
             
             # Find where to insert (before [community] or at end)
             if grep -q "^\[community\]" /etc/pacman.conf; then
               echo "Inserting before [community] section..."
-              # Use a temporary file to avoid sed newline issues
-              awk -v repo_config="$REPO_CONFIG" '
-                /^\[community\]/ {
-                  print repo_config
-                }
-                {print}
-              ' /etc/pacman.conf > /etc/pacman.conf.tmp && mv /etc/pacman.conf.tmp /etc/pacman.conf
+              # Insert the content before [community]
+              LINE_NUM=$(grep -n "^\[community\]" /etc/pacman.conf | cut -d: -f1)
+              head -n $((LINE_NUM-1)) /etc/pacman.conf > /etc/pacman.conf.tmp
+              cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
+              tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
+              mv /etc/pacman.conf.tmp /etc/pacman.conf
             else
               echo "Appending at end of file..."
-              echo -e "\n$REPO_CONFIG" >> /etc/pacman.conf
+              cat "$TEMP_FILE" >> /etc/pacman.conf
             fi
+            
+            rm -f "$TEMP_FILE"
           fi
           
           # Verify the configuration
@@ -196,6 +211,8 @@ SigLevel = Optional TrustAll
           else
             echo "❌ Failed to sync pacman database"
             echo "Check /etc/pacman.conf for syntax errors"
+            echo "Last 10 lines of pacman.conf:"
+            tail -10 /etc/pacman.conf
           fi
           
           echo "✅ Pacman repository configuration complete"
