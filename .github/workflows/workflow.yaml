@@ -226,15 +226,20 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf  # tilix-git specific dependencies
             
-          # Install yay for AUR dependencies
+          # Install yay for AUR dependencies - simpler method
           echo "=== Installing yay ==="
+          # First give builder permission to /tmp
+          chmod 777 /tmp
+          # Install yay using a different approach
           cd /tmp
-          git clone https://aur.archlinux.org/yay.git
-          cd yay
-          # Build as builder user
+          # Clone as builder user
+          sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+          cd yay-bin
+          # Build and install as builder user
           sudo -u builder makepkg -si --noconfirm
           cd /
-          rm -rf /tmp/yay
+          # Cleanup
+          rm -rf /tmp/yay-bin
           
           echo "✅ Build dependencies installed"
 
