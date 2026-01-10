@@ -10,10 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
-      # Konténer hálózati beállítások javítása
       options: --network host
 
-    # Környezeti változók a teljes job számára
     env:
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -34,11 +32,9 @@ jobs:
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
           
-          # Initialize pacman
           pacman-key --init
           pacman-key --populate archlinux
           
-          # Update system and install ALL required packages via pacman
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
@@ -58,18 +54,14 @@ jobs:
             systemd systemd-sysvcompat \
             arch-install-scripts
             
-          # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Git safety settings
           git config --system --add safe.directory '*'
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
-          # Set ownership - use absolute path to avoid issues
           chown -R builder:builder "$(pwd)"
           
-          # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
           
@@ -84,7 +76,6 @@ jobs:
           mkdir -p /home/builder/.ssh
           chmod 700 /home/builder/.ssh
           
-          # Debug: Check if SSH key is set
           echo "=== Checking SSH key ==="
           if [ -z "$VPS_SSH_KEY" ]; then
             echo "❌ ERROR: VPS_SSH_KEY is empty!"
@@ -93,7 +84,6 @@ jobs:
             echo "✅ SSH key is set (length: ${#VPS_SSH_KEY} chars)"
           fi
           
-          # Write SSH key (handle both base64 and plain text)
           echo "=== Writing SSH key ==="
           if echo "$VPS_SSH_KEY" | base64 -d >/dev/null 2>&1; then
             echo "🔑 Key appears to be base64 encoded, decoding..."
@@ -107,30 +97,23 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Create SSH config file for better control - MÓDOSÍTOTT VERZIÓ
+          # Create SSH config without heredoc - using echo statements
           echo "Creating SSH config..."
-          cat > /home/builder/.ssh/config << 'EOF'
-Host $VPS_HOST
-  HostName $VPS_HOST
-  User $VPS_USER
-  IdentityFile ~/.ssh/id_ed25519
-  Port 22
-  ConnectTimeout 30
-  ServerAliveInterval 60
-  ServerAliveCountMax 3
-  TCPKeepAlive yes
-  ControlMaster auto
-  ControlPath ~/.ssh/control-%r@%h:%p
-  ControlPersist 10m
-EOF
-          
-          # Replace variables in SSH config
-          sed -i "s/\$VPS_HOST/$VPS_HOST/g" /home/builder/.ssh/config
-          sed -i "s/\$VPS_USER/$VPS_USER/g" /home/builder/.ssh/config
+          echo "Host $VPS_HOST" > /home/builder/.ssh/config
+          echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
+          echo "  User $VPS_USER" >> /home/builder/.ssh/config
+          echo "  IdentityFile ~/.ssh/id_ed25519" >> /home/builder/.ssh/config
+          echo "  Port 22" >> /home/builder/.ssh/config
+          echo "  ConnectTimeout 30" >> /home/builder/.ssh/config
+          echo "  ServerAliveInterval 60" >> /home/builder/.ssh/config
+          echo "  ServerAliveCountMax 3" >> /home/builder/.ssh/config
+          echo "  TCPKeepAlive yes" >> /home/builder/.ssh/config
+          echo "  ControlMaster auto" >> /home/builder/.ssh/config
+          echo "  ControlPath ~/.ssh/control-%r@%h:%p" >> /home/builder/.ssh/config
+          echo "  ControlPersist 10m" >> /home/builder/.ssh/config
           
           chmod 600 /home/builder/.ssh/config
           
-          # Add known hosts PROPERLY
           echo "=== Adding known hosts ==="
           if [ -n "$VPS_HOST" ]; then
             echo "Adding $VPS_HOST..."
@@ -145,17 +128,14 @@ EOF
             echo "⚠️ VPS_HOST is empty!"
           fi
           
-          # Also add github.com for potential git operations
           echo "Adding github.com..."
           ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null
           
           chown -R builder:builder /home/builder/.ssh
           
-          # Test SSH key and connection
           echo "=== Testing SSH connection ==="
           echo "Testing connection to $VPS_USER@$VPS_HOST..."
           
-          # First test basic connectivity with netcat
           echo "1. Testing TCP connectivity to $VPS_HOST:22..."
           if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
             echo "✅ TCP port 22 is accessible"
@@ -176,35 +156,28 @@ EOF
           echo "Server URL: $REPO_SERVER_URL"
           echo ""
           
-          # Check if variables are set
           if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
             echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
             exit 1
           fi
           
-          # Backup original pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
-          # Check if repository already exists
           if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
             echo "⚠️ Repository '$REPO_NAME' already exists in pacman.conf"
             echo "Updating server URL if needed..."
             
-            # Update server URL
             sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
           else
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
-            # Create repository configuration
             echo "Creating repository configuration..."
             
-            # Use a temporary file to avoid awk/sed issues
             TEMP_FILE=$(mktemp)
             echo "[$REPO_NAME]" > "$TEMP_FILE"
             echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
             echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
             
-            # Find where to insert (before [community] or at end)
             if grep -q "^\[community\]" /etc/pacman.conf; then
               echo "Inserting before [community] section..."
               LINE_NUM=$(grep -n "^\[community\]" /etc/pacman.conf | cut -d: -f1)
@@ -220,22 +193,18 @@ EOF
             rm -f "$TEMP_FILE"
           fi
           
-          # Verify the configuration
           echo "=== Pacman.conf repository section ==="
           grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
           
-          # Show a few lines around the repo for debugging
           echo ""
           echo "=== Context around repository in pacman.conf ==="
           grep -n -B 2 -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "No context found"
           
-          # Update pacman database
           echo ""
           echo "Updating pacman database..."
           if pacman -Sy --noconfirm; then
             echo "✅ Pacman database synchronized"
             
-            # Test repository access
             echo ""
             echo "=== Testing repository access ==="
             if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
@@ -258,7 +227,6 @@ EOF
         run: |
           echo "=== Network Connectivity Tests ==="
           
-          # Test basic internet
           echo "1. Testing internet connectivity..."
           if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
             echo "✅ Internet connectivity OK"
@@ -266,13 +234,11 @@ EOF
             echo "❌ No internet connectivity"
           fi
           
-          # Test SSH connectivity with more detailed debugging
           echo ""
           echo "2. Testing SSH connectivity to $VPS_HOST..."
           if [ -n "$VPS_HOST" ] && [ -n "$VPS_USER" ]; then
             echo "Testing connection to $VPS_USER@$VPS_HOST..."
             
-            # First check if host resolves
             echo "Resolving $VPS_HOST..."
             if getent hosts "$VPS_HOST" >/dev/null 2>&1; then
               echo "✅ Hostname resolves: $(getent hosts $VPS_HOST)"
@@ -280,11 +246,9 @@ EOF
               echo "❌ Cannot resolve hostname $VPS_HOST"
             fi
             
-            # Try with verbose output
             echo "Attempting SSH connection (verbose mode)..."
             timeout 15 ssh -vvv -o ConnectTimeout=10 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_SUCCESS" 2>&1 | grep -A5 -B5 "timeout\|connected\|refused\|denied\|Connection to" || true
             
-            # Simple test
             if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_OK" 2>/dev/null; then
               echo "✅ SSH connection successful"
             else
@@ -295,11 +259,9 @@ EOF
               echo "  SSH key exists: $(ls -la /home/builder/.ssh/id_ed25519 2>/dev/null && echo 'Yes' || echo 'No')"
               echo "  SSH key permissions: $(stat -c '%a %n' /home/builder/.ssh/id_ed25519 2>/dev/null || echo 'N/A')"
               
-              # Show SSH config
               echo "  SSH config:"
               cat /home/builder/.ssh/config 2>/dev/null || echo "    No SSH config found"
               
-              # Show known_hosts
               echo "  Known hosts for $VPS_HOST:"
               grep "$VPS_HOST" /home/builder/.ssh/known_hosts 2>/dev/null || echo "    Not in known_hosts"
             fi
@@ -307,11 +269,9 @@ EOF
             echo "⚠️ VPS_HOST or VPS_USER not set"
           fi
           
-          # Test repository server
           echo ""
           echo "3. Testing repository server $REPO_SERVER_URL..."
           if [ -n "$REPO_SERVER_URL" ]; then
-            # Extract hostname from URL
             REPO_HOST=$(echo "$REPO_SERVER_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
             echo "Testing connection to $REPO_HOST..."
             if timeout 5 curl -I "$REPO_SERVER_URL" >/dev/null 2>&1; then
@@ -325,10 +285,8 @@ EOF
 
       - name: Run Builder
         run: |
-          # Make script executable
           chmod +x builder.py
           
-          # Show current environment for debugging
           echo "=== Current Environment in Builder Step ==="
           echo "PWD: $(pwd)"
           echo "VPS_USER: $VPS_USER"
@@ -338,24 +296,20 @@ EOF
           echo "REMOTE_DIR: $REMOTE_DIR"
           echo ""
           
-          # Show SSH info
           echo "=== SSH Configuration ==="
           ls -la /home/builder/.ssh/
           echo "SSH config:"
           cat /home/builder/.ssh/config 2>/dev/null || echo "No SSH config"
           echo ""
           
-          # Test SSH connection explicitly before builder
           echo "=== Pre-build SSH Test ==="
           su builder -c "ssh -o ConnectTimeout=10 $VPS_USER@$VPS_HOST 'echo PRE_BUILD_SSH_TEST_OK && hostname'" && echo "✅ SSH test successful" || echo "❌ SSH test failed"
           echo ""
           
-          # Show script info
           echo "=== Builder Script Info ==="
           head -20 builder.py
           echo ""
           
-          # Test repository access
           echo "=== Testing repository access ==="
           if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
             echo "✅ Repository '$REPO_NAME' is accessible via pacman"
@@ -369,14 +323,11 @@ EOF
           fi
           echo ""
           
-          # Run as builder user
           echo "Starting builder script..."
           
-          # Important: Set environment variables for builder (they are already available)
           export HOME=/home/builder
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
-          # Also pass all necessary env vars explicitly
           export VPS_USER="$VPS_USER"
           export VPS_HOST="$VPS_HOST"
           export VPS_SSH_KEY="$VPS_SSH_KEY"
@@ -384,15 +335,12 @@ EOF
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
           
-          # Run with output to both console and log file
           su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
           
-          # Check exit status
           BUILD_STATUS=$?
           echo ""
           echo "=== Build finished with exit code: $BUILD_STATUS ==="
           
-          # Show log summary
           if [ -f "builder.log" ]; then
             echo "=== Last 50 lines of builder.log ==="
             tail -50 builder.log
