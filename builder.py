@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - With proper pacman repository handling
+Manjaro Package Builder - With proper SSH and dependency handling
 """
 
 import os
@@ -14,6 +14,16 @@ import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
+
+# Try to import our config files
+try:
+    import config
+    import packages
+    HAS_CONFIG_FILES = True
+except ImportError as e:
+    print(f"⚠️ Warning: Could not import config files: {e}")
+    print("⚠️ Using default configurations")
+    HAS_CONFIG_FILES = False
 
 # Configure logging
 logging.basicConfig(
@@ -30,11 +40,13 @@ logger = logging.getLogger(__name__)
 class PackageBuilder:
     def __init__(self):
         self.repo_root = Path(os.getcwd())
-        self.output_dir = self.repo_root / "built_packages"
-        self.build_tracking_dir = self.repo_root / ".build_tracking"
         
         # Load configuration
         self._load_config()
+        
+        # Setup directories - use config values or defaults
+        self.output_dir = self.repo_root / getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else self.repo_root / "built_packages"
+        self.build_tracking_dir = self.repo_root / getattr(config, 'BUILD_TRACKING_DIR', '.build_tracking') if HAS_CONFIG_FILES else self.repo_root / ".build_tracking"
         
         # Setup directories
         self.output_dir.mkdir(exist_ok=True)
@@ -46,6 +58,9 @@ class PackageBuilder:
         self.built_packages = []
         self.skipped_packages = []
         
+        # Special dependencies from config
+        self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
+        
         # Statistics
         self.stats = {
             "start_time": time.time(),
@@ -54,13 +69,20 @@ class PackageBuilder:
         }
     
     def _load_config(self):
-        """Load configuration from environment."""
+        """Load configuration from environment and config files."""
         self.vps_user = os.getenv('VPS_USER')
         self.vps_host = os.getenv('VPS_HOST')
         self.ssh_key = os.getenv('VPS_SSH_KEY')
         self.repo_server_url = os.getenv('REPO_SERVER_URL')
         self.remote_dir = os.getenv('REMOTE_DIR', '/var/www/repo')
-        self.repo_name = os.getenv('REPO_NAME', 'manjaro-awesome')
+        
+        # Get repo name from env, then config, then default
+        env_repo_name = os.getenv('REPO_NAME')
+        if HAS_CONFIG_FILES:
+            config_repo_name = getattr(config, 'REPO_DB_NAME', 'manjaro-awesome')
+            self.repo_name = env_repo_name if env_repo_name else config_repo_name
+        else:
+            self.repo_name = env_repo_name if env_repo_name else 'manjaro-awesome'
         
         # Validate
         required = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY', 'REPO_SERVER_URL']
@@ -75,6 +97,7 @@ class PackageBuilder:
         print(f"   SSH: {self.vps_user}@{self.vps_host}")
         print(f"   Remote directory: {self.remote_dir}")
         print(f"   Repository: {self.repo_name} -> {self.repo_server_url}")
+        print(f"   Config files loaded: {HAS_CONFIG_FILES}")
         
         # Verify pacman repository is configured
         self._verify_pacman_repository()
@@ -123,65 +146,30 @@ class PackageBuilder:
                 raise
             return e
     
-    def setup_environment(self):
-        """Setup build environment."""
-        print("\n" + "="*60)
-        print("Setting up environment")
-        print("="*60)
-        
-        # Configure SSH
-        ssh_dir = Path("/home/builder/.ssh")
-        ssh_dir.mkdir(parents=True, exist_ok=True)
-        
-        key_file = ssh_dir / "id_ed25519"
-        
-        # Write SSH key (handle both base64 and plain text)
-        try:
-            import base64
-            key_data = base64.b64decode(self.ssh_key)
-            key_file.write_bytes(key_data)
-            logger.debug("SSH key decoded from base64")
-        except:
-            key_file.write_text(self.ssh_key)
-            logger.debug("SSH key written as plain text")
-        
-        key_file.chmod(0o600)
-        
-        # Add known hosts
-        known_hosts = ssh_dir / "known_hosts"
-        for host in [self.vps_host, "github.com"]:
-            result = self.run_cmd(f"ssh-keyscan -H {host}", capture=True, check=False)
-            if result and result.stdout:
-                known_hosts.write_text(result.stdout)
-        
-        # Set ownership
-        self.run_cmd(f"chown -R builder:builder {ssh_dir}")
-        
-        # Git configuration
-        self.run_cmd("git config --global user.name 'GitHub Action Bot'")
-        self.run_cmd("git config --global user.email 'action@github.com'")
-        
-        print("✅ Environment setup complete")
-    
     def fetch_remote_packages(self):
         """Fetch list of packages from server."""
         print("\n📡 Fetching remote package list...")
         
-        cmd = f"ssh -o ConnectTimeout=30 -o BatchMode=yes {self.vps_user}@{self.vps_host} 'find \"{self.remote_dir}\" -name \"*.pkg.tar.*\" -type f -printf \"%f\\n\" 2>/dev/null'"
+        # Use SSH config alias 'vps' with strict host key checking disabled
+        cmd = f"ssh -o StrictHostKeyChecking=no vps 'find \"{self.remote_dir}\" -name \"*.pkg.tar.*\" -type f -printf \"%f\\n\" 2>/dev/null || echo \"ERROR: Could not list remote files\"'"
+        
         result = self.run_cmd(cmd, capture=True, check=False)
         
-        if result and result.stdout:
-            self.remote_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-            logger.info(f"Found {len(self.remote_files)} packages on server")
+        if result and result.returncode == 0 and result.stdout:
+            # Filter out error messages
+            lines = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+            self.remote_files = [f for f in lines if not f.startswith("ERROR:")]
             
-            # Debug: show some packages
             if self.remote_files:
+                logger.info(f"Found {len(self.remote_files)} packages on server")
                 logger.debug(f"First 5 packages: {self.remote_files[:5]}")
+            else:
+                logger.warning("No packages found on server (or server unreachable)")
         else:
             self.remote_files = []
             logger.warning("Could not fetch remote package list")
             if result and result.stderr:
-                logger.error(f"SSH error: {result.stderr}")
+                logger.error(f"SSH error: {result.stderr[:200]}")
     
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
@@ -214,29 +202,46 @@ class PackageBuilder:
         
         return None
     
+    def get_package_lists(self):
+        """Get package lists from packages.py or use defaults."""
+        if HAS_CONFIG_FILES and hasattr(packages, 'LOCAL_PACKAGES') and hasattr(packages, 'AUR_PACKAGES'):
+            print("📦 Using package lists from packages.py")
+            return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
+        else:
+            print("⚠️ Using default package lists (packages.py not found or incomplete)")
+            # Default fallback lists
+            local_packages = [
+                "gghelper", "gtk2", "awesome-freedesktop-git", "lain-git",
+                "awesome-rofi", "nordic-backgrounds", "awesome-copycats-manjaro",
+                "i3lock-fancy-git", "ttf-font-awesome-5", "nvidia-driver-assistant",
+                "grayjay-bin"
+            ]
+            
+            aur_packages = [
+                "libinput-gestures", "qt5-styleplugins", "urxvt-resize-font-git",
+                "i3lock-color", "raw-thumbnailer", "gsconnect", "awesome-git",
+                "tilix-git", "tamzen-font", "betterlockscreen", "nordic-theme",
+                "nordic-darker-theme", "geany-nord-theme", "nordzy-icon-theme",
+                "oh-my-posh-bin", "fish-done", "find-the-command", "p7zip-gui",
+                "qownnotes", "xorg-font-utils", "xnviewmp", "simplescreenrecorder",
+                "gtkhash-thunar", "a4tech-bloody-driver-git"
+            ]
+            
+            return local_packages, aur_packages
+    
     def build_packages(self):
         """Build packages."""
         print("\n" + "="*60)
         print("Building packages")
         print("="*60)
         
-        # Package lists
-        aur_packages = [
-            "libinput-gestures", "qt5-styleplugins", "urxvt-resize-font-git",
-            "i3lock-color", "raw-thumbnailer", "gsconnect", "awesome-git",
-            "tilix-git", "tamzen-font", "betterlockscreen", "nordic-theme",
-            "nordic-darker-theme", "geany-nord-theme", "nordzy-icon-theme",
-            "oh-my-posh-bin", "fish-done", "find-the-command", "p7zip-gui",
-            "qownnotes", "xorg-font-utils", "xnviewmp", "simplescreenrecorder",
-            "gtkhash-thunar", "a4tech-bloody-driver-git"
-        ]
+        # Get package lists from packages.py
+        local_packages, aur_packages = self.get_package_lists()
         
-        local_packages = [
-            "gghelper", "gtk2", "awesome-freedesktop-git", "lain-git",
-            "awesome-rofi", "nordic-backgrounds", "awesome-copycats-manjaro",
-            "i3lock-fancy-git", "ttf-font-awesome-5", "nvidia-driver-assistant",
-            "grayjay-bin"
-        ]
+        print(f"📦 Package statistics:")
+        print(f"   Local packages: {len(local_packages)}")
+        print(f"   AUR packages: {len(aur_packages)}")
+        print(f"   Total packages: {len(local_packages) + len(aur_packages)}")
         
         # Build AUR packages
         print(f"\n🔨 Building {len(aur_packages)} AUR packages")
@@ -396,8 +401,16 @@ class PackageBuilder:
                     pkgbuild.write_text(content)
     
     def _install_aur_deps(self, pkg_dir, pkg_name):
-        """Install dependencies for AUR package."""
+        """Install dependencies for AUR package with improved logic."""
         print(f"Checking dependencies for {pkg_name}...")
+        
+        # Check for special dependencies in config
+        if pkg_name in self.special_dependencies:
+            logger.info(f"Found special dependencies for {pkg_name}: {self.special_dependencies[pkg_name]}")
+            # Install special dependencies first
+            for dep in self.special_dependencies[pkg_name]:
+                logger.info(f"Installing special dependency: {dep}")
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         # Generate .SRCINFO
         self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
@@ -423,6 +436,10 @@ class PackageBuilder:
         
         logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
         
+        # Refresh pacman database first
+        logger.info("Refreshing pacman database...")
+        self.run_cmd("sudo pacman -Sy --noconfirm", check=False)
+        
         # Try to install each dependency
         installed_count = 0
         for dep in deps:
@@ -439,18 +456,32 @@ class PackageBuilder:
                 installed_count += 1
                 continue
             
-            # Try pacman first (from our repository or official repos)
-            print(f"Installing {dep_clean}...")
-            result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+            # Strategy 1: Try pacman (with sudo for system packages)
+            print(f"Installing {dep_clean} via pacman...")
+            result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
             
             if result.returncode != 0:
-                # Try yay for AUR dependencies
+                # Strategy 2: Check if it's in our custom repository
+                logger.info(f"Checking if {dep_clean} is in our repository...")
+                repo_check = self.run_cmd(f"pacman -Sl {self.repo_name} | grep -q '{dep_clean}'", check=False)
+                
+                if repo_check.returncode == 0:
+                    logger.info(f"{dep_clean} found in {self.repo_name}, installing...")
+                    result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+                    
+                    if result.returncode == 0:
+                        installed_count += 1
+                        continue
+                
+                # Strategy 3: Try yay for AUR dependencies
                 logger.info(f"Trying yay for {dep_clean}...")
                 yay_result = self.run_cmd(f"yay -S --asdeps --needed --noconfirm {dep_clean}", check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
                     logger.warning(f"Failed to install dependency: {dep_clean}")
+                    logger.debug(f"Pacman error: {result.stderr[:200] if result and result.stderr else 'None'}")
+                    logger.debug(f"Yay error: {yay_result.stderr[:200] if yay_result and yay_result.stderr else 'None'}")
             else:
                 installed_count += 1
         
@@ -492,6 +523,13 @@ class PackageBuilder:
         else:
             version = "unknown"
             logger.warning(f"Could not extract version for {pkg_name}")
+        
+        # Check for special dependencies
+        if pkg_name in self.special_dependencies:
+            logger.info(f"Found special dependencies for {pkg_name}")
+            for dep in self.special_dependencies[pkg_name]:
+                logger.info(f"Installing special dependency: {dep}")
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         # Build
         try:
@@ -575,12 +613,12 @@ class PackageBuilder:
         logger.info(f"Uploading {len(files)} files...")
         
         # First, create remote directory if it doesn't exist
-        mkdir_cmd = f"ssh {self.vps_user}@{self.vps_host} 'mkdir -p \"{self.remote_dir}\"'"
+        mkdir_cmd = f"ssh -o StrictHostKeyChecking=no vps 'mkdir -p \"{self.remote_dir}\"'"
         self.run_cmd(mkdir_cmd, check=False)
         
-        # Upload files
+        # Upload files using the 'vps' alias
         files_str = " ".join([f'"{str(f)}"' for f in files])
-        cmd = f"scp -B {files_str} {self.vps_user}@{self.vps_host}:\"{self.remote_dir}/\""
+        cmd = f"scp -o StrictHostKeyChecking=no -B {files_str} vps:\"{self.remote_dir}/\""
         
         result = self.run_cmd(cmd, check=False, capture=True)
         
@@ -601,7 +639,7 @@ class PackageBuilder:
         
         cleaned = 0
         for pkg in self.packages_to_clean:
-            cmd = f"ssh {self.vps_user}@{self.vps_host} 'cd \"{self.remote_dir}\" && ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +3 | xargs -r rm -f 2>/dev/null || true'"
+            cmd = f"ssh -o StrictHostKeyChecking=no vps 'cd \"{self.remote_dir}\" && ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +3 | xargs -r rm -f 2>/dev/null || true'"
             result = self.run_cmd(cmd, check=False)
             if result and result.returncode == 0:
                 cleaned += 1
@@ -616,7 +654,11 @@ class PackageBuilder:
         
         try:
             # Setup
-            self.setup_environment()
+            print("\n🔧 Initial setup...")
+            print(f"Using repository: {self.repo_name}")
+            print(f"Output directory: {self.output_dir}")
+            print(f"Special dependencies loaded: {len(self.special_dependencies)}")
+            
             self.fetch_remote_packages()
             
             # Build packages
