@@ -10,6 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+      # Ezt kell hozzáadni: env változók átadása a konténernek
+      env:
+        # SSH Connection
+        VPS_USER: ${{ secrets.VPS_USER }}
+        VPS_HOST: ${{ secrets.VPS_HOST }}
+        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        
+        # Repository Configuration
+        REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+        REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+        REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
 
     steps:
       - name: Checkout Code
@@ -62,38 +73,75 @@ jobs:
 
       - name: Setup SSH
         run: |
+          echo "=== Current environment variables ==="
+          env | grep -E "VPS|REPO|REMOTE" || echo "No VPS/REPO env vars found"
+          echo ""
+          
           mkdir -p /home/builder/.ssh
           
-          # Write SSH key (handle both base64 and plain text)
-          if echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d >/dev/null 2>&1; then
-            echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
+          # Debug: Check if SSH key is set
+          echo "=== Checking SSH key ==="
+          if [ -z "$VPS_SSH_KEY" ]; then
+            echo "❌ ERROR: VPS_SSH_KEY is empty!"
+            exit 1
           else
-            echo "${{ secrets.VPS_SSH_KEY }}" > /home/builder/.ssh/id_ed25519
+            echo "✅ SSH key is set (length: ${#VPS_SSH_KEY} chars)"
+          fi
+          
+          # Write SSH key (handle both base64 and plain text)
+          echo "=== Writing SSH key ==="
+          if echo "$VPS_SSH_KEY" | base64 -d >/dev/null 2>&1; then
+            echo "🔑 Key appears to be base64 encoded, decoding..."
+            echo "$VPS_SSH_KEY" | base64 -d > /home/builder/.ssh/id_ed25519
+            echo "✅ Key decoded from base64"
+          else
+            echo "🔑 Key is plain text, writing as-is..."
+            echo "$VPS_SSH_KEY" > /home/builder/.ssh/id_ed25519
+            echo "✅ Key written as plain text"
           fi
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
           # Add known hosts
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+          echo "=== Adding known hosts ==="
+          if [ -n "$VPS_HOST" ]; then
+            echo "Adding $VPS_HOST..."
+            ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || echo "⚠️ Failed to get key for $VPS_HOST"
+          else
+            echo "⚠️ VPS_HOST is empty!"
+          fi
+          
+          echo "Adding github.com..."
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || echo "⚠️ Failed to get key for github.com"
           
           chown -R builder:builder /home/builder/.ssh
+          
+          # Test SSH key
+          echo "=== Testing SSH key ==="
+          ls -la /home/builder/.ssh/
+          echo "Key contents (first 100 chars):"
+          head -c 100 /home/builder/.ssh/id_ed25519
+          echo ""
           echo "✅ SSH setup complete"
 
       - name: Configure Pacman Repository
-        env:
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           echo "=== Configuring Pacman Repository ==="
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
+          echo ""
+          
+          # Check if variables are set
+          if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
+            echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
+            exit 1
+          fi
           
           # Backup original pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
           # Check if repository already exists
-          if grep -q "\[$REPO_NAME\]" /etc/pacman.conf; then
+          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
             echo "⚠️ Repository '$REPO_NAME' already exists in pacman.conf"
             echo "Updating server URL if needed..."
             
@@ -102,75 +150,120 @@ jobs:
           else
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
-            # Create repository configuration
-            REPO_CONFIG="\n[$REPO_NAME]\nServer = $REPO_SERVER_URL\nSigLevel = Optional TrustAll\n"
+            # Create repository configuration - CORRECTED without extra 'n'
+            REPO_CONFIG="[$REPO_NAME]
+Server = $REPO_SERVER_URL
+SigLevel = Optional TrustAll
+"
             
             # Find where to insert (before [community] or at end)
             if grep -q "^\[community\]" /etc/pacman.conf; then
-              # Insert before [community]
-              sed -i "/^\[community\]/i $REPO_CONFIG" /etc/pacman.conf
-            elif grep -q "^\[extra\]" /etc/pacman.conf; then
-              # Insert after [extra]
-              sed -i "/^\[extra\]/a $REPO_CONFIG" /etc/pacman.conf
+              echo "Inserting before [community] section..."
+              # Use a temporary file to avoid sed newline issues
+              awk -v repo_config="$REPO_CONFIG" '
+                /^\[community\]/ {
+                  print repo_config
+                }
+                {print}
+              ' /etc/pacman.conf > /etc/pacman.conf.tmp && mv /etc/pacman.conf.tmp /etc/pacman.conf
             else
-              # Append at end
-              echo -e "$REPO_CONFIG" >> /etc/pacman.conf
+              echo "Appending at end of file..."
+              echo -e "\n$REPO_CONFIG" >> /etc/pacman.conf
             fi
           fi
           
           # Verify the configuration
           echo "=== Pacman.conf repository section ==="
-          grep -A 2 "\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
+          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
+          
+          # Show a few lines around the repo for debugging
+          echo ""
+          echo "=== Context around repository in pacman.conf ==="
+          grep -n -B 2 -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "No context found"
           
           # Update pacman database
+          echo ""
           echo "Updating pacman database..."
-          pacman -Sy --noconfirm
+          if pacman -Sy --noconfirm; then
+            echo "✅ Pacman database synchronized"
+            
+            # Test repository access
+            echo ""
+            echo "=== Testing repository access ==="
+            if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
+              echo "✅ Repository '$REPO_NAME' is accessible via pacman"
+              echo "Available packages in repository:"
+              pacman -Sl "$REPO_NAME" | head -10
+            else
+              echo "⚠️ Repository '$REPO_NAME' found but not accessible via pacman"
+            fi
+          else
+            echo "❌ Failed to sync pacman database"
+            echo "Check /etc/pacman.conf for syntax errors"
+          fi
           
           echo "✅ Pacman repository configuration complete"
 
-      - name: Verify Environment
+      - name: Verify Network Connectivity
         run: |
-          echo "=== Environment Verification ==="
-          echo "1. Essential tools:"
-          which python && python --version
-          which makepkg && makepkg --version | head -1
-          which repo-add && echo "✓ repo-add available"
-          which ssh && ssh -V
-          which git && git --version
-          echo ""
-          echo "2. Python modules:"
-          python -c "import requests; print('✓ requests', requests.__version__)"
-          python -c "import git; print('✓ gitpython', git.__version__)"
-          python -c "import yaml; print('✓ pyyaml')"
-          echo ""
-          echo "3. Repository configuration:"
-          REPO_NAME="${{ secrets.REPO_NAME || 'manjaro-awesome' }}"
-          echo "Looking for repository: $REPO_NAME"
-          if grep -q "\[$REPO_NAME\]" /etc/pacman.conf; then
-            echo "✅ Repository found in pacman.conf:"
-            grep -A 2 "\[$REPO_NAME\]" /etc/pacman.conf
+          echo "=== Network Connectivity Tests ==="
+          
+          # Test basic internet
+          echo "1. Testing internet connectivity..."
+          if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
+            echo "✅ Internet connectivity OK"
           else
-            echo "❌ Repository NOT found in pacman.conf"
-            echo "Current pacman.conf repositories:"
-            grep "^\[" /etc/pacman.conf
+            echo "❌ No internet connectivity"
           fi
+          
+          # Test SSH connectivity
           echo ""
-          echo "✅ Verification complete"
+          echo "2. Testing SSH connectivity to $VPS_HOST..."
+          if [ -n "$VPS_HOST" ] && [ -n "$VPS_USER" ]; then
+            echo "Testing connection to $VPS_USER@$VPS_HOST..."
+            if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" "echo SSH_OK" 2>/dev/null; then
+              echo "✅ SSH connection successful"
+            else
+              echo "❌ SSH connection failed"
+              echo "Debug info:"
+              echo "  VPS_HOST: $VPS_HOST"
+              echo "  VPS_USER: $VPS_USER"
+              echo "  SSH key exists: $(ls -la /home/builder/.ssh/id_ed25519 2>/dev/null && echo 'Yes' || echo 'No')"
+            fi
+          else
+            echo "⚠️ VPS_HOST or VPS_USER not set"
+          fi
+          
+          # Test repository server
+          echo ""
+          echo "3. Testing repository server $REPO_SERVER_URL..."
+          if [ -n "$REPO_SERVER_URL" ]; then
+            # Extract hostname from URL
+            REPO_HOST=$(echo "$REPO_SERVER_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+            echo "Testing connection to $REPO_HOST..."
+            if timeout 5 curl -I "$REPO_SERVER_URL" >/dev/null 2>&1; then
+              echo "✅ Repository server reachable"
+            else
+              echo "❌ Repository server not reachable"
+            fi
+          fi
+          
+          echo "✅ Network tests complete"
 
       - name: Run Builder
-        env:
-          # SSH Connection
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          
-          # Repository Configuration
-          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           # Make script executable
           chmod +x builder.py
+          
+          # Show current environment for debugging
+          echo "=== Current Environment in Builder Step ==="
+          echo "PWD: $(pwd)"
+          echo "VPS_USER: $VPS_USER"
+          echo "VPS_HOST: $VPS_HOST"
+          echo "REPO_NAME: $REPO_NAME"
+          echo "REPO_SERVER_URL: $REPO_SERVER_URL"
+          echo "REMOTE_DIR: $REMOTE_DIR"
+          echo ""
           
           # Show script info
           echo "=== Builder Script Info ==="
@@ -179,7 +272,6 @@ jobs:
           
           # Test repository access
           echo "=== Testing repository access ==="
-          REPO_NAME="${{ secrets.REPO_NAME || 'manjaro-awesome' }}"
           if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
             echo "✅ Repository '$REPO_NAME' is accessible via pacman"
             echo "Available packages in repository:"
@@ -187,15 +279,25 @@ jobs:
           else
             echo "❌ Repository '$REPO_NAME' is NOT accessible via pacman"
             echo "This will cause build issues!"
+            echo "Checking pacman.conf..."
+            grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "Repository not in pacman.conf"
           fi
           echo ""
           
           # Run as builder user
           echo "Starting builder script..."
           
-          # Important: Set environment variables for builder
+          # Important: Set environment variables for builder (they are already available)
           export HOME=/home/builder
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
+          # Also pass all necessary env vars explicitly
+          export VPS_USER="$VPS_USER"
+          export VPS_HOST="$VPS_HOST"
+          export VPS_SSH_KEY="$VPS_SSH_KEY"
+          export REPO_SERVER_URL="$REPO_SERVER_URL"
+          export REMOTE_DIR="$REMOTE_DIR"
+          export REPO_NAME="$REPO_NAME"
           
           # Run with output to both console and log file
           su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
