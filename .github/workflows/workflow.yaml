@@ -107,8 +107,9 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Create SSH config file for better control
-          cat > /home/builder/.ssh/config << EOF
+          # Create SSH config file for better control - MÓDOSÍTOTT VERZIÓ
+          echo "Creating SSH config..."
+          cat > /home/builder/.ssh/config << 'EOF'
 Host $VPS_HOST
   HostName $VPS_HOST
   User $VPS_USER
@@ -122,6 +123,10 @@ Host $VPS_HOST
   ControlPath ~/.ssh/control-%r@%h:%p
   ControlPersist 10m
 EOF
+          
+          # Replace variables in SSH config
+          sed -i "s/\$VPS_HOST/$VPS_HOST/g" /home/builder/.ssh/config
+          sed -i "s/\$VPS_USER/$VPS_USER/g" /home/builder/.ssh/config
           
           chmod 600 /home/builder/.ssh/config
           
