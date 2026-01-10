@@ -10,17 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
-      # Ezt kell hozzáadni: env változók átadása a konténernek
-      env:
-        # SSH Connection
-        VPS_USER: ${{ secrets.VPS_USER }}
-        VPS_HOST: ${{ secrets.VPS_HOST }}
-        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-        
-        # Repository Configuration
-        REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
-        REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-        REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
 
     steps:
       - name: Checkout Code
@@ -72,6 +61,10 @@ jobs:
           echo "✅ Environment preparation complete"
 
       - name: Setup SSH
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           echo "=== Current environment variables ==="
           env | grep -E "VPS|REPO|REMOTE" || echo "No VPS/REPO env vars found"
@@ -125,6 +118,9 @@ jobs:
           echo "✅ SSH setup complete"
 
       - name: Configure Pacman Repository
+        env:
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           echo "=== Configuring Pacman Repository ==="
           echo "Repository: $REPO_NAME"
@@ -205,6 +201,10 @@ SigLevel = Optional TrustAll
           echo "✅ Pacman repository configuration complete"
 
       - name: Verify Network Connectivity
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
         run: |
           echo "=== Network Connectivity Tests ==="
           
@@ -251,6 +251,16 @@ SigLevel = Optional TrustAll
           echo "✅ Network tests complete"
 
       - name: Run Builder
+        env:
+          # SSH Connection
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          
+          # Repository Configuration
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
           # Make script executable
           chmod +x builder.py
