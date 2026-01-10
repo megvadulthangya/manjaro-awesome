@@ -26,13 +26,22 @@ jobs:
           # Update system and install essential packages
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
-            python python-pip \
+            python python-pip python-setuptools \
             pacman-contrib \
-            curl wget
+            curl wget ca-certificates \
+            openssh \
+            rsync
             
+          # Install required Python packages
+          pip install requests gitpython pyyaml
+          
           # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Git safety settings
+          git config --system --add safe.directory '*'
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
           # Set ownership
           chown -R builder:builder .
@@ -40,6 +49,8 @@ jobs:
           # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          
+          echo "Environment preparation complete"
 
       - name: Setup SSH
         run: |
@@ -52,6 +63,15 @@ jobs:
           ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || true
           
           chown -R builder:builder /home/builder/.ssh
+          echo "SSH setup complete"
+
+      - name: Verify Python Environment
+        run: |
+          echo "Python version: $(python --version)"
+          echo "Pip version: $(pip --version)"
+          python -c "import requests; print('✓ requests module available')"
+          python -c "import git; print('✓ gitpython module available')"
+          python -c "import yaml; print('✓ pyyaml module available')"
 
       - name: Run Builder
         env:
@@ -60,13 +80,29 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           
-          # Repository Configuration (CRITICAL!)
+          # Repository Configuration
           REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
           REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
           REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
         run: |
+          # Make script executable
           chmod +x builder.py
-          su builder -c "python3 builder.py"
+          
+          # First, test that we can run Python
+          echo "Testing Python script..."
+          python -c "print('Python is working')"
+          
+          # Run as builder user
+          echo "Starting builder script..."
+          su builder -c "cd $PWD && python3 builder.py"
+          
+          # Check if log was created
+          if [ -f "builder.log" ]; then
+            echo "Builder log created:"
+            tail -20 builder.log
+          else
+            echo "No builder.log found"
+          fi
 
       - name: Upload Build Artifacts
         if: always()
@@ -76,4 +112,5 @@ jobs:
           path: |
             builder.log
             built_packages/
+            .buildtracking/
           retention-days: 7
