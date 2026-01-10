@@ -24,6 +24,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Configure git to allow pushes from builder user
+          persist-credentials: true
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
@@ -265,6 +267,24 @@ jobs:
           rm -rf /tmp/yay-bin
           
           echo "✅ Build dependencies installed"
+
+      - name: Configure Git for Builder User
+        run: |
+          echo "=== Configuring Git for Builder User ==="
+          
+          # Configure git to use the persisted credentials from actions/checkout
+          # This allows the builder user to push changes back to the repository
+          echo "Configuring git for builder user..."
+          
+          # Copy git config from root to builder user
+          mkdir -p /home/builder/.git
+          cp -r .git/* /home/builder/.git/ 2>/dev/null || true
+          chown -R builder:builder /home/builder/.git
+          
+          # Ensure the builder user can write to the git directory
+          chmod -R u+rw .git
+          
+          echo "✅ Git configuration for builder user complete"
 
       - name: Run Builder
         run: |

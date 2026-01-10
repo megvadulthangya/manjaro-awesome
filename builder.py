@@ -57,6 +57,7 @@ class PackageBuilder:
         self.packages_to_clean = set()
         self.built_packages = []
         self.skipped_packages = []
+        self.rebuilt_local_packages = []  # Track local packages that were rebuilt
         
         # Special dependencies from config
         self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
@@ -566,6 +567,8 @@ class PackageBuilder:
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
+                    # Track local packages that were rebuilt
+                    self.rebuilt_local_packages.append(pkg_name)
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -605,8 +608,7 @@ class PackageBuilder:
         else:
             logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
- 
- 
+    
     def upload_packages(self):
         """Upload packages to server."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -669,6 +671,118 @@ class PackageBuilder:
         
         logger.info(f"✅ Cleanup complete ({cleaned} packages)")
     
+    def _update_pkgbuilds_and_commit(self):
+        """Post-build step: Update PKGBUILD files for rebuilt local packages and commit."""
+        if not self.rebuilt_local_packages:
+            logger.info("No local packages were rebuilt - skipping PKGBUILD updates")
+            return
+        
+        print("\n" + "="*60)
+        print("📝 POST-BUILD: Updating PKGBUILDs for rebuilt local packages")
+        print("="*60)
+        
+        modified_packages = []
+        
+        for pkg_name in self.rebuilt_local_packages:
+            pkg_dir = self.repo_root / pkg_name
+            pkgbuild_path = pkg_dir / "PKGBUILD"
+            
+            if not pkgbuild_path.exists():
+                logger.warning(f"PKGBUILD not found for {pkg_name}")
+                continue
+            
+            try:
+                # Read the PKGBUILD
+                with open(pkgbuild_path, 'r') as f:
+                    content = f.read()
+                
+                # Find current pkgrel
+                pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+                if not pkgrel_match:
+                    logger.warning(f"Could not find pkgrel in PKGBUILD for {pkg_name}")
+                    continue
+                
+                current_pkgrel = pkgrel_match.group(1)
+                
+                try:
+                    # Increment pkgrel (ensure it's a valid number)
+                    if current_pkgrel.isdigit():
+                        new_pkgrel = str(int(current_pkgrel) + 1)
+                    else:
+                        # If pkgrel has non-digit characters, try to extract the number
+                        num_match = re.search(r'(\d+)', current_pkgrel)
+                        if num_match:
+                            new_pkgrel = str(int(num_match.group(1)) + 1)
+                        else:
+                            new_pkgrel = "1"
+                except ValueError:
+                    new_pkgrel = "1"
+                
+                # Update the pkgrel in the content
+                updated_content = re.sub(
+                    r'^pkgrel\s*=\s*["\']?[^"\'\n]+',
+                    f'pkgrel={new_pkgrel}',
+                    content,
+                    flags=re.MULTILINE
+                )
+                
+                # Write the updated PKGBUILD
+                with open(pkgbuild_path, 'w') as f:
+                    f.write(updated_content)
+                
+                logger.info(f"✅ Updated {pkg_name}: pkgrel {current_pkgrel} -> {new_pkgrel}")
+                modified_packages.append(pkg_name)
+                
+            except Exception as e:
+                logger.error(f"Failed to update PKGBUILD for {pkg_name}: {e}")
+        
+        if not modified_packages:
+            logger.info("No PKGBUILD files were modified")
+            return
+        
+        # Commit changes
+        print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
+        
+        # Set git identity for the builder user
+        self.run_cmd('sudo -u builder git config --global user.email "builder@github-actions"', check=False)
+        self.run_cmd('sudo -u builder git config --global user.name "GitHub Actions Builder"', check=False)
+        
+        # Add the modified PKGBUILD files
+        for pkg_name in modified_packages:
+            pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
+            self.run_cmd(f'sudo -u builder git add "{pkgbuild_path}"', check=False)
+        
+        # Create commit message
+        commit_msg = f"chore: update PKGBUILD pkgrel for rebuilt packages\n\n"
+        commit_msg += f"Updated pkgrel for {len(modified_packages)} rebuilt local package(s):\n"
+        for pkg_name in modified_packages:
+            commit_msg += f"- {pkg_name}\n"
+        
+        # Commit changes
+        commit_result = self.run_cmd(
+            f'sudo -u builder git commit -m "{commit_msg}"',
+            check=False,
+            capture=True
+        )
+        
+        if commit_result.returncode == 0:
+            logger.info("✅ Changes committed")
+            
+            # Push to main branch
+            print("\n📤 Pushing changes to main branch...")
+            push_result = self.run_cmd(
+                'sudo -u builder git push origin main',
+                check=False,
+                capture=True
+            )
+            
+            if push_result.returncode == 0:
+                logger.info("✅ Changes pushed to main branch")
+            else:
+                logger.warning(f"Failed to push changes: {push_result.stderr}")
+        else:
+            logger.warning(f"No changes to commit or commit failed: {commit_result.stderr}")
+    
     def run(self):
         """Main execution."""
         print("\n" + "="*60)
@@ -696,6 +810,10 @@ class PackageBuilder:
                 if self.update_database():
                     if self.upload_packages():
                         self.cleanup_old_packages()
+                        
+                        # POST-BUILD STEP: Update PKGBUILDs and commit
+                        self._update_pkgbuilds_and_commit()
+                        
                         print("\n✅ Build completed successfully!")
                     else:
                         print("\n❌ Upload failed!")
