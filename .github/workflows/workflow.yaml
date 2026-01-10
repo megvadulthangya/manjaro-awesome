@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
-      options: --network host
+      # ELTÁVOLÍTVA: --network host (mert ütközik a GitHub Actions hálózatával)
+      # Helyette explicit hálózati beállítások a konténeren belül
 
     env:
       VPS_USER: ${{ secrets.VPS_USER }}
@@ -32,9 +33,21 @@ jobs:
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
           
+          # Network debugging
+          echo "=== Network Configuration ==="
+          echo "Hostname: $(hostname)"
+          echo "IP addresses:"
+          ip addr show || ifconfig || echo "Network tools not available"
+          echo ""
+          
+          # Install netcat for network testing
+          pacman -Syu --noconfirm --needed netcat
+          
+          # Initialize pacman
           pacman-key --init
           pacman-key --populate archlinux
           
+          # Update system and install ALL required packages via pacman
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
@@ -54,14 +67,18 @@ jobs:
             systemd systemd-sysvcompat \
             arch-install-scripts
             
+          # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
+          # Git safety settings
           git config --system --add safe.directory '*'
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
+          # Set ownership - use absolute path to avoid issues
           chown -R builder:builder "$(pwd)"
           
+          # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
           
@@ -97,7 +114,6 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Create SSH config without heredoc - using echo statements
           echo "Creating SSH config..."
           echo "Host $VPS_HOST" > /home/builder/.ssh/config
           echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
@@ -132,20 +148,6 @@ jobs:
           ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null
           
           chown -R builder:builder /home/builder/.ssh
-          
-          echo "=== Testing SSH connection ==="
-          echo "Testing connection to $VPS_USER@$VPS_HOST..."
-          
-          echo "1. Testing TCP connectivity to $VPS_HOST:22..."
-          if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
-            echo "✅ TCP port 22 is accessible"
-          else
-            echo "❌ Cannot reach $VPS_HOST on port 22"
-            echo "This suggests a network/firewall issue"
-          fi
-          
-          echo "2. Testing SSH connection..."
-          su builder -c "ssh -o ConnectTimeout=10 -o BatchMode=yes -v $VPS_USER@$VPS_HOST 'echo SSH_TEST_OK'" 2>&1 | head -50
           
           echo "✅ SSH setup complete"
 
@@ -227,11 +229,32 @@ jobs:
         run: |
           echo "=== Network Connectivity Tests ==="
           
+          echo "=== Container Network Info ==="
+          echo "Hostname: $(hostname)"
+          ip addr show 2>/dev/null || echo "ip command not available"
+          echo ""
+          
+          echo "=== DNS Resolution Test ==="
+          echo "Testing DNS resolution..."
+          nslookup google.com 2>/dev/null || dig google.com 2>/dev/null || echo "DNS tools not available"
+          echo ""
+          
+          echo "=== Route Test ==="
+          ip route show 2>/dev/null || route -n 2>/dev/null || echo "Route tools not available"
+          echo ""
+          
           echo "1. Testing internet connectivity..."
           if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
-            echo "✅ Internet connectivity OK"
+            echo "✅ Internet connectivity OK (via IP)"
           else
-            echo "❌ No internet connectivity"
+            echo "❌ No internet connectivity via IP"
+          fi
+          
+          echo "Testing internet via domain..."
+          if ping -c 2 google.com >/dev/null 2>&1; then
+            echo "✅ Internet connectivity OK (via domain)"
+          else
+            echo "❌ No internet connectivity via domain"
           fi
           
           echo ""
@@ -244,26 +267,32 @@ jobs:
               echo "✅ Hostname resolves: $(getent hosts $VPS_HOST)"
             else
               echo "❌ Cannot resolve hostname $VPS_HOST"
+              echo "Trying alternative DNS resolution..."
+              nslookup "$VPS_HOST" 2>/dev/null || dig "$VPS_HOST" 2>/dev/null || echo "Alternative DNS tools not available"
             fi
             
-            echo "Attempting SSH connection (verbose mode)..."
-            timeout 15 ssh -vvv -o ConnectTimeout=10 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_SUCCESS" 2>&1 | grep -A5 -B5 "timeout\|connected\|refused\|denied\|Connection to" || true
+            # Test TCP connectivity first
+            echo "Testing TCP connectivity to $VPS_HOST:22..."
+            if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
+              echo "✅ TCP port 22 is accessible on $VPS_HOST"
+            else
+              echo "❌ Cannot reach $VPS_HOST on port 22"
+              echo "Trying with telnet..."
+              timeout 5 bash -c "echo > /dev/tcp/$VPS_HOST/22" 2>/dev/null && echo "✅ TCP connection successful via bash" || echo "❌ TCP connection failed"
+            fi
             
-            if timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo SSH_TEST_OK" 2>/dev/null; then
+            echo "Attempting SSH connection..."
+            if timeout 15 ssh -o ConnectTimeout=10 -o BatchMode=yes -v "$VPS_USER@$VPS_HOST" "echo SSH_TEST_OK" 2>&1 | grep -q "SSH_TEST_OK"; then
               echo "✅ SSH connection successful"
             else
               echo "❌ SSH connection failed"
               echo "Debug info:"
               echo "  VPS_HOST: $VPS_HOST"
               echo "  VPS_USER: $VPS_USER"
-              echo "  SSH key exists: $(ls -la /home/builder/.ssh/id_ed25519 2>/dev/null && echo 'Yes' || echo 'No')"
-              echo "  SSH key permissions: $(stat -c '%a %n' /home/builder/.ssh/id_ed25519 2>/dev/null || echo 'N/A')"
               
-              echo "  SSH config:"
-              cat /home/builder/.ssh/config 2>/dev/null || echo "    No SSH config found"
-              
-              echo "  Known hosts for $VPS_HOST:"
-              grep "$VPS_HOST" /home/builder/.ssh/known_hosts 2>/dev/null || echo "    Not in known_hosts"
+              # Try with more detailed error
+              echo "=== Detailed SSH debug ==="
+              timeout 10 ssh -vvv -o ConnectTimeout=5 "$VPS_USER@$VPS_HOST" "echo test" 2>&1 | tail -20
             fi
           else
             echo "⚠️ VPS_HOST or VPS_USER not set"
@@ -278,6 +307,8 @@ jobs:
               echo "✅ Repository server reachable"
             else
               echo "❌ Repository server not reachable"
+              echo "Trying with wget..."
+              timeout 5 wget --spider "$REPO_SERVER_URL" 2>/dev/null && echo "✅ Repository server reachable via wget" || echo "❌ Repository server not reachable via wget"
             fi
           fi
           
@@ -303,7 +334,14 @@ jobs:
           echo ""
           
           echo "=== Pre-build SSH Test ==="
-          su builder -c "ssh -o ConnectTimeout=10 $VPS_USER@$VPS_HOST 'echo PRE_BUILD_SSH_TEST_OK && hostname'" && echo "✅ SSH test successful" || echo "❌ SSH test failed"
+          echo "Testing SSH connection (timeout 15s)..."
+          if timeout 15 ssh -o ConnectTimeout=10 -o BatchMode=yes "$VPS_USER@$VPS_HOST" "echo PRE_BUILD_SSH_TEST_OK && hostname" 2>/dev/null; then
+            echo "✅ SSH test successful"
+          else
+            echo "❌ SSH test failed"
+            echo "This will cause build failures!"
+            echo "Will continue anyway to see if packages can be built..."
+          fi
           echo ""
           
           echo "=== Builder Script Info ==="
@@ -335,15 +373,27 @@ jobs:
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
           
+          # Run builder with proper error handling
+          set +e
           su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
-          
           BUILD_STATUS=$?
+          set -e
+          
           echo ""
           echo "=== Build finished with exit code: $BUILD_STATUS ==="
           
           if [ -f "builder.log" ]; then
             echo "=== Last 50 lines of builder.log ==="
             tail -50 builder.log
+          fi
+          
+          # Even if SSH failed, we might have built packages
+          echo "=== Checking for built packages ==="
+          if [ -d "built_packages" ] && [ "$(ls -A built_packages 2>/dev/null)" ]; then
+            echo "✅ Packages were built:"
+            ls -la built_packages/
+          else
+            echo "❌ No packages were built"
           fi
           
           exit $BUILD_STATUS
