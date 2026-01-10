@@ -15,7 +15,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get full history for git operations
+          fetch-depth: 0
 
       - name: Prepare Environment
         run: |
@@ -23,23 +23,26 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           
-          
-          # Telepítsük a Python modulokat pacman-al is
+          # Update system and install ALL required packages via pacman
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
-            python-requests python-gitpython python-yaml \
-            pacman-contrib \
+            python-requests python-gitpython python-yaml python-setuptools \
+            pacman-contrib repo-tools \
             curl wget ca-certificates \
-            openssh \
-            rsync
-          
-          # Ha még nem lenne elég, pip-el is
-          pip install --upgrade pip
-          pip install requests gitpython pyyaml        
-          
-          
-          
+            openssh rsync \
+            appstream appstream-glib \
+            meson ninja cmake \
+            gtk-doc docbook-xsl libxslt \
+            gobject-introspection \
+            autoconf automake libtool pkg-config \
+            patch make gcc binutils \
+            file which tar gzip bzip2 xz zstd \
+            unzip p7zip gnupg \
+            dbus polkit \
+            systemd systemd-sysvcompat \
+            arch-install-scripts
+            
           # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -48,19 +51,30 @@ jobs:
           git config --system --add safe.directory '*'
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
-          # Set ownership
-          chown -R builder:builder .
+          # Set ownership - use absolute path to avoid issues
+          chown -R builder:builder "$(pwd)"
           
           # Optimize makepkg
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
           
-          echo "Environment preparation complete"
+          echo "✅ Environment preparation complete"
 
       - name: Setup SSH
         run: |
           mkdir -p /home/builder/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > /home/builder/.ssh/id_ed25519
+          
+          # Decode base64 SSH key or use as-is
+          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key_temp
+          
+          # Check if it's base64 encoded
+          if echo "${{ secrets.VPS_SSH_KEY }}" | grep -q '^[A-Za-z0-9+/]*=*$' && \
+             echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d >/dev/null 2>&1; then
+            echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
+          else
+            echo "${{ secrets.VPS_SSH_KEY }}" > /home/builder/.ssh/id_ed25519
+          fi
+          
           chmod 600 /home/builder/.ssh/id_ed25519
           
           # Add known hosts
@@ -68,15 +82,24 @@ jobs:
           ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts 2>/dev/null || true
           
           chown -R builder:builder /home/builder/.ssh
-          echo "SSH setup complete"
+          echo "✅ SSH setup complete"
 
       - name: Verify Python Environment
         run: |
+          echo "=== Python Environment ==="
           echo "Python version: $(python --version)"
-          echo "Pip version: $(pip --version)"
-          python -c "import requests; print('✓ requests module available')"
-          python -c "import git; print('✓ gitpython module available')"
-          python -c "import yaml; print('✓ pyyaml module available')"
+          echo ""
+          echo "Installed Python packages:"
+          python -c "import requests; print('✓ requests', requests.__version__)"
+          python -c "import git; print('✓ gitpython', git.__version__)"
+          python -c "import yaml; print('✓ pyyaml')"
+          echo ""
+          echo "Other essential tools:"
+          which makepkg && makepkg --version | head -1
+          which repo-add && echo "✓ repo-add available"
+          which ssh && ssh -V
+          which scp && echo "✓ scp available"
+          echo "=== Verification complete ==="
 
       - name: Run Builder
         env:
@@ -93,29 +116,53 @@ jobs:
           # Make script executable
           chmod +x builder.py
           
-          # First, test that we can run Python
-          echo "Testing Python script..."
-          python -c "print('Python is working')"
+          # Test Python execution
+          echo "Testing Python execution..."
+          python -c "print('✅ Python is working correctly')"
           
-          # Run as builder user
+          # Run as builder user with proper environment
           echo "Starting builder script..."
-          su builder -c "cd $PWD && python3 builder.py"
           
-          # Check if log was created
+          # Set up environment for builder user
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
+          # Run the builder
+          su builder -c "cd '$PWD' && python3 builder.py 2>&1 | tee build_output.log"
+          
+          # Check exit status
+          BUILD_EXIT=$?
+          
+          # Show tail of log
+          echo "=== Build log tail ==="
           if [ -f "builder.log" ]; then
-            echo "Builder log created:"
-            tail -20 builder.log
-          else
-            echo "No builder.log found"
+            tail -30 builder.log
+          elif [ -f "build_output.log" ]; then
+            tail -30 build_output.log
           fi
+          
+          exit $BUILD_EXIT
 
       - name: Upload Build Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-results
+          name: build-results-$(date +%Y%m%d-%H%M%S)
           path: |
             builder.log
+            build_output.log
             built_packages/
             .buildtracking/
           retention-days: 7
+
+      - name: Cleanup on Failure
+        if: failure()
+        run: |
+          echo "=== Build Failed - Debug Info ==="
+          echo "Current directory: $(pwd)"
+          echo "Directory contents:"
+          ls -la
+          echo ""
+          echo "Builder log (if exists):"
+          if [ -f "builder.log" ]; then
+            tail -100 builder.log
+          fi
