@@ -24,11 +24,12 @@ jobs:
           pacman-key --populate archlinux
           
           # Update system and install ALL required packages via pacman
+          # REMOVED: repo-tools (not needed, pacman-contrib has repo-add)
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
             python-requests python-gitpython python-yaml python-setuptools \
-            pacman-contrib repo-tools \
+            pacman-contrib \
             curl wget ca-certificates \
             openssh rsync \
             appstream appstream-glib \
@@ -64,12 +65,8 @@ jobs:
         run: |
           mkdir -p /home/builder/.ssh
           
-          # Decode base64 SSH key or use as-is
-          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/ssh_key_temp
-          
-          # Check if it's base64 encoded
-          if echo "${{ secrets.VPS_SSH_KEY }}" | grep -q '^[A-Za-z0-9+/]*=*$' && \
-             echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d >/dev/null 2>&1; then
+          # Write SSH key (handle both base64 and plain text)
+          if echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d >/dev/null 2>&1; then
             echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
           else
             echo "${{ secrets.VPS_SSH_KEY }}" > /home/builder/.ssh/id_ed25519
@@ -84,22 +81,25 @@ jobs:
           chown -R builder:builder /home/builder/.ssh
           echo "✅ SSH setup complete"
 
-      - name: Verify Python Environment
+      - name: Verify Environment
         run: |
-          echo "=== Python Environment ==="
-          echo "Python version: $(python --version)"
+          echo "=== Environment Verification ==="
+          echo "1. Essential tools:"
+          which python && python --version
+          which makepkg && makepkg --version | head -1
+          which repo-add && echo "✓ repo-add available"
+          which ssh && ssh -V
+          which git && git --version
           echo ""
-          echo "Installed Python packages:"
+          echo "2. Python modules:"
           python -c "import requests; print('✓ requests', requests.__version__)"
           python -c "import git; print('✓ gitpython', git.__version__)"
           python -c "import yaml; print('✓ pyyaml')"
           echo ""
-          echo "Other essential tools:"
-          which makepkg && makepkg --version | head -1
-          which repo-add && echo "✓ repo-add available"
-          which ssh && ssh -V
-          which scp && echo "✓ scp available"
-          echo "=== Verification complete ==="
+          echo "3. Directories:"
+          ls -la
+          echo ""
+          echo "✅ Verification complete"
 
       - name: Run Builder
         env:
@@ -116,53 +116,41 @@ jobs:
           # Make script executable
           chmod +x builder.py
           
-          # Test Python execution
-          echo "Testing Python execution..."
-          python -c "print('✅ Python is working correctly')"
+          # Show script info
+          echo "=== Builder Script Info ==="
+          head -20 builder.py
+          echo ""
           
-          # Run as builder user with proper environment
+          # Run as builder user
           echo "Starting builder script..."
           
-          # Set up environment for builder user
+          # Important: Set environment variables for builder
+          export HOME=/home/builder
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
-          # Run the builder
-          su builder -c "cd '$PWD' && python3 builder.py 2>&1 | tee build_output.log"
+          # Run with output to both console and log file
+          su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
           
           # Check exit status
-          BUILD_EXIT=$?
+          BUILD_STATUS=$?
+          echo ""
+          echo "=== Build finished with exit code: $BUILD_STATUS ==="
           
-          # Show tail of log
-          echo "=== Build log tail ==="
+          # Show log summary
           if [ -f "builder.log" ]; then
-            tail -30 builder.log
-          elif [ -f "build_output.log" ]; then
-            tail -30 build_output.log
+            echo "=== Last 50 lines of builder.log ==="
+            tail -50 builder.log
           fi
           
-          exit $BUILD_EXIT
+          exit $BUILD_STATUS
 
       - name: Upload Build Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-results-$(date +%Y%m%d-%H%M%S)
+          name: build-results-$(date +%s)
           path: |
             builder.log
             build_output.log
             built_packages/
-            .buildtracking/
           retention-days: 7
-
-      - name: Cleanup on Failure
-        if: failure()
-        run: |
-          echo "=== Build Failed - Debug Info ==="
-          echo "Current directory: $(pwd)"
-          echo "Directory contents:"
-          ls -la
-          echo ""
-          echo "Builder log (if exists):"
-          if [ -f "builder.log" ]; then
-            tail -100 builder.log
-          fi
