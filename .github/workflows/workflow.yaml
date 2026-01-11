@@ -173,7 +173,7 @@ jobs:
               cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
               tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
               mv /etc/pacman.conf.tmp /etc/pacman.conf
-            else:
+            else
               cat "$TEMP_FILE" >> /etc/pacman.conf
             fi
             
@@ -308,6 +308,70 @@ jobs:
           
           echo "✅ Git setup for builder user complete"
 
+      - name: Debug Git Worktree (Current + Parent)
+        run: |
+          echo "=== DEBUG: Checking .git in current directory ==="
+          echo "1. pwd:"
+          pwd
+          echo ""
+          echo "2. ls -la .git:"
+          if [ -e .git ]; then
+            ls -la .git
+          else
+            echo ".git does not exist"
+          fi
+          echo ""
+          echo "3. file .git:"
+          if [ -e .git ]; then
+            file .git
+          else
+            echo ".git does not exist"
+          fi
+          echo ""
+          echo "4. cat .git:"
+          if [ -f .git ]; then
+            cat .git
+          elif [ -d .git ]; then
+            echo ".git is a directory, not a file"
+          else
+            echo ".git does not exist"
+          fi
+          echo ""
+          
+          echo "=== DEBUG: Moving to parent directory ==="
+          cd ..
+          echo ""
+          
+          echo "=== DEBUG: Checking .git in parent directory ==="
+          echo "1. pwd:"
+          pwd
+          echo ""
+          echo "2. ls -la .git:"
+          if [ -e .git ]; then
+            ls -la .git
+          else
+            echo ".git does not exist"
+          fi
+          echo ""
+          echo "3. file .git:"
+          if [ -e .git ]; then
+            file .git
+          else
+            echo ".git does not exist"
+          fi
+          echo ""
+          echo "4. cat .git:"
+          if [ -f .git ]; then
+            cat .git
+          elif [ -d .git ]; then
+            echo ".git is a directory, not a file"
+          else
+            echo ".git does not exist"
+          fi
+          
+          echo "=== DEBUG: Returning to original directory ==="
+          cd /__w/manjaro-awesome/manjaro-awesome
+
       - name: Run Builder
         run: |
           echo "=== Starting Builder ==="
@@ -317,23 +381,6 @@ jobs:
           echo "Current directory: $(pwd)"
           echo "Files in current directory:"
           ls -la
-          
-          echo ""
-          echo "=== DEBUG: Checking .git in current directory ==="
-          pwd
-          ls -la .git 2>&1 || echo "ls .git failed"
-          file .git 2>&1 || echo "file .git failed"
-          cat .git 2>&1 || echo "cat .git failed"
-          
-          echo ""
-          echo "=== DEBUG: Checking .git in parent directory ==="
-          cd ..
-          pwd
-          ls -la .git 2>&1 || echo "ls .git failed"
-          file .git 2>&1 || echo "file .git failed"
-          cat .git 2>&1 || echo "cat .git failed"
-          cd - > /dev/null  # Go back to original directory
-          
           echo ""
           echo "Looking for .git directory:"
           find . -name ".git" -type d 2>/dev/null || echo "No .git directory found in current directory"
