@@ -83,27 +83,16 @@ class PackageBuilder:
                 logger.info(f"Using GITHUB_WORKSPACE: {workspace_path}")
                 return workspace_path
         
-        # Try to find git directory by checking current and parent directories
-        current_dir = Path.cwd()
-        original_dir = current_dir
-        
-        # Go up the directory tree until we find .git
-        while current_dir != current_dir.parent:
-            git_dir = current_dir / '.git'
-            if git_dir.exists() and git_dir.is_dir():
-                logger.info(f"Found git repository at: {current_dir}")
-                return current_dir
-            current_dir = current_dir.parent
-        
         # If we're in a container, check the typical GitHub Actions workspace path
         container_workspace = Path('/__w/manjaro-awesome/manjaro-awesome')
         if container_workspace.exists():
             logger.info(f"Using container workspace: {container_workspace}")
             return container_workspace
         
-        # As a last resort, return the original directory
-        logger.warning(f"Could not find git repository, using current directory: {original_dir}")
-        return original_dir
+        # As a last resort, return the current directory
+        current_dir = Path.cwd()
+        logger.info(f"Using current directory: {current_dir}")
+        return current_dir
     
     def _load_config(self):
         """Load configuration from environment and config files."""

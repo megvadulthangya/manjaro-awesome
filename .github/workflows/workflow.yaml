@@ -18,7 +18,6 @@ jobs:
       REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CI_PUSH_SSH_KEY: ${{ secrets.CI_PUSH_SSH_KEY }}
 
     steps:
@@ -27,10 +26,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Különösen fontos beállítások a git push-hoz
-          persist-credentials: true
-          # Ez biztosítja, hogy a .git mappa megfelelően legyen kezelve
-          lfs: false
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
@@ -79,13 +74,8 @@ jobs:
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Git safety settings
-          git config --system --add safe.directory '*'
-          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
-          
-          # Set ownership - itt a teljes workspace-t a builder-nek adjuk
+          # Set ownership
           chown -R builder:builder "$(pwd)"
-          chown -R builder:builder "$GITHUB_WORKSPACE" 2>/dev/null || true
           
           # Create build directories with correct permissions
           mkdir -p "$(pwd)/build_aur"
@@ -119,7 +109,7 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Create SSH config for VPS - NO HEREDOC, use echo
+          # Create SSH config for VPS
           echo "Creating SSH config for VPS..."
           echo "Host vps" > /home/builder/.ssh/config
           echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
@@ -232,8 +222,6 @@ jobs:
             echo "✅ SSH connection to VPS successful"
           else
             echo "❌ SSH connection to VPS failed"
-            echo "Debug: Trying with verbose output..."
-            su builder -c "timeout 10 ssh -vvv -o ConnectTimeout=5 -o StrictHostKeyChecking=no vps 'echo test'" 2>&1 | tail -30
           fi
           
           echo "✅ Network tests complete"
@@ -257,121 +245,17 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf  # tilix-git specific dependencies
             
-          # Install yay for AUR dependencies - simpler method
+          # Install yay for AUR dependencies
           echo "=== Installing yay ==="
-          # First give builder permission to /tmp
           chmod 777 /tmp
-          # Install yay using a different approach
           cd /tmp
-          # Clone as builder user
           sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
           cd yay-bin
-          # Build and install as builder user
           sudo -u builder makepkg -si --noconfirm
           cd /
-          # Cleanup
           rm -rf /tmp/yay-bin
           
           echo "✅ Build dependencies installed"
-
-      - name: Setup Git for Builder User
-        run: |
-          echo "=== Setting up Git for Builder User ==="
-          
-          # Configure git for builder user
-          echo "Configuring git for builder user..."
-          
-          # Set git config globally for builder user
-          sudo -u builder git config --global user.email "builder@github-actions"
-          sudo -u builder git config --global user.name "GitHub Actions Builder"
-          
-          # Set GIT_DISCOVERY_ACROSS_FILESYSTEM for builder user
-          echo 'export GIT_DISCOVERY_ACROSS_FILESYSTEM=1' >> /home/builder/.bashrc
-          
-          # Ensure builder user has access to the git repository
-          # First, find the actual .git directory (it might be in a parent directory)
-          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
-            echo "Found .git directory in GITHUB_WORKSPACE"
-            chown -R builder:builder "$GITHUB_WORKSPACE/.git"
-            chmod -R u+rw "$GITHUB_WORKSPACE/.git"
-          elif [ -d "/__w/manjaro-awesome/.git" ]; then
-            echo "Found .git directory in /__w/manjaro-awesome"
-            chown -R builder:builder "/__w/manjaro-awesome/.git"
-            chmod -R u+rw "/__w/manjaro-awesome/.git"
-          else
-            echo "Looking for .git directory in current directory and parents..."
-            # Try to find .git directory
-            find /__w -name ".git" -type d 2>/dev/null | head -5
-          fi
-          
-          # Also ensure the entire workspace is owned by builder
-          chown -R builder:builder "$(pwd)"
-          
-          echo "✅ Git setup for builder user complete"
-
-      - name: Debug Git Worktree (Current + Parent)
-        run: |
-          echo "=== DEBUG: Checking .git in current directory ==="
-          echo "1. pwd:"
-          pwd
-          echo ""
-          echo "2. ls -la .git:"
-          if [ -e .git ]; then
-            ls -la .git
-          else
-            echo ".git does not exist"
-          fi
-          echo ""
-          echo "3. file .git:"
-          if [ -e .git ]; then
-            file .git
-          else
-            echo ".git does not exist"
-          fi
-          echo ""
-          echo "4. cat .git:"
-          if [ -f .git ]; then
-            cat .git
-          elif [ -d .git ]; then
-            echo ".git is a directory, not a file"
-          else
-            echo ".git does not exist"
-          fi
-          echo ""
-          
-          echo "=== DEBUG: Moving to parent directory ==="
-          cd ..
-          echo ""
-          
-          echo "=== DEBUG: Checking .git in parent directory ==="
-          echo "1. pwd:"
-          pwd
-          echo ""
-          echo "2. ls -la .git:"
-          if [ -e .git ]; then
-            ls -la .git
-          else
-            echo ".git does not exist"
-          fi
-          echo ""
-          echo "3. file .git:"
-          if [ -e .git ]; then
-            file .git
-          else
-            echo ".git does not exist"
-          fi
-          echo ""
-          echo "4. cat .git:"
-          if [ -f .git ]; then
-            cat .git
-          elif [ -d .git ]; then
-            echo ".git is a directory, not a file"
-          else
-            echo ".git does not exist"
-          fi
-          
-          echo "=== DEBUG: Returning to original directory ==="
-          cd /__w/manjaro-awesome/manjaro-awesome
 
       - name: Run Builder
         run: |
@@ -380,14 +264,6 @@ jobs:
           chmod +x builder.py
           
           echo "Current directory: $(pwd)"
-          echo "Files in current directory:"
-          ls -la
-          echo ""
-          echo "Looking for .git directory:"
-          find . -name ".git" -type d 2>/dev/null || echo "No .git directory found in current directory"
-          echo ""
-          echo "Checking git status:"
-          git status 2>&1 || echo "Git command failed"
           
           # Test SSH connection one more time
           echo "=== Final SSH Test ==="
@@ -416,13 +292,7 @@ jobs:
           export REPO_SERVER_URL="$REPO_SERVER_URL"
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
-          export GITHUB_TOKEN="$GITHUB_TOKEN"
           export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
-          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
-          
-          # Set git config for the current directory
-          git config user.email "builder@github-actions"
-          git config user.name "GitHub Actions Builder"
           
           # Run as builder user
           su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
