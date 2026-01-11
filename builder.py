@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 class PackageBuilder:
     def __init__(self):
-        self.repo_root = Path(os.getcwd())
+        # Get the repository root from environment or detect it
+        self.repo_root = self._get_repo_root()
         
         # Load configuration
         self._load_config()
@@ -68,6 +69,38 @@ class PackageBuilder:
             "aur_success": 0,
             "local_success": 0,
         }
+    
+    def _get_repo_root(self):
+        """Get the repository root directory reliably."""
+        # First, check GITHUB_WORKSPACE environment variable
+        github_workspace = os.getenv('GITHUB_WORKSPACE')
+        if github_workspace:
+            workspace_path = Path(github_workspace)
+            if workspace_path.exists():
+                logger.info(f"Using GITHUB_WORKSPACE: {workspace_path}")
+                return workspace_path
+        
+        # Try to find git directory by checking current and parent directories
+        current_dir = Path.cwd()
+        original_dir = current_dir
+        
+        # Go up the directory tree until we find .git
+        while current_dir != current_dir.parent:
+            git_dir = current_dir / '.git'
+            if git_dir.exists() and git_dir.is_dir():
+                logger.info(f"Found git repository at: {current_dir}")
+                return current_dir
+            current_dir = current_dir.parent
+        
+        # If we're in a container, check the typical GitHub Actions workspace path
+        container_workspace = Path('/__w/manjaro-awesome/manjaro-awesome')
+        if container_workspace.exists():
+            logger.info(f"Using container workspace: {container_workspace}")
+            return container_workspace
+        
+        # As a last resort, return the original directory
+        logger.warning(f"Could not find git repository, using current directory: {original_dir}")
+        return original_dir
     
     def _load_config(self):
         """Load configuration from environment and config files."""
@@ -128,6 +161,10 @@ class PackageBuilder:
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True):
         """Run command with error handling."""
         logger.debug(f"Running: {cmd}")
+        
+        # If no cwd specified, use repo_root
+        if cwd is None:
+            cwd = self.repo_root
         
         try:
             result = subprocess.run(
@@ -319,7 +356,7 @@ class PackageBuilder:
             
             # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
@@ -332,6 +369,7 @@ class PackageBuilder:
             print("Building package...")
             build_result = self.run_cmd(
                 f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
+                cwd=None,
                 capture=True,
                 check=False
             )
@@ -508,7 +546,7 @@ class PackageBuilder:
             
             # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
@@ -517,6 +555,7 @@ class PackageBuilder:
             print("Building package...")
             build_result = self.run_cmd(
                 f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
+                cwd=None,
                 capture=True,
                 check=False
             )
@@ -709,27 +748,6 @@ class PackageBuilder:
         # Commit changes
         print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
         
-        # First, find the git repository
-        # In GitHub Actions, the .git directory is usually in the workspace root
-        workspace_root = os.getenv('GITHUB_WORKSPACE')
-        if not workspace_root:
-            # Try to find git directory by checking parent directories
-            current_dir = self.repo_root
-            while current_dir != current_dir.parent:
-                git_dir = current_dir / '.git'
-                if git_dir.exists():
-                    workspace_root = str(current_dir)
-                    break
-                current_dir = current_dir.parent
-        
-        if not workspace_root:
-            logger.error("Could not find git repository!")
-            return
-        
-        # Change to the workspace root directory
-        original_cwd = os.getcwd()
-        os.chdir(workspace_root)
-        
         # Set GIT_DISCOVERY_ACROSS_FILESYSTEM to allow git to work
         os.environ['GIT_DISCOVERY_ACROSS_FILESYSTEM'] = '1'
         
@@ -739,10 +757,10 @@ class PackageBuilder:
         
         # Add the modified PKGBUILD files
         for pkg_name in modified_packages:
-            # Calculate relative path from workspace root to PKGBUILD
-            pkgbuild_path = Path(workspace_root) / "manjaro-awesome" / pkg_name / "PKGBUILD"
+            pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
             if pkgbuild_path.exists():
-                relative_path = pkgbuild_path.relative_to(workspace_root)
+                # Use relative path from repo root
+                relative_path = pkgbuild_path.relative_to(self.repo_root)
                 self.run_cmd(f'git add "{relative_path}"', check=False)
         
         # Create commit message
@@ -782,9 +800,6 @@ class PackageBuilder:
                 logger.warning(f"Failed to push changes: {push_result.stderr}")
         else:
             logger.warning(f"No changes to commit or commit failed: {commit_result.stderr}")
-        
-        # Change back to original directory
-        os.chdir(original_cwd)
     
     def run(self):
         """Main execution."""
@@ -795,6 +810,7 @@ class PackageBuilder:
         try:
             # Setup
             print("\n🔧 Initial setup...")
+            print(f"Repository root: {self.repo_root}")
             print(f"Using repository: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
