@@ -19,7 +19,7 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_PUSH_SSH_KEY: ${{ secrets.GITHUB_PUSH_SSH_KEY }}
+      CI_PUSH_SSH_KEY: ${{ secrets.CI_PUSH_SSH_KEY }}
 
     steps:
       - name: Checkout Code with Full History
@@ -198,7 +198,7 @@ jobs:
             else
               echo "⚠️ Repository '$REPO_NAME' found but not accessible via pacman"
             fi
-          else:
+          else
             echo "❌ Failed to sync pacman database"
           fi
           
@@ -417,7 +417,7 @@ jobs:
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
           export GITHUB_TOKEN="$GITHUB_TOKEN"
-          export GITHUB_PUSH_SSH_KEY="$GITHUB_PUSH_SSH_KEY"
+          export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
           # Set git config for the current directory

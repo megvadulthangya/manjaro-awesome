@@ -863,9 +863,9 @@ class PackageBuilder:
             ssh_config_path = "/tmp/ssh_config"
             
             # Get SSH key from environment
-            github_ssh_key = os.getenv('GITHUB_PUSH_SSH_KEY')
+            github_ssh_key = os.getenv('CI_PUSH_SSH_KEY')
             if not github_ssh_key:
-                logger.error("GITHUB_PUSH_SSH_KEY not set in environment")
+                logger.error("CI_PUSH_SSH_KEY not set in environment")
                 return
             
             # Write SSH key
