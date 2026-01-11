@@ -31,6 +31,42 @@ jobs:
           # Ez biztosítja, hogy a .git mappa megfelelően legyen kezelve
           lfs: false
 
+      - name: DEBUG - Git Repository Inspection
+        run: |
+          echo "=== DEBUG GIT REPOSITORY ==="
+          echo "1. pwd:"
+          pwd
+          echo ""
+          echo "2. ls -la .git:"
+          ls -la .git 2>&1 || echo "Command failed"
+          echo ""
+          echo "3. file .git:"
+          file .git 2>&1 || echo "Command failed"
+          echo ""
+          echo "4. cat .git (if it's a file):"
+          if [ -f .git ]; then
+            cat .git 2>&1 || echo "Command failed"
+          else
+            echo ".git is not a regular file"
+          fi
+          echo ""
+          echo "5. find .git -type f:"
+          find .git -type f 2>&1 | head -20
+          echo ""
+          echo "6. GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo ""
+          echo "7. Real path of current directory:"
+          realpath .
+          echo ""
+          echo "8. Check if .git exists in parent directories:"
+          current_dir=$(pwd)
+          while [ "$current_dir" != "/" ]; do
+            if [ -d "$current_dir/.git" ]; then
+              echo "Found .git at: $current_dir/.git"
+            fi
+            current_dir=$(dirname "$current_dir")
+          done
+
       - name: Fix PKGBUILD Epoch Issues
         run: |
           echo "=== Fixing PKGBUILD epoch issues ==="
@@ -173,7 +209,7 @@ jobs:
               cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
               tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
               mv /etc/pacman.conf.tmp /etc/pacman.conf
-            else
+            else:
               cat "$TEMP_FILE" >> /etc/pacman.conf
             fi
             
