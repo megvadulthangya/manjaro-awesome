@@ -709,13 +709,33 @@ class PackageBuilder:
         # Commit changes
         print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
         
-        # Set git identity
-        self.run_cmd('git config --global user.email "builder@github-actions"', check=False)
-        self.run_cmd('git config --global user.name "GitHub Actions Builder"', check=False)
+        # First, check if we're in a git repository
+        git_check = self.run_cmd("git rev-parse --git-dir", check=False, capture=True)
+        if git_check.returncode != 0:
+            logger.error("Not in a git repository! Cannot commit changes.")
+            # Try to find the git repository in parent directories
+            logger.info("Looking for git repository in parent directories...")
+            parent_dir = self.repo_root.parent
+            while parent_dir != parent_dir.parent:
+                git_dir_check = self.run_cmd(f"cd {parent_dir} && git rev-parse --git-dir", check=False, capture=True)
+                if git_dir_check.returncode == 0:
+                    logger.info(f"Found git repository in {parent_dir}")
+                    # Change to the git repository directory
+                    os.chdir(parent_dir)
+                    break
+                parent_dir = parent_dir.parent
+            else:
+                logger.error("Could not find git repository in any parent directory")
+                return
+        
+        # Set git identity (already done in workflow, but do it here too for safety)
+        self.run_cmd('git config user.email "builder@github-actions"', check=False)
+        self.run_cmd('git config user.name "GitHub Actions Builder"', check=False)
         
         # Add the modified PKGBUILD files
         for pkg_name in modified_packages:
             pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
+            # Use absolute path
             self.run_cmd(f'git add "{pkgbuild_path}"', check=False)
         
         # Create commit message
