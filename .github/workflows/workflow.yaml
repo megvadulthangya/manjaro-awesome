@@ -1,3 +1,313 @@
+name: Manjaro Package Builder
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'  # Daily at 4 AM UTC
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    env:
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+      REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+      REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout Code with Full History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Különösen fontos beállítások a git push-hoz
+          persist-credentials: true
+          # Ez biztosítja, hogy a .git mappa megfelelően legyen kezelve
+          lfs: false
+
+      - name: Fix PKGBUILD Epoch Issues
+        run: |
+          echo "=== Fixing PKGBUILD epoch issues ==="
+          
+          # Fix awesome-freedesktop-git PKGBUILD (remove epoch)
+          if [ -f "awesome-freedesktop-git/PKGBUILD" ]; then
+            echo "Fixing awesome-freedesktop-git/PKGBUILD..."
+            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD
+            # Increment pkgrel to ensure new version
+            current_pkgrel=$(grep -oP '^pkgrel=\K\d+' awesome-freedesktop-git/PKGBUILD)
+            if [ -n "$current_pkgrel" ]; then
+              new_pkgrel=$((current_pkgrel + 1))
+              sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" awesome-freedesktop-git/PKGBUILD
+              echo "Updated pkgrel from $current_pkgrel to $new_pkgrel"
+            fi
+          fi
+          
+          # Check for other packages with epoch
+          echo "Checking for other packages with epoch in PKGBUILD..."
+          find . -name "PKGBUILD" -type f -exec grep -l "^epoch=" {} \;
+          
+          echo "✅ PKGBUILD fixes complete"
+
+      - name: Prepare Environment
+        run: |
+          echo "=== Starting Environment Preparation ==="
+          echo "Repository: $REPO_NAME"
+          echo "Server URL: $REPO_SERVER_URL"
+          
+          # Skip key signing issues
+          echo "Setting up pacman without key signing..."
+          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
+          
+          # Update system with minimal packages first
+          pacman -Syu --noconfirm --needed \
+            git base-devel sudo \
+            python python-pip \
+            python-requests python-gitpython python-yaml python-setuptools \
+            pacman-contrib \
+            curl wget ca-certificates \
+            openssh rsync \
+            netcat iproute2
+            
+          # Create builder user
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Git safety settings
+          git config --system --add safe.directory '*'
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
+          # Set ownership - itt a teljes workspace-t a builder-nek adjuk
+          chown -R builder:builder "$(pwd)"
+          chown -R builder:builder "$GITHUB_WORKSPACE" 2>/dev/null || true
+          
+          # Create build directories with correct permissions
+          mkdir -p "$(pwd)/build_aur"
+          chown -R builder:builder "$(pwd)/build_aur"
+          mkdir -p "$(pwd)/built_packages"
+          chown -R builder:builder "$(pwd)/built_packages"
+          
+          # Optimize makepkg
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          
+          echo "✅ Environment preparation complete"
+
+      - name: Setup SSH for VPS
+        run: |
+          echo "=== Setting up SSH for VPS connection ==="
+          
+          # Create SSH directory for builder user
+          mkdir -p /home/builder/.ssh
+          chmod 700 /home/builder/.ssh
+          
+          # Write SSH key for VPS
+          echo "Writing SSH key for VPS..."
+          if echo "$VPS_SSH_KEY" | base64 -d >/dev/null 2>&1; then
+            echo "🔑 Key appears to be base64 encoded, decoding..."
+            echo "$VPS_SSH_KEY" | base64 -d > /home/builder/.ssh/id_ed25519
+          else
+            echo "🔑 Key is plain text, writing as-is..."
+            echo "$VPS_SSH_KEY" > /home/builder/.ssh/id_ed25519
+          fi
+          
+          chmod 600 /home/builder/.ssh/id_ed25519
+          
+          # Create SSH config for VPS - NO HEREDOC, use echo
+          echo "Creating SSH config for VPS..."
+          echo "Host vps" > /home/builder/.ssh/config
+          echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
+          echo "  User $VPS_USER" >> /home/builder/.ssh/config
+          echo "  IdentityFile ~/.ssh/id_ed25519" >> /home/builder/.ssh/config
+          echo "  Port 22" >> /home/builder/.ssh/config
+          echo "  ConnectTimeout 30" >> /home/builder/.ssh/config
+          echo "  ServerAliveInterval 60" >> /home/builder/.ssh/config
+          echo "  ServerAliveCountMax 3" >> /home/builder/.ssh/config
+          echo "  TCPKeepAlive yes" >> /home/builder/.ssh/config
+          echo "  StrictHostKeyChecking no" >> /home/builder/.ssh/config
+          echo "  UserKnownHostsFile /dev/null" >> /home/builder/.ssh/config
+          
+          chmod 600 /home/builder/.ssh/config
+          
+          # Also add to known_hosts (optional, since we disabled checking)
+          ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+          
+          chown -R builder:builder /home/builder/.ssh
+          
+          echo "✅ SSH setup for VPS complete"
+
+      - name: Configure Pacman Repository
+        run: |
+          echo "=== Configuring Pacman Repository ==="
+          echo "Repository: $REPO_NAME"
+          echo "Server URL: $REPO_SERVER_URL"
+          
+          if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
+            echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
+            exit 1
+          fi
+          
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
+            echo "⚠️ Repository '$REPO_NAME' already exists in pacman.conf"
+            echo "Updating server URL if needed..."
+            
+            sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
+          else
+            echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
+            
+            TEMP_FILE=$(mktemp)
+            echo "[$REPO_NAME]" > "$TEMP_FILE"
+            echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
+            echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
+            
+            if grep -q "^\[community\]" /etc/pacman.conf; then
+              LINE_NUM=$(grep -n "^\[community\]" /etc/pacman.conf | cut -d: -f1)
+              head -n $((LINE_NUM-1)) /etc/pacman.conf > /etc/pacman.conf.tmp
+              cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
+              tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
+              mv /etc/pacman.conf.tmp /etc/pacman.conf
+            else:
+              cat "$TEMP_FILE" >> /etc/pacman.conf
+            fi
+            
+            rm -f "$TEMP_FILE"
+          fi
+          
+          echo "=== Pacman.conf repository section ==="
+          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
+          
+          echo ""
+          echo "Updating pacman database..."
+          if pacman -Sy --noconfirm; then
+            echo "✅ Pacman database synchronized"
+            
+            echo ""
+            echo "=== Testing repository access ==="
+            if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
+              echo "✅ Repository '$REPO_NAME' is accessible via pacman"
+              echo "Available packages in repository:"
+              pacman -Sl "$REPO_NAME" | head -10
+            else
+              echo "⚠️ Repository '$REPO_NAME' found but not accessible via pacman"
+            fi
+          else
+            echo "❌ Failed to sync pacman database"
+          fi
+          
+          echo "✅ Pacman repository configuration complete"
+
+      - name: Simple Network Test
+        run: |
+          echo "=== Simple Network Test ==="
+          
+          # Test basic connectivity
+          echo "1. Testing internet connectivity..."
+          if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
+            echo "✅ Internet connectivity OK"
+          else
+            echo "⚠️ No internet connectivity via IP - may be a container issue"
+          fi
+          
+          # Test VPS connectivity
+          echo ""
+          echo "2. Testing VPS connectivity..."
+          if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
+            echo "✅ VPS port 22 is accessible"
+          else
+            echo "❌ Cannot reach VPS on port 22"
+          fi
+          
+          # Test SSH as builder user
+          echo ""
+          echo "3. Testing SSH connection as builder user..."
+          if su builder -c "timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes vps 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
+            echo "✅ SSH connection to VPS successful"
+          else
+            echo "❌ SSH connection to VPS failed"
+            echo "Debug: Trying with verbose output..."
+            su builder -c "timeout 10 ssh -vvv -o ConnectTimeout=5 -o StrictHostKeyChecking=no vps 'echo test'" 2>&1 | tail -30
+          fi
+          
+          echo "✅ Network tests complete"
+
+      - name: Install Build Dependencies
+        run: |
+          echo "=== Installing Build Dependencies ==="
+          
+          # Install remaining build tools
+          pacman -Syu --noconfirm --needed \
+            appstream appstream-glib \
+            meson ninja cmake \
+            gtk-doc docbook-xsl libxslt \
+            gobject-introspection \
+            autoconf automake libtool pkg-config \
+            patch make gcc binutils \
+            file which tar gzip bzip2 xz zstd \
+            unzip p7zip gnupg \
+            dbus polkit \
+            systemd systemd-sysvcompat \
+            arch-install-scripts \
+            ldc po4a dconf  # tilix-git specific dependencies
+            
+          # Install yay for AUR dependencies - simpler method
+          echo "=== Installing yay ==="
+          # First give builder permission to /tmp
+          chmod 777 /tmp
+          # Install yay using a different approach
+          cd /tmp
+          # Clone as builder user
+          sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+          cd yay-bin
+          # Build and install as builder user
+          sudo -u builder makepkg -si --noconfirm
+          cd /
+          # Cleanup
+          rm -rf /tmp/yay-bin
+          
+          echo "✅ Build dependencies installed"
+
+      - name: Setup Git for Builder User
+        run: |
+          echo "=== Setting up Git for Builder User ==="
+          
+          # Configure git for builder user
+          echo "Configuring git for builder user..."
+          
+          # Set git config globally for builder user
+          sudo -u builder git config --global user.email "builder@github-actions"
+          sudo -u builder git config --global user.name "GitHub Actions Builder"
+          
+          # Set GIT_DISCOVERY_ACROSS_FILESYSTEM for builder user
+          echo 'export GIT_DISCOVERY_ACROSS_FILESYSTEM=1' >> /home/builder/.bashrc
+          
+          # Ensure builder user has access to the git repository
+          # First, find the actual .git directory (it might be in a parent directory)
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            echo "Found .git directory in GITHUB_WORKSPACE"
+            chown -R builder:builder "$GITHUB_WORKSPACE/.git"
+            chmod -R u+rw "$GITHUB_WORKSPACE/.git"
+          elif [ -d "/__w/manjaro-awesome/.git" ]; then
+            echo "Found .git directory in /__w/manjaro-awesome"
+            chown -R builder:builder "/__w/manjaro-awesome/.git"
+            chmod -R u+rw "/__w/manjaro-awesome/.git"
+          else
+            echo "Looking for .git directory in current directory and parents..."
+            # Try to find .git directory
+            find /__w -name ".git" -type d 2>/dev/null | head -5
+          fi
+          
+          # Also ensure the entire workspace is owned by builder
+          chown -R builder:builder "$(pwd)"
+          
+          echo "✅ Git setup for builder user complete"
+
       - name: Run Builder
         run: |
           echo "=== Starting Builder ==="
@@ -7,26 +317,24 @@
           echo "Current directory: $(pwd)"
           echo "Files in current directory:"
           ls -la
-          echo ""
           
-          # DEBUG: Check .git in current directory
+          echo ""
           echo "=== DEBUG: Checking .git in current directory ==="
           pwd
           ls -la .git 2>&1 || echo "ls .git failed"
           file .git 2>&1 || echo "file .git failed"
           cat .git 2>&1 || echo "cat .git failed"
-          echo ""
           
-          # DEBUG: Check .git in parent directory
+          echo ""
           echo "=== DEBUG: Checking .git in parent directory ==="
           cd ..
           pwd
           ls -la .git 2>&1 || echo "ls .git failed"
           file .git 2>&1 || echo "file .git failed"
           cat .git 2>&1 || echo "cat .git failed"
-          cd /__w/manjaro-awesome/manjaro-awesome
-          echo ""
+          cd - > /dev/null  # Go back to original directory
           
+          echo ""
           echo "Looking for .git directory:"
           find . -name ".git" -type d 2>/dev/null || echo "No .git directory found in current directory"
           echo ""
@@ -80,3 +388,39 @@
           fi
           
           exit $BUILD_STATUS
+
+      - name: Sanitize Artifact Filenames
+        if: always()
+        run: |
+          echo "=== Sanitizing artifact filenames ==="
+          
+          # Create a sanitized copy of built packages
+          if [ -d "built_packages" ] && [ "$(ls -A built_packages 2>/dev/null)" ]; then
+            echo "Creating sanitized artifact directory..."
+            mkdir -p artifact_packages
+            
+            for file in built_packages/*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                # Replace invalid characters
+                sanitized_name=$(echo "$filename" | sed 's/:/_/g' | sed 's/[<>|*?"\r\n]//g')
+                echo "Copying: $filename -> $sanitized_name"
+                cp "$file" "artifact_packages/$sanitized_name"
+              fi
+            done
+            
+            echo "✅ Artifact filenames sanitized"
+          else
+            echo "⚠️ No built packages found to sanitize"
+          fi
+
+      - name: Upload Build Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-results-$(date +%s)
+          path: |
+            builder.log
+            build_output.log
+            artifact_packages/
+          retention-days: 7
