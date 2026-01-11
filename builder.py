@@ -60,7 +60,7 @@ class PackageBuilder:
         self.skipped_packages = []
         self.rebuilt_local_packages = []  # Track local packages that were rebuilt
         
-        # PHASE 1 OBSERVER: hokibot data collection (in-memory only)
+        # PHASE 1 OBSERVER: hokibot data collection (in-memory only) - ONLY FOR LOCAL PACKAGES
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
         
         # Special dependencies from config
@@ -206,16 +206,36 @@ class PackageBuilder:
         if not self.remote_files:
             return False
         
+        # Git csomagok esetén speciális kezelés
+        is_git_package = pkg_name.endswith('-git')
+        
         if version:
-            pattern = f"^{re.escape(pkg_name)}-{re.escape(version)}-"
+            if is_git_package:
+                # Git csomagnál: csak a csomagnevet nézzük, ne a pontos verziót
+                # Mert a git hash mindig változik, de ha már van valamilyen verzió, akkor skip-eljük
+                pattern = f"^{re.escape(pkg_name)}-"
+                matches = [f for f in self.remote_files if re.match(pattern, f)]
+                
+                if matches:
+                    logger.debug(f"Git package {pkg_name} exists (any version): {matches[0]}")
+                    return True
+                return False
+            else:
+                # Normál csomagnál: pontos verzió-egyezést nézünk
+                pattern = f"^{re.escape(pkg_name)}-{re.escape(version)}-"
+                matches = [f for f in self.remote_files if re.match(pattern, f)]
+                
+                if matches:
+                    logger.debug(f"Package {pkg_name} exact match exists: {matches[0]}")
+                    return True
         else:
+            # Ha nincs version megadva, csak a név alapján nézzük
             pattern = f"^{re.escape(pkg_name)}-"
-        
-        matches = [f for f in self.remote_files if re.match(pattern, f)]
-        
-        if matches:
-            logger.debug(f"Package {pkg_name} exists: {matches[0]}")
-            return True
+            matches = [f for f in self.remote_files if re.match(pattern, f)]
+            
+            if matches:
+                logger.debug(f"Package {pkg_name} exists (any version): {matches[0]}")
+                return True
         
         return False
     
@@ -322,12 +342,21 @@ class PackageBuilder:
         if pkgver_match and pkgrel_match:
             version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
             
-            # Check if this exact version already exists
-            if self.package_exists(pkg_name, version):
-                logger.info(f"✅ {pkg_name} {version} already exists on server - skipping")
-                self.skipped_packages.append(f"{pkg_name} ({version})")
-                self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
-                return False
+            # Git csomagok esetén: csak a csomagnevet nézzük, nem a pontos verziót
+            if pkg_name.endswith('-git'):
+                # Git csomag: csak név alapján ellenőrizzük
+                if self.package_exists(pkg_name):  # version nélkül hívjuk
+                    logger.info(f"✅ {pkg_name} already exists on server (git package) - skipping")
+                    self.skipped_packages.append(f"{pkg_name}")
+                    self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
+                    return False
+            else:
+                # Normál csomag: pontos verzió-ellenőrzés
+                if self.package_exists(pkg_name, version):
+                    logger.info(f"✅ {pkg_name} {version} already exists on server - skipping")
+                    self.skipped_packages.append(f"{pkg_name} ({version})")
+                    self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
+                    return False
             
             # Check if any version exists (for logging)
             remote_version = self.get_remote_version(pkg_name)
@@ -381,6 +410,7 @@ class PackageBuilder:
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
+                    # AUR csomagoknál NINCS hokibot adatgyűjtés
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -556,11 +586,18 @@ class PackageBuilder:
         if pkgver_match and pkgrel_match:
             version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
             
-            # Check if this exact version already exists
-            if self.package_exists(pkg_name, version):
-                logger.info(f"✅ {pkg_name} {version} already exists on server - skipping")
-                self.skipped_packages.append(f"{pkg_name} ({version})")
-                return False
+            # Git csomagok esetén: csak a csomagnevet nézzük
+            if pkg_name.endswith('-git'):
+                if self.package_exists(pkg_name):  # version nélkül
+                    logger.info(f"✅ {pkg_name} already exists on server (git package) - skipping")
+                    self.skipped_packages.append(f"{pkg_name}")
+                    return False
+            else:
+                # Normál csomag: pontos verzió-ellenőrzés
+                if self.package_exists(pkg_name, version):
+                    logger.info(f"✅ {pkg_name} {version} already exists on server - skipping")
+                    self.skipped_packages.append(f"{pkg_name} ({version})")
+                    return False
             
             # Check if any version exists (for logging)
             remote_version = self.get_remote_version(pkg_name)
@@ -616,12 +653,12 @@ class PackageBuilder:
                     # Track local packages that were rebuilt
                     self.rebuilt_local_packages.append(pkg_name)
                     
-                    # PHASE 1 OBSERVER: Collect factual data about the rebuilt package
+                    # PHASE 1 OBSERVER: Collect factual data about the rebuilt LOCAL package
                     if built_files:
                         # Extract metadata from the first built package file
                         metadata = self._extract_package_metadata(built_files[0])
                         if metadata:
-                            # Store in memory for Phase 2
+                            # Store in memory for Phase 2 - ONLY for LOCAL packages
                             self.hokibot_data.append({
                                 'name': pkg_name,
                                 'built_version': metadata['built_version'],
@@ -629,7 +666,7 @@ class PackageBuilder:
                                 'pkgrel': metadata['pkgrel'],
                                 'epoch': metadata['epoch']
                             })
-                            logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {metadata['built_version']}")
+                            logger.info(f"📝 HOKIBOT observed LOCAL: {pkg_name} -> {metadata['built_version']}")
                     
                     return True
                 else:
@@ -684,9 +721,13 @@ class PackageBuilder:
         mkdir_cmd = f"ssh -o StrictHostKeyChecking=no vps 'mkdir -p \"{self.remote_dir}\"'"
         self.run_cmd(mkdir_cmd, check=False)
         
+        # Also include database files
+        db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
+        all_files = pkg_files + db_files
+        
         # Sanitize filenames for upload (replace colons with underscores)
         sanitized_files = []
-        for pkg_file in pkg_files:
+        for pkg_file in all_files:
             original_name = pkg_file.name
             # Replace colon with underscore in filename
             sanitized_name = original_name.replace(":", "_")
@@ -762,9 +803,6 @@ class PackageBuilder:
                     )
                     changed = True
                     logger.info(f"  Updated pkgver: {current_pkgver} -> {pkg_data['pkgver']}")
-            else:
-                # pkgver not found, add it (shouldn't happen with valid PKGBUILD)
-                logger.warning(f"No pkgver found in PKGBUILD for {pkg_data['name']}")
             
             # Update pkgrel to match observed built version
             current_pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
@@ -827,13 +865,13 @@ class PackageBuilder:
             return False
     
     def _synchronize_pkgbuilds(self):
-        """PHASE 2: Isolated PKGBUILD synchronization."""
+        """PHASE 2: Isolated PKGBUILD synchronization - ONLY FOR LOCAL PACKAGES."""
         if not self.hokibot_data:
             logger.info("No local packages were rebuilt - skipping PKGBUILD synchronization")
             return
         
         print("\n" + "="*60)
-        print("🔄 PHASE 2: Isolated PKGBUILD Synchronization")
+        print("🔄 PHASE 2: Isolated PKGBUILD Synchronization (LOCAL packages only)")
         print("="*60)
         
         # Create temporary directory for git clone
@@ -900,7 +938,7 @@ class PackageBuilder:
                 capture_output=True
             )
             
-            # Update PKGBUILDs based on observed data
+            # Update PKGBUILDs based on observed data (ONLY LOCAL PACKAGES)
             modified_packages = []
             for pkg_data in self.hokibot_data:
                 print(f"\n📝 Processing {pkg_data['name']}...")
@@ -928,7 +966,7 @@ class PackageBuilder:
             
             # Create commit message
             commit_msg = f"chore: synchronize PKGBUILDs with built versions\n\n"
-            commit_msg += f"Updated {len(modified_packages)} rebuilt local package(s):\n"
+            commit_msg += f"Updated {len(modified_packages)} rebuilt LOCAL package(s):\n"
             for pkg_name in modified_packages:
                 # Find the observed data for this package
                 for pkg_data in self.hokibot_data:
@@ -1002,7 +1040,7 @@ class PackageBuilder:
                     if self.upload_packages():
                         self.cleanup_old_packages()
                         
-                        # PHASE 2: Synchronize PKGBUILDs in isolated git clone
+                        # PHASE 2: Synchronize PKGBUILDs in isolated git clone (ONLY LOCAL PACKAGES)
                         self._synchronize_pkgbuilds()
                         
                         print("\n✅ Build completed successfully!")
