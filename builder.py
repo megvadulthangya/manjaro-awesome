@@ -39,8 +39,7 @@ logger = logging.getLogger(__name__)
 
 class PackageBuilder:
     def __init__(self):
-        # Get the repository root from environment or detect it
-        self.repo_root = self._get_repo_root()
+        self.repo_root = Path(os.getcwd())
         
         # Load configuration
         self._load_config()
@@ -58,7 +57,6 @@ class PackageBuilder:
         self.packages_to_clean = set()
         self.built_packages = []
         self.skipped_packages = []
-        self.rebuilt_local_packages = []  # Track local packages that were rebuilt
         
         # Special dependencies from config
         self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
@@ -69,38 +67,6 @@ class PackageBuilder:
             "aur_success": 0,
             "local_success": 0,
         }
-    
-    def _get_repo_root(self):
-        """Get the repository root directory reliably."""
-        # First, check GITHUB_WORKSPACE environment variable
-        github_workspace = os.getenv('GITHUB_WORKSPACE')
-        if github_workspace:
-            workspace_path = Path(github_workspace)
-            if workspace_path.exists():
-                logger.info(f"Using GITHUB_WORKSPACE: {workspace_path}")
-                return workspace_path
-        
-        # Try to find git directory by checking current and parent directories
-        current_dir = Path.cwd()
-        original_dir = current_dir
-        
-        # Go up the directory tree until we find .git
-        while current_dir != current_dir.parent:
-            git_dir = current_dir / '.git'
-            if git_dir.exists() and git_dir.is_dir():
-                logger.info(f"Found git repository at: {current_dir}")
-                return current_dir
-            current_dir = current_dir.parent
-        
-        # If we're in a container, check the typical GitHub Actions workspace path
-        container_workspace = Path('/__w/manjaro-awesome/manjaro-awesome')
-        if container_workspace.exists():
-            logger.info(f"Using container workspace: {container_workspace}")
-            return container_workspace
-        
-        # As a last resort, return the original directory
-        logger.warning(f"Could not find git repository, using current directory: {original_dir}")
-        return original_dir
     
     def _load_config(self):
         """Load configuration from environment and config files."""
@@ -161,10 +127,6 @@ class PackageBuilder:
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True):
         """Run command with error handling."""
         logger.debug(f"Running: {cmd}")
-        
-        # If no cwd specified, use repo_root
-        if cwd is None:
-            cwd = self.repo_root
         
         try:
             result = subprocess.run(
@@ -247,8 +209,25 @@ class PackageBuilder:
             return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
         else:
             print("⚠️ Using default package lists (packages.py not found or incomplete)")
-            # NO hardcoded package lists - return empty lists
-            return [], []
+            # Default fallback lists
+            local_packages = [
+                "gghelper", "gtk2", "awesome-freedesktop-git", "lain-git",
+                "awesome-rofi", "nordic-backgrounds", "awesome-copycats-manjaro",
+                "i3lock-fancy-git", "ttf-font-awesome-5", "nvidia-driver-assistant",
+                "grayjay-bin"
+            ]
+            
+            aur_packages = [
+                "libinput-gestures", "qt5-styleplugins", "urxvt-resize-font-git",
+                "i3lock-color", "raw-thumbnailer", "gsconnect", "awesome-git",
+                "tilix-git", "tamzen-font", "betterlockscreen", "nordic-theme",
+                "nordic-darker-theme", "geany-nord-theme", "nordzy-icon-theme",
+                "oh-my-posh-bin", "fish-done", "find-the-command", "p7zip-gui",
+                "qownnotes", "xorg-font-utils", "xnviewmp", "simplescreenrecorder",
+                "gtkhash-thunar", "a4tech-bloody-driver-git"
+            ]
+            
+            return local_packages, aur_packages
     
     def build_packages(self):
         """Build packages."""
@@ -347,8 +326,9 @@ class PackageBuilder:
             version = "unknown"
             logger.warning(f"Could not extract version for {pkg_name}")
         
-        # Check for special handling needed (from config or based on package properties)
-        self._check_for_special_handling(pkg_name, pkg_dir)
+        # Special handling for qt5-styleplugins
+        if pkg_name == "qt5-styleplugins":
+            self._handle_qt5_styleplugins(pkg_dir)
         
         # Build
         try:
@@ -356,7 +336,7 @@ class PackageBuilder:
             
             # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
@@ -369,7 +349,6 @@ class PackageBuilder:
             print("Building package...")
             build_result = self.run_cmd(
                 f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
-                cwd=None,
                 capture=True,
                 check=False
             )
@@ -403,11 +382,27 @@ class PackageBuilder:
             self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
             return False
     
-    def _check_for_special_handling(self, pkg_name, pkg_dir):
-        """Check if package needs special handling based on config."""
-        # This method is intentionally left generic
-        # Any special handling should be configured in config.py
-        pass
+    def _handle_qt5_styleplugins(self, pkg_dir):
+        """Special handling for qt5-styleplugins."""
+        # Check if gtk2 is available in our repository
+        gtk2_result = self.run_cmd(f"pacman -Sl {self.repo_name} | grep -q 'gtk2'", check=False)
+        
+        if gtk2_result.returncode == 0:
+            logger.info("gtk2 is available in our repository, will be installed as dependency")
+            # No need to modify PKGBUILD
+        else:
+            logger.warning("gtk2 not found in our repository, checking if we built it...")
+            # Check if we built gtk2 in this session
+            gtk2_built = any("gtk2" in pkg for pkg in self.built_packages)
+            if gtk2_built:
+                logger.info("gtk2 was built in this session, removing from dependencies")
+                pkgbuild = pkg_dir / "PKGBUILD"
+                if pkgbuild.exists():
+                    content = pkgbuild.read_text()
+                    # Remove gtk2 dependency
+                    content = re.sub(r'\bgtk2\b', '', content)
+                    content = re.sub(r'["\']gtk2["\']', '', content)
+                    pkgbuild.write_text(content)
     
     def _install_aur_deps(self, pkg_dir, pkg_name):
         """Install dependencies for AUR package with improved logic."""
@@ -436,7 +431,7 @@ class PackageBuilder:
                 line = line.strip()
                 if line.startswith("depends =") or line.startswith("makedepends ="):
                     dep = line.split('=', 1)[1].strip()
-                    if dep:  # Don't filter any dependencies
+                    if dep and dep not in ["gtk2"]:  # Skip gtk2 (handled separately)
                         deps.append(dep)
         
         if not deps:
@@ -546,7 +541,7 @@ class PackageBuilder:
             
             # Download sources as builder user
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
+            source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
@@ -555,7 +550,6 @@ class PackageBuilder:
             print("Building package...")
             build_result = self.run_cmd(
                 f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
-                cwd=None,
                 capture=True,
                 check=False
             )
@@ -572,8 +566,6 @@ class PackageBuilder:
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
-                    # Track local packages that were rebuilt
-                    self.rebuilt_local_packages.append(pkg_name)
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -613,6 +605,7 @@ class PackageBuilder:
         else:
             logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
+ 
  
     def upload_packages(self):
         """Upload packages to server."""
@@ -676,131 +669,6 @@ class PackageBuilder:
         
         logger.info(f"✅ Cleanup complete ({cleaned} packages)")
     
-    def _update_pkgbuilds_and_commit(self):
-        """Post-build step: Update PKGBUILD files for rebuilt local packages and commit."""
-        if not self.rebuilt_local_packages:
-            logger.info("No local packages were rebuilt - skipping PKGBUILD updates")
-            return
-        
-        print("\n" + "="*60)
-        print("📝 POST-BUILD: Updating PKGBUILDs for rebuilt local packages")
-        print("="*60)
-        
-        modified_packages = []
-        
-        for pkg_name in self.rebuilt_local_packages:
-            pkg_dir = self.repo_root / pkg_name
-            pkgbuild_path = pkg_dir / "PKGBUILD"
-            
-            if not pkgbuild_path.exists():
-                logger.warning(f"PKGBUILD not found for {pkg_name}")
-                continue
-            
-            try:
-                # Read the PKGBUILD
-                with open(pkgbuild_path, 'r') as f:
-                    content = f.read()
-                
-                # Find current pkgrel
-                pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-                if not pkgrel_match:
-                    logger.warning(f"Could not find pkgrel in PKGBUILD for {pkg_name}")
-                    continue
-                
-                current_pkgrel = pkgrel_match.group(1)
-                
-                try:
-                    # Increment pkgrel (ensure it's a valid number)
-                    if current_pkgrel.isdigit():
-                        new_pkgrel = str(int(current_pkgrel) + 1)
-                    else:
-                        # If pkgrel has non-digit characters, try to extract the number
-                        num_match = re.search(r'(\d+)', current_pkgrel)
-                        if num_match:
-                            new_pkgrel = str(int(num_match.group(1)) + 1)
-                        else:
-                            new_pkgrel = "1"
-                except ValueError:
-                    new_pkgrel = "1"
-                
-                # Update the pkgrel in the content
-                updated_content = re.sub(
-                    r'^pkgrel\s*=\s*["\']?[^"\'\n]+',
-                    f'pkgrel={new_pkgrel}',
-                    content,
-                    flags=re.MULTILINE
-                )
-                
-                # Write the updated PKGBUILD
-                with open(pkgbuild_path, 'w') as f:
-                    f.write(updated_content)
-                
-                logger.info(f"✅ Updated {pkg_name}: pkgrel {current_pkgrel} -> {new_pkgrel}")
-                modified_packages.append(pkg_name)
-                
-            except Exception as e:
-                logger.error(f"Failed to update PKGBUILD for {pkg_name}: {e}")
-        
-        if not modified_packages:
-            logger.info("No PKGBUILD files were modified")
-            return
-        
-        # Commit changes
-        print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
-        
-        # Set GIT_DISCOVERY_ACROSS_FILESYSTEM to allow git to work
-        os.environ['GIT_DISCOVERY_ACROSS_FILESYSTEM'] = '1'
-        
-        # Configure git if not already configured
-        self.run_cmd('git config user.email "builder@github-actions"', check=False)
-        self.run_cmd('git config user.name "GitHub Actions Builder"', check=False)
-        
-        # Add the modified PKGBUILD files
-        for pkg_name in modified_packages:
-            pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
-            if pkgbuild_path.exists():
-                # Use relative path from repo root
-                relative_path = pkgbuild_path.relative_to(self.repo_root)
-                self.run_cmd(f'git add "{relative_path}"', check=False)
-        
-        # Create commit message
-        commit_msg = f"chore: update PKGBUILD pkgrel for rebuilt packages\n\n"
-        commit_msg += f"Updated pkgrel for {len(modified_packages)} rebuilt local package(s):\n"
-        for pkg_name in modified_packages:
-            commit_msg += f"- {pkg_name}\n"
-        
-        # Commit changes
-        commit_result = self.run_cmd(
-            f'git commit -m "{commit_msg}"',
-            check=False,
-            capture=True
-        )
-        
-        if commit_result.returncode == 0:
-            logger.info("✅ Changes committed")
-            
-            # Push to main branch
-            print("\n📤 Pushing changes to main branch...")
-            
-            # Use GitHub token for authentication if available
-            github_token = os.getenv('GITHUB_TOKEN')
-            if github_token:
-                # Set remote URL with token
-                self.run_cmd(f'git remote set-url origin https://x-access-token:{github_token}@github.com/megvadulthangya/manjaro-awesome.git', check=False)
-            
-            push_result = self.run_cmd(
-                'git push origin main',
-                check=False,
-                capture=True
-            )
-            
-            if push_result.returncode == 0:
-                logger.info("✅ Changes pushed to main branch")
-            else:
-                logger.warning(f"Failed to push changes: {push_result.stderr}")
-        else:
-            logger.warning(f"No changes to commit or commit failed: {commit_result.stderr}")
-    
     def run(self):
         """Main execution."""
         print("\n" + "="*60)
@@ -810,7 +678,6 @@ class PackageBuilder:
         try:
             # Setup
             print("\n🔧 Initial setup...")
-            print(f"Repository root: {self.repo_root}")
             print(f"Using repository: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
@@ -829,10 +696,6 @@ class PackageBuilder:
                 if self.update_database():
                     if self.upload_packages():
                         self.cleanup_old_packages()
-                        
-                        # POST-BUILD STEP: Update PKGBUILDs and commit
-                        self._update_pkgbuilds_and_commit()
-                        
                         print("\n✅ Build completed successfully!")
                     else:
                         print("\n❌ Upload failed!")

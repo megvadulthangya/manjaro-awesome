@@ -4,7 +4,6 @@ Package definitions for Manjaro Package Builder
 
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
-    "test-package",
     "gghelper",
     "gtk2",
     "awesome-freedesktop-git",
