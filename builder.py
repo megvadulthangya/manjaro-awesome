@@ -709,34 +709,41 @@ class PackageBuilder:
         # Commit changes
         print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
         
-        # First, check if we're in a git repository
-        git_check = self.run_cmd("git rev-parse --git-dir", check=False, capture=True)
-        if git_check.returncode != 0:
-            logger.error("Not in a git repository! Cannot commit changes.")
-            # Try to find the git repository in parent directories
-            logger.info("Looking for git repository in parent directories...")
-            parent_dir = self.repo_root.parent
-            while parent_dir != parent_dir.parent:
-                git_dir_check = self.run_cmd(f"cd {parent_dir} && git rev-parse --git-dir", check=False, capture=True)
-                if git_dir_check.returncode == 0:
-                    logger.info(f"Found git repository in {parent_dir}")
-                    # Change to the git repository directory
-                    os.chdir(parent_dir)
+        # First, find the git repository
+        # In GitHub Actions, the .git directory is usually in the workspace root
+        workspace_root = os.getenv('GITHUB_WORKSPACE')
+        if not workspace_root:
+            # Try to find git directory by checking parent directories
+            current_dir = self.repo_root
+            while current_dir != current_dir.parent:
+                git_dir = current_dir / '.git'
+                if git_dir.exists():
+                    workspace_root = str(current_dir)
                     break
-                parent_dir = parent_dir.parent
-            else:
-                logger.error("Could not find git repository in any parent directory")
-                return
+                current_dir = current_dir.parent
         
-        # Set git identity (already done in workflow, but do it here too for safety)
+        if not workspace_root:
+            logger.error("Could not find git repository!")
+            return
+        
+        # Change to the workspace root directory
+        original_cwd = os.getcwd()
+        os.chdir(workspace_root)
+        
+        # Set GIT_DISCOVERY_ACROSS_FILESYSTEM to allow git to work
+        os.environ['GIT_DISCOVERY_ACROSS_FILESYSTEM'] = '1'
+        
+        # Configure git if not already configured
         self.run_cmd('git config user.email "builder@github-actions"', check=False)
         self.run_cmd('git config user.name "GitHub Actions Builder"', check=False)
         
         # Add the modified PKGBUILD files
         for pkg_name in modified_packages:
-            pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
-            # Use absolute path
-            self.run_cmd(f'git add "{pkgbuild_path}"', check=False)
+            # Calculate relative path from workspace root to PKGBUILD
+            pkgbuild_path = Path(workspace_root) / "manjaro-awesome" / pkg_name / "PKGBUILD"
+            if pkgbuild_path.exists():
+                relative_path = pkgbuild_path.relative_to(workspace_root)
+                self.run_cmd(f'git add "{relative_path}"', check=False)
         
         # Create commit message
         commit_msg = f"chore: update PKGBUILD pkgrel for rebuilt packages\n\n"
@@ -775,6 +782,9 @@ class PackageBuilder:
                 logger.warning(f"Failed to push changes: {push_result.stderr}")
         else:
             logger.warning(f"No changes to commit or commit failed: {commit_result.stderr}")
+        
+        # Change back to original directory
+        os.chdir(original_cwd)
     
     def run(self):
         """Main execution."""
