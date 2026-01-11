@@ -173,7 +173,7 @@ jobs:
               cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
               tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
               mv /etc/pacman.conf.tmp /etc/pacman.conf
-            else:
+            else
               cat "$TEMP_FILE" >> /etc/pacman.conf
             fi
             
@@ -197,7 +197,7 @@ jobs:
             else
               echo "⚠️ Repository '$REPO_NAME' found but not accessible via pacman"
             fi
-          else:
+          else
             echo "❌ Failed to sync pacman database"
           fi
           
