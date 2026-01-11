@@ -80,27 +80,35 @@ class PackageBuilder:
                 logger.info(f"Using GITHUB_WORKSPACE: {workspace_path}")
                 return workspace_path
         
-        # Try to find git directory by checking current and parent directories
-        current_dir = Path.cwd()
-        original_dir = current_dir
-        
-        # Go up the directory tree until we find .git
-        while current_dir != current_dir.parent:
-            git_dir = current_dir / '.git'
-            if git_dir.exists() and git_dir.is_dir():
-                logger.info(f"Found git repository at: {current_dir}")
-                return current_dir
-            current_dir = current_dir.parent
-        
-        # If we're in a container, check the typical GitHub Actions workspace path
+        # Check if we're in the typical GitHub Actions container workspace
         container_workspace = Path('/__w/manjaro-awesome/manjaro-awesome')
         if container_workspace.exists():
             logger.info(f"Using container workspace: {container_workspace}")
             return container_workspace
         
-        # As a last resort, return the original directory
-        logger.warning(f"Could not find git repository, using current directory: {original_dir}")
-        return original_dir
+        # Try to find git directory by checking current directory
+        current_dir = Path.cwd()
+        
+        # Check if .git exists (file or directory) in current directory
+        git_path = current_dir / '.git'
+        if git_path.exists():
+            logger.info(f"Found .git in current directory: {current_dir}")
+            return current_dir
+        
+        # Check if we're already in the repo directory (has .github folder)
+        github_dir = current_dir / '.github'
+        if github_dir.exists() and github_dir.is_dir():
+            logger.info(f"Found .github in current directory: {current_dir}")
+            return current_dir
+        
+        # Try to find by checking for known files
+        if (current_dir / 'builder.py').exists():
+            logger.info(f"Found builder.py in current directory: {current_dir}")
+            return current_dir
+        
+        # As a last resort, return current directory
+        logger.warning(f"Could not determine repo root, using current directory: {current_dir}")
+        return current_dir
     
     def _load_config(self):
         """Load configuration from environment and config files."""
@@ -162,9 +170,13 @@ class PackageBuilder:
         """Run command with error handling."""
         logger.debug(f"Running: {cmd}")
         
-        # If no cwd specified, use repo_root
+        # Always run git commands from repo root with GIT_DISCOVERY_ACROSS_FILESYSTEM set
         if cwd is None:
             cwd = self.repo_root
+        
+        # Create a copy of environment and add git discovery setting
+        env = os.environ.copy()
+        env['GIT_DISCOVERY_ACROSS_FILESYSTEM'] = '1'
         
         try:
             result = subprocess.run(
@@ -173,7 +185,8 @@ class PackageBuilder:
                 shell=shell,
                 capture_output=capture,
                 text=True,
-                check=check
+                check=check,
+                env=env
             )
             return result
         except subprocess.CalledProcessError as e:
@@ -747,9 +760,6 @@ class PackageBuilder:
         
         # Commit changes
         print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
-        
-        # Set GIT_DISCOVERY_ACROSS_FILESYSTEM to allow git to work
-        os.environ['GIT_DISCOVERY_ACROSS_FILESYSTEM'] = '1'
         
         # Configure git if not already configured
         self.run_cmd('git config user.email "builder@github-actions"', check=False)
