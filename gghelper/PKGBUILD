@@ -2,13 +2,8 @@
 
 # Maintainer: Gyöngyösi Gábor <gabor AT gshoots DOT hu>
 _pkgname=gghelper
-<<<<<<< HEAD
-pkgname=${_pkgname}-git
-pkgver=2.1.3
-=======
 pkgname=${_pkgname}
-pkgver=r0.0.0
->>>>>>> 248aaa7 (modifying gghelper remove git ...)
+pkgver=2.1.3
 pkgrel=1
 pkgdesc="Git workflow assistant with GitHub Actions conflict resolution"
 arch=('any')
