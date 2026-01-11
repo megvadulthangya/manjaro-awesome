@@ -313,30 +313,51 @@ jobs:
           echo "=== Starting Builder ==="
           
           chmod +x builder.py
-          
-          echo "Current directory: $(pwd)"
-          echo "Files in current directory:"
-          ls -la
-          echo ""
-          echo "=== DEBUG GIT INFORMATION ==="
-          echo "1. pwd:"
-          pwd
-          echo ""
-          echo "2. ls -la .git:"
-          ls -la .git 2>&1 || echo "ls .git failed"
-          echo ""
-          echo "3. file .git:"
-          file .git 2>&1 || echo "file .git failed"
-          echo ""
-          echo "4. cat .git:"
-          cat .git 2>&1 || echo "cat .git failed"
-          echo "=== END DEBUG ==="
-          echo ""
-          echo "Looking for .git directory:"
-          find . -name ".git" -type d 2>/dev/null || echo "No .git directory found in current directory"
-          echo ""
-          echo "Checking git status:"
-          git status 2>&1 || echo "Git command failed"
+
+echo "=== CURRENT DIRECTORY DEBUG ==="
+echo "Current directory: $(pwd)"
+echo "Files in current directory:"
+ls -la
+echo ""
+
+echo "=== DEBUG .git IN CURRENT DIR ==="
+echo "1. pwd:"
+pwd
+echo ""
+echo "2. ls -la .git:"
+ls -la .git 2>&1 || echo ".git not found here"
+echo ""
+echo "3. file .git:"
+file .git 2>&1 || echo "file .git failed"
+echo ""
+echo "4. cat .git:"
+cat .git 2>&1 || echo "cat .git failed"
+echo "=== END DEBUG CURRENT DIR ==="
+echo ""
+
+echo "=== DEBUG: LOOK ONE LEVEL UP ==="
+cd ..
+echo "Current directory after cd ..:"
+pwd
+echo "Files in parent directory:"
+ls -la
+echo ""
+echo "ls -la .git in parent directory:"
+ls -la .git 2>&1 || echo ".git not found here"
+echo "file .git in parent directory:"
+file .git 2>&1 || echo "file .git failed"
+echo "cat .git in parent directory:"
+cat .git 2>&1 || echo "cat .git failed"
+echo "=== END DEBUG PARENT DIR ==="
+echo ""
+
+echo "Looking for .git directories (recursive find):"
+find . -name ".git" -type d 2>/dev/null || echo "No .git directory found"
+echo ""
+
+echo "Checking git status from current dir:"
+git status 2>&1 || echo "Git command failed"
+
           
           # Test SSH connection one more time
           echo "=== Final SSH Test ==="
