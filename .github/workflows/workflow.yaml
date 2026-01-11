@@ -18,14 +18,14 @@ jobs:
       REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Configure git to allow pushes from builder user
-          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
@@ -268,31 +268,6 @@ jobs:
           
           echo "✅ Build dependencies installed"
 
-      - name: Configure Git for Builder User
-        run: |
-          echo "=== Configuring Git for Builder User ==="
-          
-          # Configure git for builder user to push changes back to repository
-          echo "Configuring git for builder user..."
-          
-          # Set git config for builder user globally
-          sudo -u builder git config --global user.email "builder@github-actions"
-          sudo -u builder git config --global user.name "GitHub Actions Builder"
-          
-          # Configure git to use the same repository directory
-          echo "Setting up repository access for builder user..."
-          
-          # Ensure the builder user can write to the git directory
-          if [ -d "/github/workspace/.git" ]; then
-            chown -R builder:builder /github/workspace/.git
-            chmod -R u+rw /github/workspace/.git
-          fi
-          
-          # Also set ownership of the workspace
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          
-          echo "✅ Git configuration for builder user complete"
-
       - name: Run Builder
         run: |
           echo "=== Starting Builder ==="
@@ -303,7 +278,6 @@ jobs:
           echo "Files in current directory:"
           ls -la
           echo ""
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
           
           # Test SSH connection one more time
           echo "=== Final SSH Test ==="
@@ -332,9 +306,11 @@ jobs:
           export REPO_SERVER_URL="$REPO_SERVER_URL"
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
+          export GITHUB_TOKEN="$GITHUB_TOKEN"
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
           # Run as builder user
-          su builder -c "cd '$GITHUB_WORKSPACE' && python3 builder.py 2>&1" | tee build_output.log
+          su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
           
           BUILD_STATUS=$?
           echo ""

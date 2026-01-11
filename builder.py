@@ -210,25 +210,8 @@ class PackageBuilder:
             return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
         else:
             print("⚠️ Using default package lists (packages.py not found or incomplete)")
-            # Default fallback lists
-            local_packages = [
-                "gghelper", "gtk2", "awesome-freedesktop-git", "lain-git",
-                "awesome-rofi", "nordic-backgrounds", "awesome-copycats-manjaro",
-                "i3lock-fancy-git", "ttf-font-awesome-5", "nvidia-driver-assistant",
-                "grayjay-bin"
-            ]
-            
-            aur_packages = [
-                "libinput-gestures", "qt5-styleplugins", "urxvt-resize-font-git",
-                "i3lock-color", "raw-thumbnailer", "gsconnect", "awesome-git",
-                "tilix-git", "tamzen-font", "betterlockscreen", "nordic-theme",
-                "nordic-darker-theme", "geany-nord-theme", "nordzy-icon-theme",
-                "oh-my-posh-bin", "fish-done", "find-the-command", "p7zip-gui",
-                "qownnotes", "xorg-font-utils", "xnviewmp", "simplescreenrecorder",
-                "gtkhash-thunar", "a4tech-bloody-driver-git"
-            ]
-            
-            return local_packages, aur_packages
+            # NO hardcoded package lists - return empty lists
+            return [], []
     
     def build_packages(self):
         """Build packages."""
@@ -327,9 +310,8 @@ class PackageBuilder:
             version = "unknown"
             logger.warning(f"Could not extract version for {pkg_name}")
         
-        # Special handling for qt5-styleplugins
-        if pkg_name == "qt5-styleplugins":
-            self._handle_qt5_styleplugins(pkg_dir)
+        # Check for special handling needed (from config or based on package properties)
+        self._check_for_special_handling(pkg_name, pkg_dir)
         
         # Build
         try:
@@ -383,27 +365,11 @@ class PackageBuilder:
             self.run_cmd(f"sudo -u builder rm -rf {pkg_dir}", check=False)
             return False
     
-    def _handle_qt5_styleplugins(self, pkg_dir):
-        """Special handling for qt5-styleplugins."""
-        # Check if gtk2 is available in our repository
-        gtk2_result = self.run_cmd(f"pacman -Sl {self.repo_name} | grep -q 'gtk2'", check=False)
-        
-        if gtk2_result.returncode == 0:
-            logger.info("gtk2 is available in our repository, will be installed as dependency")
-            # No need to modify PKGBUILD
-        else:
-            logger.warning("gtk2 not found in our repository, checking if we built it...")
-            # Check if we built gtk2 in this session
-            gtk2_built = any("gtk2" in pkg for pkg in self.built_packages)
-            if gtk2_built:
-                logger.info("gtk2 was built in this session, removing from dependencies")
-                pkgbuild = pkg_dir / "PKGBUILD"
-                if pkgbuild.exists():
-                    content = pkgbuild.read_text()
-                    # Remove gtk2 dependency
-                    content = re.sub(r'\bgtk2\b', '', content)
-                    content = re.sub(r'["\']gtk2["\']', '', content)
-                    pkgbuild.write_text(content)
+    def _check_for_special_handling(self, pkg_name, pkg_dir):
+        """Check if package needs special handling based on config."""
+        # This method is intentionally left generic
+        # Any special handling should be configured in config.py
+        pass
     
     def _install_aur_deps(self, pkg_dir, pkg_name):
         """Install dependencies for AUR package with improved logic."""
@@ -432,7 +398,7 @@ class PackageBuilder:
                 line = line.strip()
                 if line.startswith("depends =") or line.startswith("makedepends ="):
                     dep = line.split('=', 1)[1].strip()
-                    if dep and dep not in ["gtk2"]:  # Skip gtk2 (handled separately)
+                    if dep:  # Don't filter any dependencies
                         deps.append(dep)
         
         if not deps:
@@ -608,7 +574,7 @@ class PackageBuilder:
         else:
             logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
-    
+ 
     def upload_packages(self):
         """Upload packages to server."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -743,14 +709,14 @@ class PackageBuilder:
         # Commit changes
         print(f"\n📝 Committing PKGBUILD updates for {len(modified_packages)} package(s)")
         
-        # Set git identity for the builder user
-        self.run_cmd('sudo -u builder git config --global user.email "builder@github-actions"', check=False)
-        self.run_cmd('sudo -u builder git config --global user.name "GitHub Actions Builder"', check=False)
+        # Set git identity
+        self.run_cmd('git config --global user.email "builder@github-actions"', check=False)
+        self.run_cmd('git config --global user.name "GitHub Actions Builder"', check=False)
         
         # Add the modified PKGBUILD files
         for pkg_name in modified_packages:
             pkgbuild_path = self.repo_root / pkg_name / "PKGBUILD"
-            self.run_cmd(f'sudo -u builder git add "{pkgbuild_path}"', check=False)
+            self.run_cmd(f'git add "{pkgbuild_path}"', check=False)
         
         # Create commit message
         commit_msg = f"chore: update PKGBUILD pkgrel for rebuilt packages\n\n"
@@ -760,7 +726,7 @@ class PackageBuilder:
         
         # Commit changes
         commit_result = self.run_cmd(
-            f'sudo -u builder git commit -m "{commit_msg}"',
+            f'git commit -m "{commit_msg}"',
             check=False,
             capture=True
         )
@@ -770,8 +736,15 @@ class PackageBuilder:
             
             # Push to main branch
             print("\n📤 Pushing changes to main branch...")
+            
+            # Use GitHub token for authentication if available
+            github_token = os.getenv('GITHUB_TOKEN')
+            if github_token:
+                # Set remote URL with token
+                self.run_cmd(f'git remote set-url origin https://x-access-token:{github_token}@github.com/megvadulthangya/manjaro-awesome.git', check=False)
+            
             push_result = self.run_cmd(
-                'sudo -u builder git push origin main',
+                'git push origin main',
                 check=False,
                 capture=True
             )
