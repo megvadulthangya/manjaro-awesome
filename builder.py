@@ -66,6 +66,18 @@ class PackageBuilder:
         # Special dependencies from config
         self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
         
+        # SSH options for consistent behavior
+        self.ssh_options = [
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=30",
+            "-o", "ServerAliveInterval=60",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "TCPKeepAlive=yes",
+            "-o", "BatchMode=yes",
+            "-o", "LogLevel=ERROR"
+        ]
+        
         # Statistics
         self.stats = {
             "start_time": time.time(),
@@ -180,10 +192,22 @@ class PackageBuilder:
         """Fetch list of packages from server."""
         print("\n📡 Fetching remote package list...")
         
-        # Use SSH config alias 'vps' with strict host key checking disabled
-        cmd = f"ssh -o StrictHostKeyChecking=no vps 'find \"{self.remote_dir}\" -name \"*.pkg.tar.*\" -type f -printf \"%f\\n\" 2>/dev/null || echo \"ERROR: Could not list remote files\"'"
+        # Build SSH command with all options inline
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}"
+        ]
         
-        result = self.run_cmd(cmd, capture=True, check=False)
+        # Escape remote directory for shell
+        remote_dir_escaped = shlex.quote(self.remote_dir)
+        remote_cmd = f'find {remote_dir_escaped} -name "*.pkg.tar.*" -type f -printf "%f\\n" 2>/dev/null || echo "ERROR: Could not list remote files"'
+        
+        # Join SSH command with remote command
+        full_cmd = ssh_cmd + [remote_cmd]
+        
+        result = self.run_cmd(full_cmd, capture=True, check=False, shell=False)
         
         if result and result.returncode == 0 and result.stdout:
             # Filter out error messages
@@ -672,7 +696,7 @@ class PackageBuilder:
             return False
  
     def upload_packages(self):
-        """Upload packages to server."""
+        """Upload packages to server using rsync with SSH options identical to test phase."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.warning("No files to upload")
@@ -681,36 +705,55 @@ class PackageBuilder:
         logger.info(f"Uploading {len(pkg_files)} files...")
         
         # First, create remote directory if it doesn't exist
-        mkdir_cmd = f"ssh -o StrictHostKeyChecking=no vps 'mkdir -p \"{self.remote_dir}\"'"
-        self.run_cmd(mkdir_cmd, check=False)
+        mkdir_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            f"mkdir -p \"{self.remote_dir}\""
+        ]
+        self.run_cmd(mkdir_cmd, check=False, shell=False)
         
-        # Sanitize filenames for upload (replace colons with underscores)
-        sanitized_files = []
-        for pkg_file in pkg_files:
-            original_name = pkg_file.name
-            # Replace colon with underscore in filename
-            sanitized_name = original_name.replace(":", "_")
-            if sanitized_name != original_name:
-                sanitized_path = pkg_file.parent / sanitized_name
-                shutil.copy2(pkg_file, sanitized_path)
-                sanitized_files.append(sanitized_path)
-                logger.info(f"Sanitized filename: {original_name} -> {sanitized_name}")
-            else:
-                sanitized_files.append(pkg_file)
+        # Build rsync command with SSH options identical to test phase
+        rsync_cmd = [
+            "rsync",
+            "-avz",
+            "--progress",
+            "--rsh", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
+            "--timeout=300",
+            "--partial",
+            "--verbose",
+            str(self.output_dir) + "/",
+            f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
+        ]
         
-        # Upload files using the 'vps' alias
-        files_str = " ".join([f'"{str(f)}"' for f in sanitized_files])
-        cmd = f"scp -o StrictHostKeyChecking=no -B {files_str} vps:\"{self.remote_dir}/\""
-        
-        result = self.run_cmd(cmd, check=False, capture=True)
-        
-        # Clean up sanitized files
-        for file in sanitized_files:
-            if ":" in str(file):
-                file.unlink()
+        logger.info(f"Running rsync command: {' '.join(rsync_cmd)}")
+        result = self.run_cmd(rsync_cmd, check=False, capture=True, shell=False)
         
         if result and result.returncode == 0:
             logger.info("✅ Upload successful")
+            
+            # Also upload database files
+            db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
+            if db_files:
+                db_rsync_cmd = [
+                    "rsync",
+                    "-avz",
+                    "--progress",
+                    "--rsh", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
+                    "--timeout=300",
+                    "--partial",
+                    "--verbose",
+                    *[str(f) for f in db_files],
+                    f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
+                ]
+                logger.info(f"Uploading {len(db_files)} database files...")
+                db_result = self.run_cmd(db_rsync_cmd, check=False, capture=True, shell=False)
+                if db_result and db_result.returncode == 0:
+                    logger.info("✅ Database files uploaded")
+                else:
+                    logger.error(f"Failed to upload database files: {db_result.stderr if db_result else 'Unknown error'}")
+            
             return True
         else:
             logger.error(f"❌ Upload failed: {result.stderr if result else 'Unknown error'}")
@@ -726,8 +769,19 @@ class PackageBuilder:
         
         cleaned = 0
         for pkg in self.packages_to_clean:
-            cmd = f"ssh -o StrictHostKeyChecking=no vps 'cd \"{self.remote_dir}\" && ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +3 | xargs -r rm -f 2>/dev/null || true'"
-            result = self.run_cmd(cmd, check=False)
+            # Escape package name for shell
+            pkg_escaped = shlex.quote(pkg)
+            remote_dir_escaped = shlex.quote(self.remote_dir)
+            
+            ssh_cmd = [
+                "ssh",
+                *self.ssh_options,
+                "-i", "/home/builder/.ssh/id_ed25519",
+                f"{self.vps_user}@{self.vps_host}",
+                f'cd {remote_dir_escaped} && ls -t {pkg_escaped}-*.pkg.tar.zst 2>/dev/null | tail -n +3 | xargs -r rm -f 2>/dev/null || true'
+            ]
+            
+            result = self.run_cmd(ssh_cmd, check=False, shell=False)
             if result and result.returncode == 0:
                 cleaned += 1
         
@@ -869,6 +923,11 @@ class PackageBuilder:
     IdentityFile {ssh_key_path}
     User git
     StrictHostKeyChecking no
+    ConnectTimeout 30
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+    TCPKeepAlive yes
+    BatchMode yes
 """)
             
             # Set up git environment
@@ -1042,4 +1101,5 @@ class PackageBuilder:
             return 1
 
 if __name__ == "__main__":
+    import shlex
     sys.exit(PackageBuilder().run())

@@ -122,6 +122,8 @@ jobs:
           echo "  TCPKeepAlive yes" >> /home/builder/.ssh/config
           echo "  StrictHostKeyChecking no" >> /home/builder/.ssh/config
           echo "  UserKnownHostsFile /dev/null" >> /home/builder/.ssh/config
+          echo "  BatchMode yes" >> /home/builder/.ssh/config
+          echo "  LogLevel ERROR" >> /home/builder/.ssh/config
           
           chmod 600 /home/builder/.ssh/config
           
@@ -215,10 +217,12 @@ jobs:
             echo "❌ Cannot reach VPS on port 22"
           fi
           
-          # Test SSH as builder user
+          # Test SSH as builder user using the same options builder.py will use
           echo ""
           echo "3. Testing SSH connection as builder user..."
-          if su builder -c "timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes vps 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          
+          if su builder -c "timeout 10 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
             echo "✅ SSH connection to VPS successful"
           else
             echo "❌ SSH connection to VPS failed"
@@ -265,9 +269,11 @@ jobs:
           
           echo "Current directory: $(pwd)"
           
-          # Test SSH connection one more time
+          # Test SSH connection one more time with identical options to builder.py
           echo "=== Final SSH Test ==="
-          if su builder -c "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no vps 'echo READY'" 2>/dev/null; then
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          
+          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
             echo "✅ SSH connection confirmed"
           else
             echo "⚠️ SSH connection may have issues"
