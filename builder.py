@@ -66,7 +66,7 @@ class PackageBuilder:
         # Special dependencies from config
         self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
         
-        # SSH options for consistent behavior
+        # SSH options for consistent behavior - IDENTICAL to workflow
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -192,7 +192,7 @@ class PackageBuilder:
         """Fetch list of packages from server."""
         print("\n📡 Fetching remote package list...")
         
-        # Build SSH command with all options inline
+        # Build SSH command with all options inline - IDENTICAL to upload
         ssh_cmd = [
             "ssh",
             *self.ssh_options,
@@ -201,6 +201,7 @@ class PackageBuilder:
         ]
         
         # Escape remote directory for shell
+        import shlex
         remote_dir_escaped = shlex.quote(self.remote_dir)
         remote_cmd = f'find {remote_dir_escaped} -name "*.pkg.tar.*" -type f -printf "%f\\n" 2>/dev/null || echo "ERROR: Could not list remote files"'
         
@@ -696,7 +697,7 @@ class PackageBuilder:
             return False
  
     def upload_packages(self):
-        """Upload packages to server using rsync with SSH options identical to test phase."""
+        """Upload packages to server using scp with SSH options identical to test phase."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.warning("No files to upload")
@@ -714,49 +715,54 @@ class PackageBuilder:
         ]
         self.run_cmd(mkdir_cmd, check=False, shell=False)
         
-        # Build rsync command with SSH options identical to test phase
-        rsync_cmd = [
-            "rsync",
-            "-avz",
-            "--progress",
-            "--rsh", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
-            "--timeout=300",
-            "--partial",
-            "--verbose",
-            str(self.output_dir) + "/",
-            f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
-        ]
+        # Upload each file individually with scp (more reliable than rsync for connection issues)
+        successful_uploads = 0
         
-        logger.info(f"Running rsync command: {' '.join(rsync_cmd)}")
-        result = self.run_cmd(rsync_cmd, check=False, capture=True, shell=False)
-        
-        if result and result.returncode == 0:
-            logger.info("✅ Upload successful")
+        for pkg_file in pkg_files:
+            logger.info(f"Uploading {pkg_file.name}...")
             
-            # Also upload database files
-            db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
-            if db_files:
-                db_rsync_cmd = [
-                    "rsync",
-                    "-avz",
-                    "--progress",
-                    "--rsh", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
-                    "--timeout=300",
-                    "--partial",
-                    "--verbose",
-                    *[str(f) for f in db_files],
+            # Build SCP command with identical SSH options to test phase
+            scp_cmd = [
+                "scp",
+                *self.ssh_options,
+                "-i", "/home/builder/.ssh/id_ed25519",
+                "-B",  # Batch mode
+                str(pkg_file),
+                f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
+            ]
+            
+            result = self.run_cmd(scp_cmd, check=False, capture=True, shell=False)
+            
+            if result and result.returncode == 0:
+                successful_uploads += 1
+                logger.info(f"✅ Uploaded: {pkg_file.name}")
+            else:
+                logger.error(f"❌ Failed to upload {pkg_file.name}: {result.stderr if result else 'Unknown error'}")
+        
+        # Also upload database files
+        db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
+        if db_files:
+            logger.info(f"Uploading {len(db_files)} database files...")
+            for db_file in db_files:
+                scp_cmd = [
+                    "scp",
+                    *self.ssh_options,
+                    "-i", "/home/builder/.ssh/id_ed25519",
+                    "-B",
+                    str(db_file),
                     f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
                 ]
-                logger.info(f"Uploading {len(db_files)} database files...")
-                db_result = self.run_cmd(db_rsync_cmd, check=False, capture=True, shell=False)
-                if db_result and db_result.returncode == 0:
-                    logger.info("✅ Database files uploaded")
+                result = self.run_cmd(scp_cmd, check=False, capture=True, shell=False)
+                if result and result.returncode == 0:
+                    logger.info(f"✅ Uploaded database: {db_file.name}")
                 else:
-                    logger.error(f"Failed to upload database files: {db_result.stderr if db_result else 'Unknown error'}")
-            
+                    logger.error(f"❌ Failed to upload database {db_file.name}")
+        
+        if successful_uploads == len(pkg_files):
+            logger.info("✅ All files uploaded successfully")
             return True
         else:
-            logger.error(f"❌ Upload failed: {result.stderr if result else 'Unknown error'}")
+            logger.error(f"❌ Only {successful_uploads}/{len(pkg_files)} files uploaded")
             return False
     
     def cleanup_old_packages(self):
@@ -770,6 +776,7 @@ class PackageBuilder:
         cleaned = 0
         for pkg in self.packages_to_clean:
             # Escape package name for shell
+            import shlex
             pkg_escaped = shlex.quote(pkg)
             remote_dir_escaped = shlex.quote(self.remote_dir)
             
