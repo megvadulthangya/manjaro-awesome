@@ -3,7 +3,7 @@
 
 _pkgname=awesome-freedesktop
 pkgname=$_pkgname-git
-pkgver=r118.c82ad29
+pkgver=118.c82ad29
 pkgrel=1
 # EPOCH ELTÁVOLÍTVA: mert okozza a : karaktert a fájlnévben
 # epoch=1
