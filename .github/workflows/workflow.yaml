@@ -116,14 +116,17 @@ jobs:
           echo "  User $VPS_USER" >> /home/builder/.ssh/config
           echo "  IdentityFile ~/.ssh/id_ed25519" >> /home/builder/.ssh/config
           echo "  Port 22" >> /home/builder/.ssh/config
-          echo "  ConnectTimeout 60" >> /home/builder/.ssh/config  # Increased from 30
-          echo "  ServerAliveInterval 60" >> /home/builder/.ssh/config
-          echo "  ServerAliveCountMax 3" >> /home/builder/.ssh/config
+          echo "  ConnectTimeout 60" >> /home/builder/.ssh/config
+          echo "  ServerAliveInterval 30" >> /home/builder/.ssh/config
+          echo "  ServerAliveCountMax 5" >> /home/builder/.ssh/config
           echo "  TCPKeepAlive yes" >> /home/builder/.ssh/config
           echo "  StrictHostKeyChecking no" >> /home/builder/.ssh/config
           echo "  UserKnownHostsFile /dev/null" >> /home/builder/.ssh/config
           echo "  BatchMode yes" >> /home/builder/.ssh/config
           echo "  LogLevel ERROR" >> /home/builder/.ssh/config
+          echo "  ControlMaster auto" >> /home/builder/.ssh/config
+          echo "  ControlPersist 5m" >> /home/builder/.ssh/config
+          echo "  ControlPath /tmp/ssh_control_%h_%p_%r" >> /home/builder/.ssh/config
           
           chmod 600 /home/builder/.ssh/config
           
@@ -196,9 +199,9 @@ jobs:
           
           echo "✅ Pacman repository configuration complete"
 
-      - name: Simple Network Test
+      - name: Rsync Connection Test
         run: |
-          echo "=== Simple Network Test ==="
+          echo "=== Rsync Connection Test ==="
           
           # Test basic connectivity
           echo "1. Testing internet connectivity..."
@@ -220,15 +223,27 @@ jobs:
           # Test SSH as builder user using the EXACT same options builder.py will use
           echo ""
           echo "3. Testing SSH connection as builder user..."
-          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR -o ControlMaster=auto -o ControlPersist=5m -o ControlPath=/tmp/ssh_control_%h_%p_%r"
           
-          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
+          if su builder -c "timeout 20 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
             echo "✅ SSH connection to VPS successful"
           else
             echo "❌ SSH connection to VPS failed"
           fi
           
-          echo "✅ Network tests complete"
+          # Test rsync connection
+          echo ""
+          echo "4. Testing rsync connection..."
+          REMOTE_DIR_ESCAPED=$(printf '%q' "$REMOTE_DIR")
+          RSYNC_CMD="rsync --dry-run --stats -e \"ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519\" --timeout=30 --contimeout=30 /dev/null $VPS_USER@$VPS_HOST:$REMOTE_DIR_ESCAPED/"
+          
+          if su builder -c "timeout 30 $RSYNC_CMD" 2>/dev/null; then
+            echo "✅ rsync connection test successful"
+          else
+            echo "❌ rsync connection test failed"
+          fi
+          
+          echo "✅ Rsync tests complete"
 
       - name: Install Build Dependencies
         run: |
@@ -271,9 +286,9 @@ jobs:
           
           # Test SSH connection one more time with identical options to builder.py
           echo "=== Final SSH Test ==="
-          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR -o ControlMaster=auto -o ControlPersist=5m -o ControlPath=/tmp/ssh_control_%h_%p_%r"
           
-          if su builder -c "timeout 20 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
+          if su builder -c "timeout 25 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
             echo "✅ SSH connection confirmed"
           else
             echo "⚠️ SSH connection may have issues"

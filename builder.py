@@ -12,6 +12,7 @@ import tempfile
 import time
 import hashlib
 import logging
+import socket
 from pathlib import Path
 from datetime import datetime
 
@@ -70,12 +71,15 @@ class PackageBuilder:
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=30",
-            "-o", "ServerAliveInterval=60",
-            "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=60",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=5",
             "-o", "TCPKeepAlive=yes",
             "-o", "BatchMode=yes",
-            "-o", "LogLevel=ERROR"
+            "-o", "LogLevel=ERROR",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=5m",
+            "-o", "ControlPath=/tmp/ssh_control_%h_%p_%r"
         ]
         
         # Statistics
@@ -187,6 +191,83 @@ class PackageBuilder:
             if check:
                 raise
             return e
+    
+    def test_rsync_connection(self):
+        """Test rsync connection with VPS using the same SSH options as upload."""
+        print("\n🔍 Testing rsync connection to VPS...")
+        
+        # Build rsync test command
+        import shlex
+        remote_dir_escaped = shlex.quote(self.remote_dir)
+        
+        # Create rsync command with identical SSH options
+        rsync_cmd = [
+            "rsync",
+            "--dry-run",
+            "--stats",
+            "-e", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
+            "--timeout=30",
+            "--contimeout=30",
+            "/dev/null",
+            f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+        ]
+        
+        logger.info(f"Testing rsync command: {' '.join(rsync_cmd[:10])}...")
+        
+        # Test 1: Basic port connectivity
+        print("1. Testing port 22 connectivity...")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            result = sock.connect_ex((self.vps_host, 22))
+            sock.close()
+            
+            if result == 0:
+                print("✅ Port 22 is open on VPS")
+            else:
+                print(f"❌ Port 22 is closed (error code: {result})")
+                return False
+        except Exception as e:
+            print(f"❌ Socket test failed: {e}")
+            return False
+        
+        # Test 2: SSH connection test
+        print("2. Testing SSH connection...")
+        ssh_test_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            "echo SSH_TEST_SUCCESS"
+        ]
+        
+        result = self.run_cmd(ssh_test_cmd, check=False, capture=True, shell=False)
+        if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
+            print("✅ SSH connection successful")
+        else:
+            print(f"❌ SSH connection failed: {result.stderr if result else 'No output'}")
+            return False
+        
+        # Test 3: rsync dry run
+        print("3. Testing rsync connection...")
+        result = self.run_cmd(rsync_cmd, check=False, capture=True, shell=False)
+        
+        if result and result.returncode == 0:
+            print("✅ rsync connection test successful")
+            return True
+        else:
+            print(f"❌ rsync test failed: {result.stderr if result else 'No output'}")
+            
+            # Try alternative rsync syntax
+            print("4. Testing alternative rsync syntax...")
+            alt_rsync_cmd = f"rsync --dry-run --stats -avz --rsh='ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519' /dev/null {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+            result2 = self.run_cmd(alt_rsync_cmd, check=False, capture=True)
+            
+            if result2 and result2.returncode == 0:
+                print("✅ Alternative rsync syntax works")
+                return True
+            
+            return False
     
     def fetch_remote_packages(self):
         """Fetch list of packages from server."""
@@ -697,7 +778,12 @@ class PackageBuilder:
             return False
  
     def upload_packages(self):
-        """Upload packages to server using scp with SSH options identical to test phase."""
+        """Upload packages to server using rsync with SSH options identical to test phase."""
+        # First test the rsync connection
+        if not self.test_rsync_connection():
+            logger.error("❌ rsync connection test failed. Cannot upload packages.")
+            return False
+        
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.warning("No files to upload")
@@ -715,54 +801,57 @@ class PackageBuilder:
         ]
         self.run_cmd(mkdir_cmd, check=False, shell=False)
         
-        # Upload each file individually with scp (more reliable than rsync for connection issues)
-        successful_uploads = 0
+        # Build rsync command with SSH options identical to test phase
+        import shlex
+        remote_dir_escaped = shlex.quote(self.remote_dir)
         
+        # Sanitize filenames with colons
+        sanitized_files = []
         for pkg_file in pkg_files:
-            logger.info(f"Uploading {pkg_file.name}...")
-            
-            # Build SCP command with identical SSH options to test phase
-            scp_cmd = [
-                "scp",
-                *self.ssh_options,
-                "-i", "/home/builder/.ssh/id_ed25519",
-                "-B",  # Batch mode
-                str(pkg_file),
-                f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
-            ]
-            
-            result = self.run_cmd(scp_cmd, check=False, capture=True, shell=False)
-            
-            if result and result.returncode == 0:
-                successful_uploads += 1
-                logger.info(f"✅ Uploaded: {pkg_file.name}")
+            original_name = pkg_file.name
+            # Replace colon with underscore in filename
+            sanitized_name = original_name.replace(":", "_")
+            if sanitized_name != original_name:
+                sanitized_path = pkg_file.parent / sanitized_name
+                shutil.copy2(pkg_file, sanitized_path)
+                sanitized_files.append(sanitized_path)
+                logger.info(f"Sanitized filename: {original_name} -> {sanitized_name}")
             else:
-                logger.error(f"❌ Failed to upload {pkg_file.name}: {result.stderr if result else 'Unknown error'}")
+                sanitized_files.append(pkg_file)
         
-        # Also upload database files
-        db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
-        if db_files:
-            logger.info(f"Uploading {len(db_files)} database files...")
-            for db_file in db_files:
-                scp_cmd = [
-                    "scp",
-                    *self.ssh_options,
-                    "-i", "/home/builder/.ssh/id_ed25519",
-                    "-B",
-                    str(db_file),
-                    f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
-                ]
-                result = self.run_cmd(scp_cmd, check=False, capture=True, shell=False)
-                if result and result.returncode == 0:
-                    logger.info(f"✅ Uploaded database: {db_file.name}")
+        # Create file list for rsync
+        file_list = " ".join([shlex.quote(str(f)) for f in sanitized_files])
+        
+        # Use rsync with explicit SSH command
+        rsync_cmd = f"rsync -avz --progress --timeout=300 --partial --verbose --rsh=\"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519\" {file_list} {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+        
+        logger.info(f"Running rsync command (simplified): rsync -avz --progress --timeout=300 --rsh=\"ssh ...\" [files] {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+        
+        result = self.run_cmd(rsync_cmd, check=False, capture=True)
+        
+        # Clean up sanitized files
+        for file in sanitized_files:
+            if ":" in str(file):
+                file.unlink()
+        
+        if result and result.returncode == 0:
+            logger.info("✅ Upload successful")
+            
+            # Also upload database files
+            db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
+            if db_files:
+                db_file_list = " ".join([shlex.quote(str(f)) for f in db_files])
+                db_rsync_cmd = f"rsync -avz --progress --timeout=300 --partial --verbose --rsh=\"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519\" {db_file_list} {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+                logger.info(f"Uploading {len(db_files)} database files...")
+                db_result = self.run_cmd(db_rsync_cmd, check=False, capture=True)
+                if db_result and db_result.returncode == 0:
+                    logger.info("✅ Database files uploaded")
                 else:
-                    logger.error(f"❌ Failed to upload database {db_file.name}")
-        
-        if successful_uploads == len(pkg_files):
-            logger.info("✅ All files uploaded successfully")
+                    logger.error(f"Failed to upload database files: {db_result.stderr if db_result else 'Unknown error'}")
+            
             return True
         else:
-            logger.error(f"❌ Only {successful_uploads}/{len(pkg_files)} files uploaded")
+            logger.error(f"❌ Upload failed: {result.stderr if result else 'Unknown error'}")
             return False
     
     def cleanup_old_packages(self):
