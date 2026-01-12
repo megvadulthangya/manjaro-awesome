@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Javított változat pacman repository hibák kezelésére
+Manjaro Package Builder - Dinamikus repository kezeléssel
 """
 
 import os
@@ -61,13 +61,17 @@ class PackageBuilder:
         self.skipped_packages = []
         self.rebuilt_local_packages = []  # Track local packages that were rebuilt
         
+        # Repository state tracking
+        self.repo_exists = False  # Will be determined by fetch_remote_packages()
+        self.repo_has_packages = False  # Will be determined by fetch_remote_packages()
+        
         # PHASE 1 OBSERVER: hokibot data collection (in-memory only)
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
         
         # Special dependencies from config
         self.special_dependencies = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
         
-        # SSH options for consistent behavior - EGYSZERŰBB VÁLTOZAT
+        # SSH options for consistent behavior
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=30"
@@ -79,9 +83,6 @@ class PackageBuilder:
             "aur_success": 0,
             "local_success": 0,
         }
-        
-        # Disable our repository in pacman.conf to avoid 404 errors
-        self._disable_our_repo_in_pacman()
     
     def _get_repo_root(self):
         """Get the repository root directory reliably."""
@@ -120,7 +121,7 @@ class PackageBuilder:
         else:
             self.repo_name = env_repo_name if env_repo_name else 'manjaro-awesome'
         
-        # Validate - CSAK SSH ADATOK KÖTELEZŐEK
+        # Validate
         required = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
         missing = [var for var in required if not os.getenv(var)]
         
@@ -136,46 +137,6 @@ class PackageBuilder:
         if self.repo_server_url:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
-    
-    def _disable_our_repo_in_pacman(self):
-        """Disable our repository in pacman.conf to avoid 404 errors."""
-        print("\n🔧 Disabling our repository in pacman.conf to avoid 404 errors...")
-        
-        pacman_conf = Path("/etc/pacman.conf")
-        if pacman_conf.exists():
-            try:
-                with open(pacman_conf, 'r') as f:
-                    content = f.read()
-                
-                # Kommentáljuk ki a saját repository-nkat
-                lines = content.split('\n')
-                new_lines = []
-                in_our_section = False
-                
-                for line in lines:
-                    if line.strip().startswith(f"[{self.repo_name}]"):
-                        # Kommentáljuk ki a repository szakaszt
-                        new_lines.append(f"# {line}")
-                        in_our_section = True
-                    elif in_our_section and line.strip().startswith('['):
-                        # Új szakasz kezdődik, kilépünk
-                        new_lines.append(line)
-                        in_our_section = False
-                    elif in_our_section:
-                        # Kommentáljuk ki a sorokat a szakaszon belül
-                        new_lines.append(f"# {line}")
-                    else:
-                        new_lines.append(line)
-                
-                with open(pacman_conf, 'w') as f:
-                    f.write('\n'.join(new_lines))
-                
-                print(f"✅ Repository '{self.repo_name}' disabled in pacman.conf")
-                
-            except Exception as e:
-                print(f"⚠️ Could not modify pacman.conf: {e}")
-        else:
-            print("⚠️ pacman.conf not found")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True):
         """Run command with error handling."""
@@ -203,11 +164,69 @@ class PackageBuilder:
                 raise
             return e
     
+    def _manage_repository_state(self, enable=True):
+        """Enable or disable our repository in pacman.conf dynamically."""
+        pacman_conf = Path("/etc/pacman.conf")
+        
+        if not pacman_conf.exists():
+            logger.warning("pacman.conf not found")
+            return
+        
+        try:
+            with open(pacman_conf, 'r') as f:
+                content = f.read()
+            
+            lines = content.split('\n')
+            new_lines = []
+            in_our_section = False
+            
+            for line in lines:
+                if line.strip().startswith(f"[{self.repo_name}]"):
+                    if enable:
+                        # Engedélyezzük a repository-t
+                        if line.startswith("#"):
+                            new_lines.append(line[1:])  # Remove comment
+                        else:
+                            new_lines.append(line)
+                    else:
+                        # Letiltjuk a repository-t
+                        if not line.startswith("#"):
+                            new_lines.append(f"#{line}")
+                        else:
+                            new_lines.append(line)
+                    in_our_section = True
+                elif in_our_section and line.strip().startswith('['):
+                    # Új szakasz kezdődik
+                    new_lines.append(line)
+                    in_our_section = False
+                elif in_our_section:
+                    # A repository szakaszon belül vagyunk
+                    if enable:
+                        if line.startswith("#"):
+                            new_lines.append(line[1:])  # Remove comment
+                        else:
+                            new_lines.append(line)
+                    else:
+                        if not line.startswith("#"):
+                            new_lines.append(f"#{line}")
+                        else:
+                            new_lines.append(line)
+                else:
+                    new_lines.append(line)
+            
+            with open(pacman_conf, 'w') as f:
+                f.write('\n'.join(new_lines))
+            
+            action = "enabled" if enable else "disabled"
+            logger.info(f"Repository '{self.repo_name}' {action} in pacman.conf")
+            
+        except Exception as e:
+            logger.error(f"Failed to modify pacman.conf: {e}")
+    
     def test_ssh_connection(self):
         """Test SSH connection to VPS."""
         print("\n🔍 Testing SSH connection to VPS...")
         
-        # Test SSH connection with simpler options
         ssh_test_cmd = [
             "ssh",
             *self.ssh_options,
@@ -225,11 +244,10 @@ class PackageBuilder:
             return False
     
     def fetch_remote_packages(self):
-        """Fetch list of packages from server - EGYSZERŰBB VÁLTOZAT."""
+        """Fetch list of packages from server and determine repository state."""
         print("\n📡 Fetching remote package list...")
         
         try:
-            # Build SSH command with simple options
             ssh_cmd = [
                 "ssh",
                 *self.ssh_options,
@@ -237,39 +255,57 @@ class PackageBuilder:
                 f"{self.vps_user}@{self.vps_host}"
             ]
             
-            # Use simple command to list files
-            remote_cmd = f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | xargs -r basename -a 2>/dev/null || echo ""'
+            # First check if remote directory exists
+            test_cmd = ssh_cmd + [f"test -d {self.remote_dir} && echo 'EXISTS' || echo 'NOT_EXISTS'"]
+            test_result = subprocess.run(test_cmd, capture_output=True, text=True, check=False)
             
-            # Join SSH command with remote command
-            full_cmd = ssh_cmd + [remote_cmd]
-            
-            result = subprocess.run(full_cmd, capture_output=True, text=True, check=False)
-            
-            if result and result.returncode == 0 and result.stdout.strip():
-                # Filter only package files
-                lines = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-                self.remote_files = lines
+            if test_result.returncode == 0 and "EXISTS" in test_result.stdout:
+                self.repo_exists = True
                 
-                if self.remote_files:
-                    logger.info(f"Found {len(self.remote_files)} packages on server")
+                # Now list package files
+                list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | xargs -r basename -a 2>/dev/null || echo ""']
+                list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
+                
+                if list_result and list_result.returncode == 0 and list_result.stdout.strip():
+                    lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
+                    self.remote_files = lines
+                    
+                    if self.remote_files:
+                        logger.info(f"Found {len(self.remote_files)} packages on server")
+                        self.repo_has_packages = True
+                    else:
+                        logger.info("Repository exists but has no packages")
+                        self.repo_has_packages = False
                 else:
-                    logger.info("No packages found on server")
+                    self.remote_files = []
+                    self.repo_has_packages = False
+                    logger.info("Repository exists but could not list packages")
             else:
+                self.repo_exists = False
+                self.repo_has_packages = False
                 self.remote_files = []
-                logger.info("Could not fetch remote package list or server is empty")
+                logger.info("Repository directory does not exist on server")
                 
         except Exception as e:
+            self.repo_exists = False
+            self.repo_has_packages = False
             self.remote_files = []
-            logger.info(f"Error fetching remote files (server may be empty): {str(e)[:100]}")
+            logger.info(f"Error checking repository: {str(e)[:100]}")
+        
+        # Dinamikusan kezeljük a repository-t a pacman.conf-ban
+        if self.repo_has_packages:
+            print(f"📦 Repository has packages - enabling in pacman.conf")
+            self._manage_repository_state(enable=True)
+        else:
+            print(f"📭 Repository empty or doesn't exist - disabling in pacman.conf")
+            self._manage_repository_state(enable=False)
     
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
         if not self.remote_files:
             return False
         
-        # Check for any version of the package
         pattern = f"^{re.escape(pkg_name)}-"
-        
         matches = [f for f in self.remote_files if re.match(pattern, f)]
         
         if matches:
@@ -306,7 +342,6 @@ class PackageBuilder:
         print("Building packages")
         print("="*60)
         
-        # Get package lists from packages.py
         local_packages, aur_packages = self.get_package_lists()
         
         print(f"📦 Package statistics:")
@@ -314,13 +349,11 @@ class PackageBuilder:
         print(f"   AUR packages: {len(aur_packages)}")
         print(f"   Total packages: {len(local_packages) + len(aur_packages)}")
         
-        # Build AUR packages
         print(f"\n🔨 Building {len(aur_packages)} AUR packages")
         for pkg in aur_packages:
             if self._build_single_package(pkg, is_aur=True):
                 self.stats["aur_success"] += 1
         
-        # Build local packages
         print(f"\n🔨 Building {len(local_packages)} local packages")
         for pkg in local_packages:
             if self._build_single_package(pkg, is_aur=False):
@@ -346,7 +379,6 @@ class PackageBuilder:
         if pkg_dir.exists():
             shutil.rmtree(pkg_dir, ignore_errors=True)
         
-        # Try multiple AUR URLs
         print(f"Cloning {pkg_name} from AUR...")
         
         aur_urls = [
@@ -372,17 +404,14 @@ class PackageBuilder:
             logger.error(f"Failed to clone {pkg_name} from any AUR URL")
             return False
         
-        # Ensure ownership
         self.run_cmd(f"chown -R builder:builder {pkg_dir}", check=False)
         
-        # Check if PKGBUILD exists
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"No PKGBUILD found for {pkg_name}")
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version
         content = pkgbuild.read_text()
         pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
@@ -390,14 +419,12 @@ class PackageBuilder:
         if pkgver_match and pkgrel_match:
             version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
             
-            # Skip if already exists on server
             if self.package_exists(pkg_name):
                 logger.info(f"✅ {pkg_name} already exists on server - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            # Log version info
             remote_version = self.get_remote_version(pkg_name)
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
@@ -407,14 +434,15 @@ class PackageBuilder:
             version = "unknown"
             logger.warning(f"Could not extract version for {pkg_name}")
         
-        # Check for special handling
-        self._check_for_special_handling(pkg_name, pkg_dir)
+        if pkg_name in self.special_dependencies:
+            logger.info(f"Found special dependencies for {pkg_name}: {self.special_dependencies[pkg_name]}")
+            for dep in self.special_dependencies[pkg_name]:
+                logger.info(f"Installing special dependency: {dep}")
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
-        # Build
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
-            # Download sources
             print("Downloading sources...")
             source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
             if source_result.returncode != 0:
@@ -422,10 +450,8 @@ class PackageBuilder:
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            # Install dependencies
             self._install_aur_deps(pkg_dir, pkg_name)
             
-            # Build package
             print("Building package...")
             build_result = self.run_cmd(
                 f"cd {pkg_dir} && sudo -u builder makepkg -si --noconfirm --clean --nocheck",
@@ -435,7 +461,6 @@ class PackageBuilder:
             )
             
             if build_result.returncode == 0:
-                # Move built packages
                 moved = False
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
@@ -444,7 +469,6 @@ class PackageBuilder:
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
                 
-                # Cleanup
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 
                 if moved:
@@ -463,22 +487,14 @@ class PackageBuilder:
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
     
-    def _check_for_special_handling(self, pkg_name, pkg_dir):
-        """Check if package needs special handling based on config."""
-        pass
-    
     def _install_aur_deps(self, pkg_dir, pkg_name):
-        """Install dependencies for AUR package - JAVÍTOTT VÁLTOZAT."""
+        """Install dependencies for AUR package."""
         print(f"Checking dependencies for {pkg_name}...")
         
-        # Check for special dependencies in config
         if pkg_name in self.special_dependencies:
-            logger.info(f"Found special dependencies for {pkg_name}: {self.special_dependencies[pkg_name]}")
             for dep in self.special_dependencies[pkg_name]:
-                logger.info(f"Installing special dependency: {dep}")
                 self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
-        # Generate .SRCINFO
         self.run_cmd("sudo -u builder makepkg --printsrcinfo", cwd=pkg_dir, check=False)
         
         srcinfo = pkg_dir / ".SRCINFO"
@@ -486,7 +502,6 @@ class PackageBuilder:
             logger.warning(f"No .SRCINFO for {pkg_name}")
             return
         
-        # Parse dependencies
         deps = []
         with open(srcinfo, 'r') as f:
             for line in f:
@@ -502,39 +517,39 @@ class PackageBuilder:
         
         logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
         
-        # Refresh pacman database WITHOUT our repository to avoid 404 errors
-        logger.info("Refreshing pacman database (ignoring our repository)...")
-        self.run_cmd("sudo pacman -Sy --needed --noconfirm", check=False)
+        logger.info("Refreshing pacman database...")
+        # Ha a repository tartalmaz csomagokat, használhatjuk, egyébként nem
+        if self.repo_has_packages:
+            self.run_cmd("sudo pacman -Sy --noconfirm", check=False)
+        else:
+            self.run_cmd(f"sudo pacman -Sy --ignore={self.repo_name} --noconfirm", check=False)
         
-        # Try to install each dependency
         installed_count = 0
         for dep in deps:
-            # Clean version specifiers
             dep_clean = re.sub(r'[<=>].*', '', dep).strip()
             
             if not dep_clean:
                 continue
             
-            # Skip if already installed
             check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
             if check_result.returncode == 0:
                 logger.debug(f"Dependency already installed: {dep_clean}")
                 installed_count += 1
                 continue
             
-            # Strategy 1: Try pacman first
             print(f"Installing {dep_clean} via pacman...")
-            result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+            if self.repo_has_packages:
+                result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+            else:
+                result = self.run_cmd(f"sudo pacman -S --needed --noconfirm --ignore={self.repo_name} {dep_clean}", check=False, capture=True)
             
             if result.returncode != 0:
-                # Strategy 2: Try yay for AUR dependencies
                 logger.info(f"Trying yay for {dep_clean}...")
                 yay_result = self.run_cmd(f"sudo -u builder yay -S --asdeps --needed --noconfirm {dep_clean}", check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
                     logger.warning(f"Failed to install dependency: {dep_clean}")
-                    # Continue without this dependency
             else:
                 installed_count += 1
         
@@ -579,13 +594,11 @@ class PackageBuilder:
             logger.error(f"Package directory not found: {pkg_name}")
             return False
         
-        # Check if PKGBUILD exists
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"No PKGBUILD found for {pkg_name}")
             return False
         
-        # Extract version from PKGBUILD
         content = pkgbuild.read_text()
         pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
@@ -594,13 +607,11 @@ class PackageBuilder:
         if pkgver_match and pkgrel_match:
             version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
             
-            # Skip if already exists
             if self.package_exists(pkg_name):
                 logger.info(f"✅ {pkg_name} already exists on server - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 return False
             
-            # Log version info
             remote_version = self.get_remote_version(pkg_name)
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
@@ -610,25 +621,21 @@ class PackageBuilder:
             version = "unknown"
             logger.warning(f"Could not extract version for {pkg_name}")
         
-        # Check for special dependencies
         if pkg_name in self.special_dependencies:
             logger.info(f"Found special dependencies for {pkg_name}")
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
                 self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
-        # Build
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
-            # Download sources
             print("Downloading sources...")
             source_result = self.run_cmd(f"cd {pkg_dir} && sudo -u builder makepkg -od --noconfirm", cwd=None, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
             
-            # Build package
             print("Building package...")
             makepkg_flags = "-si --noconfirm --clean"
             if pkg_name == "gtk2":
@@ -643,7 +650,6 @@ class PackageBuilder:
             )
             
             if build_result.returncode == 0:
-                # Move built packages
                 moved = False
                 built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
@@ -658,7 +664,6 @@ class PackageBuilder:
                     self.built_packages.append(f"{pkg_name} ({version})")
                     self.rebuilt_local_packages.append(pkg_name)
                     
-                    # HOKIBOT data collection
                     if built_files:
                         metadata = self._extract_package_metadata(built_files[0])
                         if metadata:
@@ -692,15 +697,12 @@ class PackageBuilder:
         
         logger.info(f"Updating database with {len(pkg_files)} packages...")
         
-        # Change to output directory
         old_cwd = os.getcwd()
         os.chdir(self.output_dir)
         
         try:
-            # Always create new database
             db_file = f"{self.repo_name}.db.tar.gz"
             
-            # Remove old database files if they exist
             for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
                       f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
                 if os.path.exists(f):
@@ -712,7 +714,6 @@ class PackageBuilder:
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             
             if result.returncode == 0:
-                # Check created files
                 created_files = [
                     f"{self.repo_name}.db",
                     f"{self.repo_name}.db.tar.gz",
@@ -749,7 +750,6 @@ class PackageBuilder:
         
         logger.info(f"Uploading {len(all_files)} files...")
         
-        # First, ensure remote directory exists
         mkdir_cmd = [
             "ssh",
             *self.ssh_options,
@@ -762,25 +762,21 @@ class PackageBuilder:
         if mkdir_result.returncode != 0:
             logger.warning(f"Failed to create remote directory: {mkdir_result.stderr[:200]}")
         
-        # Try SCP with retries
         max_retries = 3
         upload_success = False
         
         for attempt in range(1, max_retries + 1):
             logger.info(f"Upload attempt {attempt}/{max_retries}...")
             
-            # Build SCP command
             scp_cmd = [
                 "scp",
                 *self.ssh_options,
                 "-i", "/home/builder/.ssh/id_ed25519"
             ]
             
-            # Add all files
             for file in all_files:
                 scp_cmd.append(str(file))
             
-            # Add destination
             scp_cmd.append(f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/")
             
             result = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
@@ -837,7 +833,6 @@ class PackageBuilder:
             
             changed = False
             
-            # Update pkgver
             current_pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if current_pkgver_match:
                 current_pkgver = current_pkgver_match.group(1)
@@ -851,7 +846,6 @@ class PackageBuilder:
                     changed = True
                     logger.info(f"  Updated pkgver: {current_pkgver} -> {pkg_data['pkgver']}")
             
-            # Update pkgrel
             current_pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if current_pkgrel_match:
                 current_pkgrel = current_pkgrel_match.group(1)
@@ -865,7 +859,6 @@ class PackageBuilder:
                     changed = True
                     logger.info(f"  Updated pkgrel: {current_pkgrel} -> {pkg_data['pkgrel']}")
             
-            # Handle epoch
             current_epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if pkg_data['epoch'] is not None:
                 if current_epoch_match:
@@ -1049,31 +1042,22 @@ class PackageBuilder:
         print("="*60)
         
         try:
-            # Setup
             print("\n🔧 Initial setup...")
             print(f"Repository root: {self.repo_root}")
             print(f"Using repository: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
             
-            # Fetch remote packages
-            try:
-                self.fetch_remote_packages()
-            except Exception as e:
-                logger.warning(f"Could not fetch remote packages: {e}")
-                self.remote_files = []
+            self.fetch_remote_packages()
             
-            # Build packages
             total_built = self.build_packages()
             
-            # Finalize if we built anything
             if total_built > 0:
                 print("\n" + "="*60)
                 print("📦 Finalizing build")
                 print("="*60)
                 
                 if self.update_database():
-                    # Test connection
                     if self.test_ssh_connection():
                         if self.upload_packages():
                             self.cleanup_old_packages()
@@ -1096,7 +1080,6 @@ class PackageBuilder:
                 if self.skipped_packages:
                     print(f"Skipped packages: {len(self.skipped_packages)}")
             
-            # Summary
             elapsed = time.time() - self.stats["start_time"]
             
             print("\n" + "="*60)

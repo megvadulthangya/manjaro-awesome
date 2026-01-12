@@ -60,6 +60,18 @@ jobs:
           echo "Setting up pacman without key signing..."
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
           
+          # UPDATE SYSTEM WITHOUT OUR REPOSITORY
+          echo "Updating system (ignoring our repository for now)..."
+          
+          # First, save current pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          # Temporarily comment out our repository if it exists
+          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
+            echo "Temporarily disabling $REPO_NAME repository..."
+            sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
+          fi
+          
           # Update system with minimal packages first
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
@@ -70,6 +82,9 @@ jobs:
             openssh rsync \
             netcat iproute2
             
+          # Restore pacman.conf
+          mv /etc/pacman.conf.backup /etc/pacman.conf
+          
           # Create builder user
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -148,10 +163,9 @@ jobs:
             exit 1
           fi
           
-          cp /etc/pacman.conf /etc/pacman.conf.backup
-          
+          # Check if repository already exists in pacman.conf
           if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
-            echo "⚠️ Repository '$REPO_NAME' already exists in pacman.conf"
+            echo "✅ Repository '$REPO_NAME' already exists in pacman.conf"
             echo "Updating server URL if needed..."
             
             sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
@@ -180,24 +194,8 @@ jobs:
           grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
           
           echo ""
-          echo "Updating pacman database..."
-          if pacman -Sy --noconfirm; then
-            echo "✅ Pacman database synchronized"
-            
-            echo ""
-            echo "=== Testing repository access ==="
-            if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
-              echo "✅ Repository '$REPO_NAME' is accessible via pacman"
-              echo "Available packages in repository:"
-              pacman -Sl "$REPO_NAME" | head -10
-            else
-              echo "⚠️ Repository '$REPO_NAME' found but not accessible via pacman"
-            fi
-          else
-            echo "❌ Failed to sync pacman database"
-          fi
-          
           echo "✅ Pacman repository configuration complete"
+          echo "Note: Repository will be enabled/disabled dynamically by builder.py"
 
       - name: Rsync Connection Test
         run: |
@@ -249,8 +247,16 @@ jobs:
         run: |
           echo "=== Installing Build Dependencies ==="
           
-          # Install remaining build tools
-          pacman -Syu --noconfirm --needed \
+          # Save current pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          # Temporarily disable our repository to avoid 404 errors
+          echo "Temporarily disabling $REPO_NAME repository for dependency installation..."
+          sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
+          
+          # Install remaining build tools WITHOUT -y flag to avoid syncing
+          echo "Installing build tools..."
+          pacman -S --needed --noconfirm \
             appstream appstream-glib \
             meson ninja cmake \
             gtk-doc docbook-xsl libxslt \
@@ -264,6 +270,9 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf  # tilix-git specific dependencies
             
+          # Restore pacman.conf
+          mv /etc/pacman.conf.backup /etc/pacman.conf
+          
           # Install yay for AUR dependencies
           echo "=== Installing yay ==="
           chmod 777 /tmp
@@ -296,10 +305,11 @@ jobs:
           
           echo ""
           echo "=== Repository Status ==="
+          # Check if repository exists but don't fail if it doesn't
           if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
             echo "✅ Repository '$REPO_NAME' is accessible"
           else
-            echo "❌ Repository '$REPO_NAME' is NOT accessible"
+            echo "⚠️ Repository '$REPO_NAME' is NOT accessible (may be empty or not exist)"
           fi
           
           echo ""
