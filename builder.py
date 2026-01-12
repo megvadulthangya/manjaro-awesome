@@ -206,7 +206,7 @@ class PackageBuilder:
         print("1. Testing port 22 connectivity...")
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(30)
+            sock.settimeout(10)
             result = sock.connect_ex((self.vps_host, 22))
             sock.close()
             
@@ -242,7 +242,7 @@ class PackageBuilder:
             "--dry-run",
             "--stats",
             "-e", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
-            "--timeout=10",
+            "--timeout=5",
             "/dev/null",
             f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
         ]
@@ -755,115 +755,46 @@ class PackageBuilder:
             except Exception as e:
                 logger.warning(f"Could not remove {db_file}: {e}")
         
-        # Create new database - use absolute paths
-        db_file_path = self.output_dir / f"{self.repo_name}.db.tar.gz"
+        # Create new database
+        db_file = self.output_dir / f"{self.repo_name}.db.tar.gz"
         
-        # Use repo-add with explicit package files
-        cmd = ["repo-add", "-R", str(db_file_path)]
-        # Add all package files
-        for pkg in pkg_files:
-            cmd.append(str(pkg))
+        # Use repo-add with explicit package files - FIXED VERSION
+        cmd = ["repo-add", "-n", "-R", str(db_file)]
+        cmd.extend([str(p) for p in pkg_files])
         
         logger.info(f"Running repo-add command with {len(pkg_files)} packages")
+        result = self.run_cmd(cmd, cwd=self.output_dir, check=False, shell=False)
         
-        # Change to output directory for repo-add
-        old_cwd = os.getcwd()
-        os.chdir(self.output_dir)
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result and result.returncode == 0:
+            # Verify database files exist and have content
+            expected_files = [
+                self.output_dir / f"{self.repo_name}.db",
+                self.output_dir / f"{self.repo_name}.db.tar.gz",
+                self.output_dir / f"{self.repo_name}.files",
+                self.output_dir / f"{self.repo_name}.files.tar.gz"
+            ]
             
-            if result.returncode == 0:
-                # Check that database files were created
-                expected_files = [
-                    f"{self.repo_name}.db",
-                    f"{self.repo_name}.db.tar.gz", 
-                    f"{self.repo_name}.files",
-                    f"{self.repo_name}.files.tar.gz"
-                ]
+            all_exist = all(f.exists() for f in expected_files)
+            if all_exist:
+                # Check sizes
+                for f in expected_files:
+                    size = f.stat().st_size
+                    logger.info(f"  {f.name}: {size} bytes")
+                    if size < 2000:
+                        logger.warning(f"  ⚠️  {f.name} size is very small: {size} bytes")
                 
-                all_exist = all(os.path.exists(f) for f in expected_files)
-                if all_exist:
-                    # Check sizes
-                    for f in expected_files:
-                        size = os.path.getsize(f)
-                        logger.info(f"  {f}: {size} bytes")
-                        if size < 2000:  # Warning for very small database files
-                            logger.warning(f"  ⚠️  {f} size is very small: {size} bytes")
-                    
-                    logger.info("✅ Database updated successfully")
-                    return True
-                else:
-                    missing = [f for f in expected_files if not os.path.exists(f)]
-                    logger.error(f"❌ Database files missing: {missing}")
-                    # Try to create them manually
-                    return self._create_database_manually(pkg_files)
+                logger.info("✅ Database updated successfully")
+                return True
             else:
-                logger.error(f"repo-add failed: {result.stderr}")
-                # Try manual creation
-                return self._create_database_manually(pkg_files)
-                
-        finally:
-            os.chdir(old_cwd)
-    
-    def _create_database_manually(self, pkg_files):
-        """Create database manually if repo-add fails."""
-        logger.info("Attempting manual database creation...")
-        
-        try:
-            # Create tar.gz files manually
-            import tarfile
-            
-            # Create .db file (just a tar of package metadata)
-            with tarfile.open(f"{self.repo_name}.db.tar.gz", "w:gz") as tar:
-                for pkg_file in pkg_files:
-                    # Extract .PKGINFO from each package
-                    cmd = ["tar", "-xOf", str(pkg_file), ".PKGINFO"]
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        # Create a temporary file with metadata
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.PKGINFO') as f:
-                            f.write(result.stdout)
-                            temp_path = f.name
-                        
-                        # Add to tar with proper structure
-                        arcname = f"{pkg_file.stem}/desc"
-                        tar.add(temp_path, arcname=arcname)
-                        os.unlink(temp_path)
-            
-            # Create .files file similarly
-            with tarfile.open(f"{self.repo_name}.files.tar.gz", "w:gz") as tar:
-                for pkg_file in pkg_files:
-                    # Extract .FILELIST from each package  
-                    cmd = ["tar", "-xOf", str(pkg_file), ".FILELIST"]
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.FILELIST') as f:
-                            f.write(result.stdout)
-                            temp_path = f.name
-                        
-                        arcname = f"{pkg_file.stem}/files"
-                        tar.add(temp_path, arcname=arcname)
-                        os.unlink(temp_path)
-            
-            # Create uncompressed versions by extracting
-            with tarfile.open(f"{self.repo_name}.db.tar.gz", "r:gz") as tar:
-                tar.extractall()
-            
-            with tarfile.open(f"{self.repo_name}.files.tar.gz", "r:gz") as tar:
-                tar.extractall()
-            
-            logger.info("✅ Manual database creation successful")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Manual database creation failed: {e}")
+                missing = [f.name for f in expected_files if not f.exists()]
+                logger.error(f"❌ Database files missing: {missing}")
+                return False
+        else:
+            logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
     
     def upload_packages(self):
-        """Upload packages to server using rsync - ALWAYS try even if test fails."""
+        """Upload packages to server using rsync with retry logic."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.warning("No files to upload")
@@ -881,99 +812,202 @@ class PackageBuilder:
         ]
         self.run_cmd(mkdir_cmd, check=False, shell=False)
         
-        # Build rsync command
+        # Build rsync command with simpler options
         import shlex
         remote_dir_escaped = shlex.quote(self.remote_dir)
         
-        # Sanitize filenames with colons
-        sanitized_files = []
-        for pkg_file in pkg_files:
-            original_name = pkg_file.name
-            # Replace colon with underscore in filename
-            sanitized_name = original_name.replace(":", "_")
-            if sanitized_name != original_name:
-                sanitized_path = pkg_file.parent / sanitized_name
-                shutil.copy2(pkg_file, sanitized_path)
-                sanitized_files.append(sanitized_path)
-                logger.info(f"Sanitized filename: {original_name} -> {sanitized_name}")
-            else:
-                sanitized_files.append(pkg_file)
-        
-        # Create file list for rsync
-        file_list = " ".join([shlex.quote(str(f)) for f in sanitized_files])
-        
-        # Use rsync with simplified options for better reliability
-        rsync_cmd = [
-            "rsync",
-            "-avz",
-            "--progress",
-            "--timeout=120",
-            "--partial",
-            f"--rsh=ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519"
+        # First, try simple SSH connection test
+        logger.info("Testing SSH connection before upload...")
+        ssh_test_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            "echo 'SSH connection test successful'"
         ]
         
-        # Add files
-        rsync_cmd.extend([str(f) for f in sanitized_files])
-        rsync_cmd.append(f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+        ssh_result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, timeout=30)
+        if ssh_result.returncode != 0:
+            logger.error(f"❌ SSH connection test failed: {ssh_result.stderr[:200]}")
+            logger.info("Will still try upload with simplified options...")
         
-        logger.info(f"Running rsync command: {' '.join(rsync_cmd[:5])}... [files] {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+        # Try multiple rsync strategies
+        strategies = [
+            # Strategy 1: Simple rsync with minimal options
+            lambda: self._rsync_strategy_simple(pkg_files, remote_dir_escaped),
+            # Strategy 2: Rsync with compression
+            lambda: self._rsync_strategy_compressed(pkg_files, remote_dir_escaped),
+            # Strategy 3: Individual scp for each file
+            lambda: self._scp_strategy_individual(pkg_files, remote_dir_escaped)
+        ]
         
-        # Run rsync
-        result = subprocess.run(rsync_cmd, capture_output=True, text=True)
+        for i, strategy in enumerate(strategies, 1):
+            logger.info(f"Trying upload strategy {i}/3...")
+            if strategy():
+                return True
         
-        # Clean up sanitized files
-        for file in sanitized_files:
-            if ":" in str(file):
-                try:
-                    file.unlink()
-                except:
-                    pass
-        
-        if result.returncode == 0:
-            logger.info("✅ Upload successful")
+        logger.error("❌ All upload strategies failed")
+        return False
+    
+    def _rsync_strategy_simple(self, pkg_files, remote_dir_escaped):
+        """Strategy 1: Simple rsync with minimal options."""
+        try:
+            # Create file list
+            file_list = []
+            for pkg_file in pkg_files:
+                file_list.append(str(pkg_file))
             
-            # Also upload database files
-            db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
-            if db_files:
-                db_rsync_cmd = [
-                    "rsync",
-                    "-avz",
-                    "--progress",
-                    "--timeout=120",
-                    f"--rsh=ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519"
-                ]
-                db_rsync_cmd.extend([str(f) for f in db_files])
-                db_rsync_cmd.append(f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+            # Build simple rsync command
+            rsync_cmd = [
+                "rsync",
+                "-av",
+                "--progress",
+                "--timeout=60",
+                f"--rsh=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i /home/builder/.ssh/id_ed25519"
+            ]
+            rsync_cmd.extend(file_list)
+            rsync_cmd.append(f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+            
+            logger.info(f"Running simple rsync command...")
+            result = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=180)
+            
+            if result.returncode == 0:
+                logger.info("✅ Simple rsync strategy successful")
                 
-                logger.info(f"Uploading {len(db_files)} database files...")
-                db_result = subprocess.run(db_rsync_cmd, capture_output=True, text=True)
-                if db_result.returncode == 0:
-                    logger.info("✅ Database files uploaded")
-                else:
-                    logger.error(f"Failed to upload database files: {db_result.stderr[:500]}")
+                # Upload database files
+                db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
+                if db_files:
+                    db_cmd = rsync_cmd[:-1]  # Remove last element (remote destination)
+                    db_cmd = db_cmd[:-len(file_list)]  # Remove package files
+                    db_cmd.extend([str(f) for f in db_files])
+                    db_cmd.append(f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+                    
+                    db_result = subprocess.run(db_cmd, capture_output=True, text=True, timeout=60)
+                    if db_result.returncode == 0:
+                        logger.info("✅ Database files uploaded")
+                    else:
+                        logger.error(f"Failed to upload database files: {db_result.stderr[:200]}")
+                
+                return True
+            else:
+                logger.error(f"Simple rsync failed: {result.stderr[:200]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("Simple rsync timed out")
+            return False
+        except Exception as e:
+            logger.error(f"Simple rsync error: {e}")
+            return False
+    
+    def _rsync_strategy_compressed(self, pkg_files, remote_dir_escaped):
+        """Strategy 2: Rsync with compression."""
+        try:
+            # Create file list
+            file_list = []
+            for pkg_file in pkg_files:
+                file_list.append(str(pkg_file))
             
-            return True
-        else:
-            # Try alternative rsync method with simpler options
-            logger.error(f"❌ Upload failed: {result.stderr[:500]}")
-            logger.info("Trying alternative upload method...")
+            # Build compressed rsync command
+            rsync_cmd = [
+                "rsync",
+                "-avz",  # Added compression
+                "--progress",
+                "--timeout=120",
+                "--partial",
+                "--bwlimit=1000",  # Limit bandwidth to avoid timeouts
+                f"--rsh=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=45 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /home/builder/.ssh/id_ed25519"
+            ]
+            rsync_cmd.extend(file_list)
+            rsync_cmd.append(f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
             
-            # Use scp as fallback
-            for file_path in pkg_files:
-                scp_cmd = [
-                    "scp",
-                    *self.ssh_options,
-                    "-i", "/home/builder/.ssh/id_ed25519",
-                    str(file_path),
-                    f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
-                ]
-                scp_result = subprocess.run(scp_cmd, capture_output=True, text=True)
-                if scp_result.returncode != 0:
-                    logger.error(f"Failed to upload {file_path.name}: {scp_result.stderr[:200]}")
-                    return False
+            logger.info(f"Running compressed rsync command...")
+            result = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=240)
             
-            logger.info("✅ Alternative upload successful")
-            return True
+            if result.returncode == 0:
+                logger.info("✅ Compressed rsync strategy successful")
+                return True
+            else:
+                logger.error(f"Compressed rsync failed: {result.stderr[:200]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("Compressed rsync timed out")
+            return False
+        except Exception as e:
+            logger.error(f"Compressed rsync error: {e}")
+            return False
+    
+    def _scp_strategy_individual(self, pkg_files, remote_dir_escaped):
+        """Strategy 3: Individual scp for each file with retries."""
+        success_count = 0
+        
+        for pkg_file in pkg_files:
+            uploaded = False
+            max_retries = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    # Use simple scp command
+                    scp_cmd = [
+                        "scp",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-o", "ConnectTimeout=30",
+                        "-i", "/home/builder/.ssh/id_ed25519",
+                        str(pkg_file),
+                        f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+                    ]
+                    
+                    logger.info(f"Uploading {pkg_file.name} (attempt {attempt + 1}/{max_retries})...")
+                    result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=120)
+                    
+                    if result.returncode == 0:
+                        logger.info(f"✅ Uploaded {pkg_file.name}")
+                        success_count += 1
+                        uploaded = True
+                        break
+                    else:
+                        logger.warning(f"Attempt {attempt + 1} failed for {pkg_file.name}: {result.stderr[:100]}")
+                        if attempt < max_retries - 1:
+                            time.sleep(5)  # Wait before retry
+                
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"SCP timeout for {pkg_file.name}, attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+                except Exception as e:
+                    logger.warning(f"SCP error for {pkg_file.name}: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+            
+            if not uploaded:
+                logger.error(f"❌ Failed to upload {pkg_file.name} after {max_retries} attempts")
+        
+        # Upload database files if we uploaded at least one package
+        if success_count > 0:
+            db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
+            for db_file in db_files:
+                try:
+                    scp_cmd = [
+                        "scp",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null", 
+                        "-o", "ConnectTimeout=30",
+                        "-i", "/home/builder/.ssh/id_ed25519",
+                        str(db_file),
+                        f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+                    ]
+                    
+                    result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+                    if result.returncode == 0:
+                        logger.info(f"✅ Uploaded database file: {db_file.name}")
+                    else:
+                        logger.error(f"Failed to upload database file {db_file.name}: {result.stderr[:100]}")
+                except Exception as e:
+                    logger.error(f"Error uploading database file {db_file.name}: {e}")
+        
+        return success_count > 0
     
     def cleanup_old_packages(self):
         """Remove old package versions."""
