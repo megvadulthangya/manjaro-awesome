@@ -76,10 +76,7 @@ class PackageBuilder:
             "-o", "ServerAliveCountMax=5",
             "-o", "TCPKeepAlive=yes",
             "-o", "BatchMode=yes",
-            "-o", "LogLevel=ERROR",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPersist=5m",
-            "-o", "ControlPath=/tmp/ssh_control_%h_%p_%r"
+            "-o", "LogLevel=ERROR"
         ]
         
         # Statistics
@@ -158,7 +155,12 @@ class PackageBuilder:
             if query_result.returncode == 0:
                 print(f"✅ Repository '{self.repo_name}' is accessible via pacman")
                 if query_result.stdout:
-                    print(f"   Available packages: {len(query_result.stdout.strip().split('\\n'))}")
+                    package_count = len([line for line in query_result.stdout.strip().split('\n') if line.strip()])
+                    print(f"   Available packages: {package_count}")
+                    # List all packages
+                    for line in query_result.stdout.strip().split('\n'):
+                        if line.strip():
+                            print(f"     - {line.strip()}")
             else:
                 print(f"⚠️ Repository '{self.repo_name}' found but not accessible")
                 print("   This may cause dependency issues during build")
@@ -207,7 +209,6 @@ class PackageBuilder:
             "--stats",
             "-e", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
             "--timeout=30",
-            "--contimeout=30",
             "/dev/null",
             f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
         ]
@@ -750,7 +751,7 @@ class PackageBuilder:
             return False
     
     def update_database(self):
-        """Update repository database."""
+        """Update repository database with PROPER repo-add usage."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.info("No packages to add to database")
@@ -758,21 +759,47 @@ class PackageBuilder:
         
         logger.info(f"Updating database with {len(pkg_files)} packages...")
         
+        # First, clean any existing database files
+        for db_file in self.output_dir.glob(f"{self.repo_name}.*"):
+            try:
+                if db_file.is_file():
+                    db_file.unlink()
+                    logger.debug(f"Removed old database file: {db_file}")
+            except Exception as e:
+                logger.warning(f"Could not remove {db_file}: {e}")
+        
+        # Create new database
         db_file = self.output_dir / f"{self.repo_name}.db.tar.gz"
         
-        # Check if database exists
-        if db_file.exists():
-            cmd = ["repo-add", "-R", str(db_file)]
-        else:
-            cmd = ["repo-add", str(db_file)]
-        
+        # Use repo-add with explicit package files
+        cmd = ["repo-add", "-R", str(db_file)]
         cmd.extend([str(p) for p in pkg_files])
         
+        logger.info(f"Running repo-add command with {len(pkg_files)} packages")
         result = self.run_cmd(cmd, cwd=self.output_dir, check=False, shell=False)
         
         if result and result.returncode == 0:
-            logger.info("✅ Database updated")
-            return True
+            # Verify database files exist and have content
+            expected_files = [
+                self.output_dir / f"{self.repo_name}.db",
+                self.output_dir / f"{self.repo_name}.db.tar.gz",
+                self.output_dir / f"{self.repo_name}.files",
+                self.output_dir / f"{self.repo_name}.files.tar.gz"
+            ]
+            
+            all_exist = all(f.exists() for f in expected_files)
+            if all_exist:
+                # Check sizes
+                for f in expected_files:
+                    size = f.stat().st_size
+                    logger.info(f"  {f.name}: {size} bytes")
+                
+                logger.info("✅ Database updated successfully")
+                return True
+            else:
+                missing = [f.name for f in expected_files if not f.exists()]
+                logger.error(f"❌ Database files missing: {missing}")
+                return False
         else:
             logger.error(f"Failed to update database: {result.stderr if result else 'Unknown error'}")
             return False
@@ -838,7 +865,7 @@ class PackageBuilder:
             logger.info("✅ Upload successful")
             
             # Also upload database files
-            db_files = list(self.output_dir.glob(f"{self.repo_name}.*.tar.gz"))
+            db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
             if db_files:
                 db_file_list = " ".join([shlex.quote(str(f)) for f in db_files])
                 db_rsync_cmd = f"rsync -avz --progress --timeout=300 --partial --verbose --rsh=\"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519\" {db_file_list} {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
