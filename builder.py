@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Javított változat rsync és adatbázis problémákra
+Manjaro Package Builder - Javított változat üres VPS kezelésére
 """
 
 import os
@@ -118,7 +118,7 @@ class PackageBuilder:
             self.repo_name = env_repo_name if env_repo_name else 'manjaro-awesome'
         
         # Validate
-        required = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY', 'REPO_SERVER_URL']
+        required = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
         missing = [var for var in required if not os.getenv(var)]
         
         if missing:
@@ -129,38 +129,16 @@ class PackageBuilder:
         print(f"🔧 Configuration loaded:")
         print(f"   SSH: {self.vps_user}@{self.vps_host}")
         print(f"   Remote directory: {self.remote_dir}")
-        print(f"   Repository: {self.repo_name} -> {self.repo_server_url}")
+        print(f"   Repository: {self.repo_name}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
         
-        # Verify pacman repository is configured
-        self._verify_pacman_repository()
+        # Skip pacman repository verification if it's empty
+        self._skip_pacman_verification()
     
-    def _verify_pacman_repository(self):
-        """Verify that our repository is configured in pacman."""
-        print("\n🔍 Verifying pacman repository configuration...")
-        
-        # Check if repository exists in pacman.conf
-        result = self.run_cmd(f"grep -q '\\[{self.repo_name}\\]' /etc/pacman.conf", check=False)
-        if result.returncode == 0:
-            print(f"✅ Repository '{self.repo_name}' found in pacman.conf")
-            
-            # Check if we can query the repository
-            query_result = self.run_cmd(f"pacman -Sl {self.repo_name}", check=False, capture=True)
-            if query_result.returncode == 0:
-                print(f"✅ Repository '{self.repo_name}' is accessible via pacman")
-                if query_result.stdout:
-                    package_count = len([line for line in query_result.stdout.strip().split('\n') if line.strip()])
-                    print(f"   Available packages: {package_count}")
-                    # List all packages
-                    for line in query_result.stdout.strip().split('\n'):
-                        if line.strip():
-                            print(f"     - {line.strip()}")
-            else:
-                print(f"⚠️ Repository '{self.repo_name}' found but not accessible")
-                print("   This may cause dependency issues during build")
-        else:
-            print(f"❌ Repository '{self.repo_name}' NOT found in pacman.conf")
-            print("   Please run the 'Configure Pacman Repository' step in the workflow")
+    def _skip_pacman_verification(self):
+        """Skip pacman repository verification if it doesn't exist yet."""
+        print("\n🔍 Skipping pacman repository verification (may be empty or not yet created)")
+        print(f"   Repository '{self.repo_name}' will be built from scratch")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True):
         """Run command with error handling."""
@@ -188,8 +166,8 @@ class PackageBuilder:
                 raise
             return e
     
-    def test_rsync_connection(self):
-        """Test rsync connection with VPS - EGYSZERŰBB TESZT."""
+    def test_ssh_connection(self):
+        """Test SSH connection to VPS."""
         print("\n🔍 Testing SSH connection to VPS...")
         
         # Test SSH connection with simpler options
@@ -210,40 +188,44 @@ class PackageBuilder:
             return False
     
     def fetch_remote_packages(self):
-        """Fetch list of packages from server - EGYSZERŰBB VÁLTOZAT."""
+        """Fetch list of packages from server - EGYSZERŰBB VÁLTOZAT, NEM LÉTEZIK SEMMI."""
         print("\n📡 Fetching remote package list...")
         
-        # Build SSH command with simple options
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options,
-            "-i", "/home/builder/.ssh/id_ed25519",
-            f"{self.vps_user}@{self.vps_host}"
-        ]
-        
-        # Use simple ls command like in bash script
-        remote_cmd = f'ls -1 {self.remote_dir} 2>/dev/null || true'
-        
-        # Join SSH command with remote command
-        full_cmd = ssh_cmd + [remote_cmd]
-        
-        result = self.run_cmd(full_cmd, capture=True, check=False, shell=False)
-        
-        if result and result.returncode == 0 and result.stdout:
-            # Filter only package files
-            lines = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-            self.remote_files = [f for f in lines if f.endswith('.pkg.tar.zst') or f.endswith('.pkg.tar.xz')]
+        try:
+            # Build SSH command with simple options
+            ssh_cmd = [
+                "ssh",
+                *self.ssh_options,
+                "-i", "/home/builder/.ssh/id_ed25519",
+                f"{self.vps_user}@{self.vps_host}"
+            ]
             
-            if self.remote_files:
-                logger.info(f"Found {len(self.remote_files)} packages on server")
+            # Use simple ls command like in bash script, but if the directory doesn't exist, it's ok
+            remote_cmd = f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | xargs -r basename -a 2>/dev/null || true'
+            
+            # Join SSH command with remote command
+            full_cmd = ssh_cmd + [remote_cmd]
+            
+            result = subprocess.run(full_cmd, capture_output=True, text=True, check=False)
+            
+            if result and result.returncode == 0 and result.stdout:
+                # Filter only package files
+                lines = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+                self.remote_files = lines
+                
+                if self.remote_files:
+                    logger.info(f"Found {len(self.remote_files)} packages on server")
+                else:
+                    logger.info("No packages found on server (directory may be empty or not exist)")
             else:
-                logger.warning("No packages found on server")
-        else:
+                self.remote_files = []
+                logger.info("Could not fetch remote package list (maybe first run?)")
+        except Exception as e:
             self.remote_files = []
-            logger.warning("Could not fetch remote package list")
+            logger.info(f"Error fetching remote files (server may be empty): {e}")
     
     def package_exists(self, pkg_name, version=None):
-        """Check if package exists on server - JAVÍTOTT VÁLTOZAT."""
+        """Check if package exists on server - mindig false ha üres a szerver."""
         if not self.remote_files:
             return False
         
@@ -282,7 +264,7 @@ class PackageBuilder:
             return [], []
     
     def build_packages(self):
-        """Build packages."""
+        """Build packages - MINDIG építsünk, ha üres a szerver."""
         print("\n" + "="*60)
         print("Building packages")
         print("="*60)
@@ -456,7 +438,7 @@ class PackageBuilder:
         pass
     
     def _install_aur_deps(self, pkg_dir, pkg_name):
-        """Install dependencies for AUR package with improved logic."""
+        """Install dependencies for AUR package with improved logic - JAVÍTOTT."""
         print(f"Checking dependencies for {pkg_name}...")
         
         # Check for special dependencies in config
@@ -491,7 +473,7 @@ class PackageBuilder:
         
         logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
         
-        # Refresh pacman database first
+        # Refresh pacman database first, but don't fail if it doesn't work
         logger.info("Refreshing pacman database...")
         self.run_cmd("sudo pacman -Sy --noconfirm", check=False)
         
@@ -516,25 +498,14 @@ class PackageBuilder:
             result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
             
             if result.returncode != 0:
-                # Strategy 2: Check if it's in our custom repository
-                logger.info(f"Checking if {dep_clean} is in our repository...")
-                repo_check = self.run_cmd(f"pacman -Sl {self.repo_name} | grep -q '{dep_clean}'", check=False)
-                
-                if repo_check.returncode == 0:
-                    logger.info(f"{dep_clean} found in {self.repo_name}, installing...")
-                    result = self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
-                    
-                    if result.returncode == 0:
-                        installed_count += 1
-                        continue
-                
-                # Strategy 3: Try yay for AUR dependencies
+                # Strategy 2: Try yay for AUR dependencies
                 logger.info(f"Trying yay for {dep_clean}...")
                 yay_result = self.run_cmd(f"sudo -u builder yay -S --asdeps --needed --noconfirm {dep_clean}", check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
                     logger.warning(f"Failed to install dependency: {dep_clean}")
+                    # Ne álljunk meg, hanem próbáljuk megépíteni nélküle
             else:
                 installed_count += 1
         
@@ -702,7 +673,7 @@ class PackageBuilder:
             return False
     
     def update_database(self):
-        """Update repository database - BASH SCRIPT LOGIKA."""
+        """Update repository database - MINDIG LÉTREHOZZUK, NE PRÓBÁLJUK LETÖLTENI."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.info("No packages to add to database")
@@ -715,16 +686,17 @@ class PackageBuilder:
         os.chdir(self.output_dir)
         
         try:
-            # Check if database exists
+            # Use repo-add like in bash script - always create new
             db_file = f"{self.repo_name}.db.tar.gz"
             
-            # Use repo-add like in bash script
-            if os.path.exists(db_file):
-                logger.info("Existing database found - expanding...")
-                cmd = ["repo-add", db_file] + [os.path.basename(str(p)) for p in pkg_files]
-            else:
-                logger.info("Creating new database...")
-                cmd = ["repo-add", db_file] + [os.path.basename(str(p)) for p in pkg_files]
+            # Remove old database files if they exist
+            for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
+                      f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
+                if os.path.exists(f):
+                    os.remove(f)
+            
+            logger.info("Creating new database...")
+            cmd = ["repo-add", db_file] + [os.path.basename(str(p)) for p in pkg_files]
             
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             
@@ -744,7 +716,7 @@ class PackageBuilder:
                     else:
                         logger.error(f"  {f}: NOT CREATED")
                 
-                logger.info("✅ Database updated successfully")
+                logger.info("✅ Database created successfully")
                 return True
             else:
                 logger.error(f"repo-add failed: {result.stderr}")
@@ -765,6 +737,19 @@ class PackageBuilder:
             return False
         
         logger.info(f"Uploading {len(all_files)} files...")
+        
+        # First, ensure remote directory exists
+        mkdir_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            f"mkdir -p {self.remote_dir}"
+        ]
+        
+        mkdir_result = subprocess.run(mkdir_cmd, capture_output=True, text=True, check=False)
+        if mkdir_result.returncode != 0:
+            logger.warning(f"Failed to create remote directory: {mkdir_result.stderr[:200]}")
         
         # Try SCP like in bash script
         max_retries = 3
@@ -1086,9 +1071,15 @@ class PackageBuilder:
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
             
-            self.fetch_remote_packages()
+            # Fetch remote packages - de nem blokkoló
+            try:
+                self.fetch_remote_packages()
+            except Exception as e:
+                logger.warning(f"Could not fetch remote packages: {e}")
+                logger.info("Continuing with empty remote file list...")
+                self.remote_files = []
             
-            # Build packages
+            # Build packages - MINDIG építsünk, ha üres a szerver
             total_built = self.build_packages()
             
             # Finalize if we built anything
@@ -1099,7 +1090,7 @@ class PackageBuilder:
                 
                 if self.update_database():
                     # Test connection
-                    if self.test_rsync_connection():
+                    if self.test_ssh_connection():
                         # Upload packages
                         if self.upload_packages():
                             self.cleanup_old_packages()
