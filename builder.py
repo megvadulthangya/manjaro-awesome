@@ -195,42 +195,29 @@ class PackageBuilder:
             return e
     
     def test_rsync_connection(self):
-        """Test rsync connection with VPS using the same SSH options as upload."""
+        """Test rsync connection with VPS - ALWAYS try upload even if test fails."""
         print("\n🔍 Testing rsync connection to VPS...")
         
         # Build rsync test command
         import shlex
         remote_dir_escaped = shlex.quote(self.remote_dir)
         
-        # Create rsync command with identical SSH options
-        rsync_cmd = [
-            "rsync",
-            "--dry-run",
-            "--stats",
-            "-e", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
-            "--timeout=30",
-            "/dev/null",
-            f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
-        ]
-        
-        logger.info(f"Testing rsync command: {' '.join(rsync_cmd[:10])}...")
-        
         # Test 1: Basic port connectivity
         print("1. Testing port 22 connectivity...")
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
+            sock.settimeout(30)
             result = sock.connect_ex((self.vps_host, 22))
             sock.close()
             
             if result == 0:
                 print("✅ Port 22 is open on VPS")
             else:
-                print(f"❌ Port 22 is closed (error code: {result})")
-                return False
+                print(f"⚠️ Port 22 is closed (error code: {result}) - will still try upload")
+                return True  # Return True to continue with upload attempt
         except Exception as e:
-            print(f"❌ Socket test failed: {e}")
-            return False
+            print(f"⚠️ Socket test failed: {e} - will still try upload")
+            return True  # Return True to continue with upload attempt
         
         # Test 2: SSH connection test
         print("2. Testing SSH connection...")
@@ -246,29 +233,29 @@ class PackageBuilder:
         if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
             print("✅ SSH connection successful")
         else:
-            print(f"❌ SSH connection failed: {result.stderr if result else 'No output'}")
-            return False
+            print(f"⚠️ SSH connection failed - will still try upload: {result.stderr[:100] if result and result.stderr else 'No output'}")
         
-        # Test 3: rsync dry run
-        print("3. Testing rsync connection...")
+        # Test 3: rsync dry run (optional, don't fail on this)
+        print("3. Testing rsync connection (optional)...")
+        rsync_cmd = [
+            "rsync",
+            "--dry-run",
+            "--stats",
+            "-e", f"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519",
+            "--timeout=10",
+            "/dev/null",
+            f"{self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
+        ]
+        
         result = self.run_cmd(rsync_cmd, check=False, capture=True, shell=False)
         
         if result and result.returncode == 0:
             print("✅ rsync connection test successful")
-            return True
         else:
-            print(f"❌ rsync test failed: {result.stderr if result else 'No output'}")
-            
-            # Try alternative rsync syntax
-            print("4. Testing alternative rsync syntax...")
-            alt_rsync_cmd = f"rsync --dry-run --stats -avz --rsh='ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519' /dev/null {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
-            result2 = self.run_cmd(alt_rsync_cmd, check=False, capture=True)
-            
-            if result2 and result2.returncode == 0:
-                print("✅ Alternative rsync syntax works")
-                return True
-            
-            return False
+            print(f"⚠️ rsync test failed - will still try upload: {result.stderr[:100] if result and result.stderr else 'No output'}")
+        
+        print("✅ Rsync tests completed - proceeding with upload attempt")
+        return True
     
     def fetch_remote_packages(self):
         """Fetch list of packages from server."""
@@ -805,12 +792,7 @@ class PackageBuilder:
             return False
  
     def upload_packages(self):
-        """Upload packages to server using rsync with SSH options identical to test phase."""
-        # First test the rsync connection
-        if not self.test_rsync_connection():
-            logger.error("❌ rsync connection test failed. Cannot upload packages.")
-            return False
-        
+        """Upload packages to server using rsync - ALWAYS try even if test fails."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         if not pkg_files:
             logger.warning("No files to upload")
@@ -818,7 +800,7 @@ class PackageBuilder:
         
         logger.info(f"Uploading {len(pkg_files)} files...")
         
-        # First, create remote directory if it doesn't exist
+        # Always try to create remote directory
         mkdir_cmd = [
             "ssh",
             *self.ssh_options,
@@ -828,7 +810,7 @@ class PackageBuilder:
         ]
         self.run_cmd(mkdir_cmd, check=False, shell=False)
         
-        # Build rsync command with SSH options identical to test phase
+        # Build rsync command
         import shlex
         remote_dir_escaped = shlex.quote(self.remote_dir)
         
@@ -849,10 +831,10 @@ class PackageBuilder:
         # Create file list for rsync
         file_list = " ".join([shlex.quote(str(f)) for f in sanitized_files])
         
-        # Use rsync with explicit SSH command
+        # Use rsync with explicit SSH command - RSYNC MANDATORY AS REQUESTED
         rsync_cmd = f"rsync -avz --progress --timeout=300 --partial --verbose --rsh=\"ssh {' '.join(self.ssh_options)} -i /home/builder/.ssh/id_ed25519\" {file_list} {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/"
         
-        logger.info(f"Running rsync command (simplified): rsync -avz --progress --timeout=300 --rsh=\"ssh ...\" [files] {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
+        logger.info(f"Running rsync command: rsync -avz --progress --timeout=300 --rsh=\"ssh ...\" [files] {self.vps_user}@{self.vps_host}:{remote_dir_escaped}/")
         
         result = self.run_cmd(rsync_cmd, check=False, capture=True)
         
@@ -1181,6 +1163,10 @@ class PackageBuilder:
                 print("="*60)
                 
                 if self.update_database():
+                    # Test connection but don't fail if test fails
+                    self.test_rsync_connection()
+                    
+                    # ALWAYS try to upload even if test failed
                     if self.upload_packages():
                         self.cleanup_old_packages()
                         
