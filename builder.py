@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Javított változat pacman hibák kezelésére
+Manjaro Package Builder - Javított változat pacman repository hibák kezelésére
 """
 
 import os
@@ -79,6 +79,9 @@ class PackageBuilder:
             "aur_success": 0,
             "local_success": 0,
         }
+        
+        # Disable our repository in pacman.conf to avoid 404 errors
+        self._disable_our_repo_in_pacman()
     
     def _get_repo_root(self):
         """Get the repository root directory reliably."""
@@ -112,7 +115,7 @@ class PackageBuilder:
         # Get repo name from env, then config, then default
         env_repo_name = os.getenv('REPO_NAME')
         if HAS_CONFIG_FILES:
-            config_repo_name = getattr(config, 'REPO_DB_NAME, 'manjaro-awesome')
+            config_repo_name = getattr(config, 'REPO_DB_NAME', 'manjaro-awesome')
             self.repo_name = env_repo_name if env_repo_name else config_repo_name
         else:
             self.repo_name = env_repo_name if env_repo_name else 'manjaro-awesome'
@@ -133,47 +136,46 @@ class PackageBuilder:
         if self.repo_server_url:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
-        
-        # Pacman repository configuráció letiltása a build alatt
-        self._disable_pacman_repo_during_build()
     
-    def _disable_pacman_repo_during_build(self):
-        """Temporarily disable our repo in pacman.conf to avoid 404 errors."""
-        print("\n🔧 Temporarily disabling our repository in pacman.conf to avoid 404 errors...")
+    def _disable_our_repo_in_pacman(self):
+        """Disable our repository in pacman.conf to avoid 404 errors."""
+        print("\n🔧 Disabling our repository in pacman.conf to avoid 404 errors...")
         
-        # Backup pacman.conf
         pacman_conf = Path("/etc/pacman.conf")
         if pacman_conf.exists():
-            backup_path = pacman_conf.with_suffix('.conf.backup')
-            shutil.copy2(pacman_conf, backup_path)
-            logger.info(f"Backed up pacman.conf to {backup_path}")
-            
-            # Comment out our repository section if it exists
-            with open(pacman_conf, 'r') as f:
-                lines = f.readlines()
-            
-            new_lines = []
-            in_our_section = False
-            for line in lines:
-                if line.strip().startswith(f"[{self.repo_name}]"):
-                    # Comment out the section header
-                    new_lines.append(f"#{line}")
-                    in_our_section = True
-                elif in_our_section and line.strip().startswith('['):
-                    # New section started, end our section
-                    new_lines.append(line)
-                    in_our_section = False
-                elif in_our_section:
-                    # Comment out lines in our section
-                    new_lines.append(f"#{line}")
-                else:
-                    new_lines.append(line)
-            
-            # Write back
-            with open(pacman_conf, 'w') as f:
-                f.writelines(new_lines)
-            
-            logger.info(f"Repository '{self.repo_name}' temporarily disabled in pacman.conf")
+            try:
+                with open(pacman_conf, 'r') as f:
+                    content = f.read()
+                
+                # Kommentáljuk ki a saját repository-nkat
+                lines = content.split('\n')
+                new_lines = []
+                in_our_section = False
+                
+                for line in lines:
+                    if line.strip().startswith(f"[{self.repo_name}]"):
+                        # Kommentáljuk ki a repository szakaszt
+                        new_lines.append(f"# {line}")
+                        in_our_section = True
+                    elif in_our_section and line.strip().startswith('['):
+                        # Új szakasz kezdődik, kilépünk
+                        new_lines.append(line)
+                        in_our_section = False
+                    elif in_our_section:
+                        # Kommentáljuk ki a sorokat a szakaszon belül
+                        new_lines.append(f"# {line}")
+                    else:
+                        new_lines.append(line)
+                
+                with open(pacman_conf, 'w') as f:
+                    f.write('\n'.join(new_lines))
+                
+                print(f"✅ Repository '{self.repo_name}' disabled in pacman.conf")
+                
+            except Exception as e:
+                print(f"⚠️ Could not modify pacman.conf: {e}")
+        else:
+            print("⚠️ pacman.conf not found")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True):
         """Run command with error handling."""
@@ -500,9 +502,9 @@ class PackageBuilder:
         
         logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
         
-        # Refresh pacman database (ignore errors)
-        logger.info("Refreshing pacman database (core, extra, community only)...")
-        self.run_cmd("sudo pacman -Sy --noconfirm core extra community", check=False)
+        # Refresh pacman database WITHOUT our repository to avoid 404 errors
+        logger.info("Refreshing pacman database (ignoring our repository)...")
+        self.run_cmd("sudo pacman -Sy --needed --noconfirm", check=False)
         
         # Try to install each dependency
         installed_count = 0
