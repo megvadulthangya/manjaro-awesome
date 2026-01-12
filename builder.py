@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Manjaro Package Builder - Dinamikus repository kezeléssel
-Javítva: pacman.conf kezelés root jogosultsággal, repository állapotkezelés javítva
+Javítva: sudo cd probléma, munkakönyvtár-kezelés javítva
 """
 
 import os
@@ -153,30 +153,59 @@ class PackageBuilder:
         if cwd is None:
             cwd = self.repo_root
         
-        # If user is specified, prepend sudo -u
+        # If user is specified, we need to handle it differently
         if user:
-            cmd = f"sudo -u {user} {cmd}"
-        
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=cwd,
-                shell=shell,
-                capture_output=capture,
-                text=True,
-                check=check
-            )
-            return result
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed: {cmd}")
-            if e.stderr:
-                logger.error(f"Error: {e.stderr[:200]}")
-            if check:
-                raise
-            return e
+            # For builder user, we run the command directly with subprocess and set user
+            # by changing to that user's environment
+            env = os.environ.copy()
+            env['HOME'] = f'/home/{user}'
+            
+            try:
+                # Use su to switch user
+                if shell:
+                    # For shell commands, wrap in bash -c
+                    full_cmd = ['su', '-', user, '-c', f'cd "{cwd}" && {cmd}']
+                else:
+                    # For non-shell commands
+                    full_cmd = ['su', '-', user, '-c', ' '.join(cmd)]
+                
+                result = subprocess.run(
+                    full_cmd,
+                    capture_output=capture,
+                    text=True,
+                    check=check,
+                    env=env
+                )
+                return result
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Command failed: {cmd}")
+                if e.stderr:
+                    logger.error(f"Error: {e.stderr[:200]}")
+                if check:
+                    raise
+                return e
+        else:
+            # Run as current user
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=cwd,
+                    shell=shell,
+                    capture_output=capture,
+                    text=True,
+                    check=check
+                )
+                return result
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Command failed: {cmd}")
+                if e.stderr:
+                    logger.error(f"Error: {e.stderr[:200]}")
+                if check:
+                    raise
+                return e
     
     def _manage_repository_state(self, enable=True):
-        """Enable or disable our repository in pacman.conf dynamically - ROOT permissions required."""
+        """Enable or disable our repository in pacman.conf dynamically."""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -192,12 +221,12 @@ class PackageBuilder:
             repo_section = f"[{self.repo_name}]"
             if repo_section not in content:
                 logger.info(f"Repository {self.repo_name} not found in pacman.conf, adding...")
-                # Add our repository section before [community]
+                # Add our repository section
                 lines = content.split('\n')
                 new_lines = []
                 for line in lines:
                     new_lines.append(line)
-                    if line.strip() == "[community]":
+                    if line.strip() == "[extra]":
                         new_lines.append(f"\n# Custom repository: {self.repo_name}")
                         new_lines.append(f"{'#' if not enable else ''}[{self.repo_name}]")
                         new_lines.append(f"{'#' if not enable else ''}Server = {self.repo_server_url}")
@@ -449,8 +478,8 @@ class PackageBuilder:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && makepkg -od --noconfirm", 
-                                        user="builder", check=False, capture=True)
+            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
+                                        cwd=pkg_dir, user="builder", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
@@ -460,7 +489,8 @@ class PackageBuilder:
             
             print("Building package...")
             build_result = self.run_cmd(
-                f"cd {pkg_dir} && makepkg -si --noconfirm --clean --nocheck",
+                f"makepkg -si --noconfirm --clean --nocheck",
+                cwd=pkg_dir,
                 user="builder",
                 capture=True,
                 check=False
@@ -632,8 +662,8 @@ class PackageBuilder:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"cd {pkg_dir} && makepkg -od --noconfirm", 
-                                        user="builder", check=False, capture=True)
+            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
+                                        cwd=pkg_dir, user="builder", check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
@@ -648,7 +678,8 @@ class PackageBuilder:
                 logger.info("GTK2: Skipping check step (long)")
             
             build_result = self.run_cmd(
-                f"cd {pkg_dir} && makepkg {makepkg_flags}",
+                f"makepkg {makepkg_flags}",
+                cwd=pkg_dir,
                 user="builder",
                 capture=True,
                 check=False
