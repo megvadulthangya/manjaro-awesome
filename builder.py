@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Manjaro Package Builder - Dinamikus repository kezeléssel
-Javítva: sudo cd probléma, munkakönyvtár-kezelés javítva
+Javítva: AUR klónozás, builder felhasználó kezelés
 """
 
 import os
@@ -89,6 +89,8 @@ class PackageBuilder:
             "start_time": time.time(),
             "aur_success": 0,
             "local_success": 0,
+            "aur_failed": 0,
+            "local_failed": 0,
         }
     
     def _get_repo_root(self):
@@ -155,22 +157,23 @@ class PackageBuilder:
         
         # If user is specified, we need to handle it differently
         if user:
-            # For builder user, we run the command directly with subprocess and set user
-            # by changing to that user's environment
+            # Use sudo -u with env variables
             env = os.environ.copy()
             env['HOME'] = f'/home/{user}'
+            env['USER'] = user
             
             try:
-                # Use su to switch user
+                # Build the command with sudo -u
+                sudo_cmd = ['sudo', '-u', user]
                 if shell:
-                    # For shell commands, wrap in bash -c
-                    full_cmd = ['su', '-', user, '-c', f'cd "{cwd}" && {cmd}']
+                    # For shell commands, use bash -c
+                    sudo_cmd.extend(['bash', '-c', f'cd "{cwd}" && {cmd}'])
                 else:
-                    # For non-shell commands
-                    full_cmd = ['su', '-', user, '-c', ' '.join(cmd)]
+                    # For non-shell commands, add the command directly
+                    sudo_cmd.extend(cmd)
                 
                 result = subprocess.run(
-                    full_cmd,
+                    sudo_cmd,
                     capture_output=capture,
                     text=True,
                     check=check,
@@ -386,11 +389,15 @@ class PackageBuilder:
         for pkg in aur_packages:
             if self._build_single_package(pkg, is_aur=True):
                 self.stats["aur_success"] += 1
+            else:
+                self.stats["aur_failed"] += 1
         
         print(f"\n🔨 Building {len(local_packages)} local packages")
         for pkg in local_packages:
             if self._build_single_package(pkg, is_aur=False):
                 self.stats["local_success"] += 1
+            else:
+                self.stats["local_failed"] += 1
         
         return self.stats["aur_success"] + self.stats["local_success"]
     
@@ -414,30 +421,58 @@ class PackageBuilder:
         
         print(f"Cloning {pkg_name} from AUR...")
         
+        # Try different AUR URLs
         aur_urls = [
             f"https://aur.archlinux.org/{pkg_name}.git",
-            f"https://aur.archlinux.org/{pkg_name}",
-            f"git://aur.archlinux.org/{pkg_name}.git"
+            f"git://aur.archlinux.org/{pkg_name}.git",
         ]
         
         clone_success = False
         for aur_url in aur_urls:
+            logger.info(f"Trying AUR URL: {aur_url}")
             result = self.run_cmd(
-                f"git clone {aur_url} {pkg_dir}",
-                user="builder",
+                f"git clone --depth 1 {aur_url} {pkg_dir}",
                 check=False
             )
             if result and result.returncode == 0:
                 clone_success = True
+                logger.info(f"Successfully cloned {pkg_name} from {aur_url}")
                 break
             else:
                 if pkg_dir.exists():
                     shutil.rmtree(pkg_dir, ignore_errors=True)
+                logger.warning(f"Failed to clone from {aur_url}: {result.stderr[:100] if result and result.stderr else 'Unknown error'}")
         
         if not clone_success:
             logger.error(f"Failed to clone {pkg_name} from any AUR URL")
+            # Try one more time with a different approach
+            logger.info("Trying alternative cloning method...")
+            try:
+                # Use wget to download the AUR package as tar.gz
+                aur_tar_url = f"https://aur.archlinux.org/cgit/aur.git/snapshot/{pkg_name}.tar.gz"
+                tar_file = aur_dir / f"{pkg_name}.tar.gz"
+                
+                result = self.run_cmd(f"wget -q -O {tar_file} {aur_tar_url}", check=False)
+                if result and result.returncode == 0:
+                    # Extract the tar.gz
+                    self.run_cmd(f"mkdir -p {pkg_dir}", check=False)
+                    self.run_cmd(f"tar -xzf {tar_file} -C {aur_dir}", check=False)
+                    # Move contents to pkg_dir
+                    extracted_dir = aur_dir / pkg_name
+                    if extracted_dir.exists() and extracted_dir != pkg_dir:
+                        if pkg_dir.exists():
+                            shutil.rmtree(pkg_dir)
+                        shutil.move(str(extracted_dir), str(pkg_dir))
+                    clone_success = True
+                    logger.info(f"Successfully downloaded and extracted {pkg_name}")
+            except Exception as e:
+                logger.error(f"Alternative method also failed: {e}")
+        
+        if not clone_success:
+            logger.error(f"⚠️ Skipping {pkg_name} - cannot clone from AUR")
             return False
         
+        # Set correct permissions
         self.run_cmd(f"chown -R builder:builder {pkg_dir}", check=False)
         
         pkgbuild = pkg_dir / "PKGBUILD"
@@ -479,7 +514,7 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, user="builder", check=False, capture=True)
+                                        cwd=pkg_dir, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
@@ -491,7 +526,6 @@ class PackageBuilder:
             build_result = self.run_cmd(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
-                user="builder",
                 capture=True,
                 check=False
             )
@@ -500,7 +534,7 @@ class PackageBuilder:
                 moved = False
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
-                    self.run_cmd(f"mv {pkg_file} {dest}", user="builder", check=False)
+                    shutil.move(str(pkg_file), str(dest))
                     self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
@@ -529,9 +563,10 @@ class PackageBuilder:
         
         if pkg_name in self.special_dependencies:
             for dep in self.special_dependencies[pkg_name]:
+                logger.info(f"Installing special dependency: {dep}")
                 self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
         
-        self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, user="builder", check=False)
+        self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
         
         srcinfo = pkg_dir / ".SRCINFO"
         if not srcinfo.exists():
@@ -554,7 +589,6 @@ class PackageBuilder:
         logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
         
         logger.info("Refreshing pacman database...")
-        # First try without our repository to avoid issues
         self.run_cmd("pacman -Sy --noconfirm", check=False)
         
         installed_count = 0
@@ -576,7 +610,7 @@ class PackageBuilder:
             if result.returncode != 0:
                 logger.info(f"Trying yay for {dep_clean}...")
                 yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
-                                         user="builder", check=False, capture=True)
+                                         check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
@@ -619,7 +653,7 @@ class PackageBuilder:
             return None
     
     def _build_local_package(self, pkg_name):
-        """Build local package."""
+        """Build local package - simpler version without builder user."""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -663,7 +697,7 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, user="builder", check=False, capture=True)
+                                        cwd=pkg_dir, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
                 return False
@@ -680,7 +714,6 @@ class PackageBuilder:
             build_result = self.run_cmd(
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
-                user="builder",
                 capture=True,
                 check=False
             )
@@ -690,7 +723,7 @@ class PackageBuilder:
                 built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
-                    self.run_cmd(f"mv {pkg_file} {dest}", user="builder", check=False)
+                    shutil.move(str(pkg_file), str(dest))
                     self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
@@ -790,7 +823,7 @@ class PackageBuilder:
             if result.returncode != 0:
                 logger.info(f"Trying yay for {dep_clean}...")
                 yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
-                                         user="builder", check=False, capture=True)
+                                         check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
@@ -1161,9 +1194,17 @@ class PackageBuilder:
                 else:
                     print("\n❌ Database update failed!")
             else:
-                print("\n✅ All packages are up to date!")
-                if self.skipped_packages:
-                    print(f"Skipped packages: {len(self.skipped_packages)}")
+                print("\n📊 Build summary:")
+                print(f"   AUR packages built: {self.stats['aur_success']}")
+                print(f"   AUR packages failed: {self.stats['aur_failed']}")
+                print(f"   Local packages built: {self.stats['local_success']}")
+                print(f"   Local packages failed: {self.stats['local_failed']}")
+                print(f"   Total skipped: {len(self.skipped_packages)}")
+                
+                if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
+                    print("⚠️ Some packages failed to build")
+                else:
+                    print("✅ All packages are up to date or built successfully!")
             
             elapsed = time.time() - self.stats["start_time"]
             
@@ -1171,8 +1212,8 @@ class PackageBuilder:
             print("📊 BUILD SUMMARY")
             print("="*60)
             print(f"Duration: {elapsed:.1f}s")
-            print(f"AUR packages:    {self.stats['aur_success']}")
-            print(f"Local packages:  {self.stats['local_success']}")
+            print(f"AUR packages:    {self.stats['aur_success']} (failed: {self.stats['aur_failed']})")
+            print(f"Local packages:  {self.stats['local_success']} (failed: {self.stats['local_failed']})")
             print(f"Total built:     {total_built}")
             print(f"Skipped:         {len(self.skipped_packages)}")
             print("="*60)
