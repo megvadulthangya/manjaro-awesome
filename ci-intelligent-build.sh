@@ -26,6 +26,7 @@ AUR_PACKAGES=(
     "i3lock-color"
     "raw-thumbnailer"
     "gsconnect"
+    "gtkd"
     "awesome-git"
     "tilix-git"
     "tamzen-font"
