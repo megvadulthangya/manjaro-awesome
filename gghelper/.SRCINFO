@@ -8,7 +8,9 @@ pkgbase = gghelper
 	makedepends = git
 	depends = python
 	depends = git
-	source = https://github.com/megvadulthangya/gghelper/archive/refs/tags/v2.0.0.tar.gz
+	provides = gghelper
+	conflicts = gghelper
+	source = git+https://github.com/megvadulthangya/gghelper.git
 	sha256sums = SKIP
 
 pkgname = gghelper
