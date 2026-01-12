@@ -22,6 +22,7 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "libinput-gestures",
+    "gtkd",
     "qt5-styleplugins",
     "urxvt-resize-font-git",
     "i3lock-color",
