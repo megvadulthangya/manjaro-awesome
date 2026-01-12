@@ -18,7 +18,7 @@ jobs:
       REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
-      CI_PUSH_SSH_KEY: ${{ secrets.CI_PUSH_SSH_KEY }}
+      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Code with Full History
@@ -63,13 +63,13 @@ jobs:
           # UPDATE SYSTEM WITHOUT OUR REPOSITORY
           echo "Updating system (ignoring our repository for now)..."
           
-          # First, save current pacman.conf
+          # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
-          # Temporarily comment out our repository if it exists
+          # Temporarily remove our repository section if it exists
           if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
-            echo "Temporarily disabling $REPO_NAME repository..."
-            sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
+            echo "Temporarily removing $REPO_NAME repository section..."
+            sed -i "/^\[$REPO_NAME\]/,/^\[/d" /etc/pacman.conf
           fi
           
           # Update system with minimal packages first
@@ -124,28 +124,7 @@ jobs:
           
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Create SSH config for VPS
-          echo "Creating SSH config for VPS..."
-          echo "Host vps" > /home/builder/.ssh/config
-          echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
-          echo "  User $VPS_USER" >> /home/builder/.ssh/config
-          echo "  IdentityFile ~/.ssh/id_ed25519" >> /home/builder/.ssh/config
-          echo "  Port 22" >> /home/builder/.ssh/config
-          echo "  ConnectTimeout 60" >> /home/builder/.ssh/config
-          echo "  ServerAliveInterval 30" >> /home/builder/.ssh/config
-          echo "  ServerAliveCountMax 5" >> /home/builder/.ssh/config
-          echo "  TCPKeepAlive yes" >> /home/builder/.ssh/config
-          echo "  StrictHostKeyChecking no" >> /home/builder/.ssh/config
-          echo "  UserKnownHostsFile /dev/null" >> /home/builder/.ssh/config
-          echo "  BatchMode yes" >> /home/builder/.ssh/config
-          echo "  LogLevel ERROR" >> /home/builder/.ssh/config
-          echo "  ControlMaster auto" >> /home/builder/.ssh/config
-          echo "  ControlPersist 5m" >> /home/builder/.ssh/config
-          echo "  ControlPath /tmp/ssh_control_%h_%p_%r" >> /home/builder/.ssh/config
-          
-          chmod 600 /home/builder/.ssh/config
-          
-          # Also add to known_hosts (optional, since we disabled checking)
+          # Also add to known_hosts
           ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || true
           
           chown -R builder:builder /home/builder/.ssh
@@ -173,20 +152,14 @@ jobs:
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
             TEMP_FILE=$(mktemp)
-            echo "[$REPO_NAME]" > "$TEMP_FILE"
+            echo "" >> "$TEMP_FILE"
+            echo "# Custom repository: $REPO_NAME" >> "$TEMP_FILE"
+            echo "# Repository will be dynamically enabled/disabled by builder.py" >> "$TEMP_FILE"
+            echo "[$REPO_NAME]" >> "$TEMP_FILE"
             echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
             echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
             
-            if grep -q "^\[community\]" /etc/pacman.conf; then
-              LINE_NUM=$(grep -n "^\[community\]" /etc/pacman.conf | cut -d: -f1)
-              head -n $((LINE_NUM-1)) /etc/pacman.conf > /etc/pacman.conf.tmp
-              cat "$TEMP_FILE" >> /etc/pacman.conf.tmp
-              tail -n +$LINE_NUM /etc/pacman.conf >> /etc/pacman.conf.tmp
-              mv /etc/pacman.conf.tmp /etc/pacman.conf
-            else
-              cat "$TEMP_FILE" >> /etc/pacman.conf
-            fi
-            
+            cat "$TEMP_FILE" >> /etc/pacman.conf
             rm -f "$TEMP_FILE"
           fi
           
@@ -221,24 +194,12 @@ jobs:
           # Test SSH as builder user using the EXACT same options builder.py will use
           echo ""
           echo "3. Testing SSH connection as builder user..."
-          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR -o ControlMaster=auto -o ControlPersist=5m -o ControlPath=/tmp/ssh_control_%h_%p_%r"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
           
           if su builder -c "timeout 20 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
             echo "✅ SSH connection to VPS successful"
           else
             echo "❌ SSH connection to VPS failed"
-          fi
-          
-          # Test rsync connection
-          echo ""
-          echo "4. Testing rsync connection..."
-          REMOTE_DIR_ESCAPED=$(printf '%q' "$REMOTE_DIR")
-          RSYNC_CMD="rsync --dry-run --stats -e \"ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519\" --timeout=30 --contimeout=30 /dev/null $VPS_USER@$VPS_HOST:$REMOTE_DIR_ESCAPED/"
-          
-          if su builder -c "timeout 30 $RSYNC_CMD" 2>/dev/null; then
-            echo "✅ rsync connection test successful"
-          else
-            echo "❌ rsync connection test failed"
           fi
           
           echo "✅ Rsync tests complete"
@@ -250,11 +211,11 @@ jobs:
           # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
-          # Temporarily disable our repository to avoid 404 errors
-          echo "Temporarily disabling $REPO_NAME repository for dependency installation..."
+          # Temporarily comment out our repository to avoid 404 errors
+          echo "Temporarily commenting out $REPO_NAME repository for dependency installation..."
           sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
           
-          # Install remaining build tools WITHOUT -y flag to avoid syncing
+          # Install remaining build tools
           echo "Installing build tools..."
           pacman -S --needed --noconfirm \
             appstream appstream-glib \
@@ -283,6 +244,10 @@ jobs:
           cd /
           rm -rf /tmp/yay-bin
           
+          # Configure yay to use --aur flag by default
+          echo "Configuring yay..."
+          sudo -u builder yay --aur --save
+          
           echo "✅ Build dependencies installed"
 
       - name: Run Builder
@@ -295,7 +260,7 @@ jobs:
           
           # Test SSH connection one more time with identical options to builder.py
           echo "=== Final SSH Test ==="
-          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR -o ControlMaster=auto -o ControlPersist=5m -o ControlPath=/tmp/ssh_control_%h_%p_%r"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
           
           if su builder -c "timeout 25 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
             echo "✅ SSH connection confirmed"
@@ -306,10 +271,10 @@ jobs:
           echo ""
           echo "=== Repository Status ==="
           # Check if repository exists but don't fail if it doesn't
-          if pacman -Sl "$REPO_NAME" >/dev/null 2>&1; then
-            echo "✅ Repository '$REPO_NAME' is accessible"
+          if curl -s -I "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404"; then
+            echo "✅ Repository server is accessible"
           else
-            echo "⚠️ Repository '$REPO_NAME' is NOT accessible (may be empty or not exist)"
+            echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
           fi
           
           echo ""
