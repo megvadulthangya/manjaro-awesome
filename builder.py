@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Manjaro Package Builder - Dinamikus repository kezeléssel
-Javítva: AUR klónozás, builder felhasználó kezelés
+Javítva: Függőségek helyes kinyerése, pacman elsőbbsége
 """
 
 import os
@@ -558,7 +558,7 @@ class PackageBuilder:
             return False
     
     def _install_aur_deps(self, pkg_dir, pkg_name):
-        """Install dependencies for AUR package."""
+        """Install dependencies for AUR package using .SRCINFO file."""
         print(f"Checking dependencies for {pkg_name}...")
         
         if pkg_name in self.special_dependencies:
@@ -566,44 +566,74 @@ class PackageBuilder:
                 logger.info(f"Installing special dependency: {dep}")
                 self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
         
-        self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
+        # Generate .SRCINFO file
+        srcinfo_result = self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
         
         srcinfo = pkg_dir / ".SRCINFO"
         if not srcinfo.exists():
-            logger.warning(f"No .SRCINFO for {pkg_name}")
+            logger.warning(f"No .SRCINFO for {pkg_name}, trying to parse PKGBUILD directly")
+            self._parse_pkgbuild_deps(pkg_dir, pkg_name)
             return
         
         deps = []
+        makedeps = []
+        checkdeps = []
+        
         with open(srcinfo, 'r') as f:
+            current_section = None
             for line in f:
                 line = line.strip()
-                if line.startswith("depends =") or line.startswith("makedepends ="):
+                if line.startswith('pkgbase =') or line.startswith('pkgname ='):
+                    # Skip these lines
+                    continue
+                elif line.startswith('pkgdesc =') or line.startswith('url ='):
+                    # Skip these too
+                    continue
+                elif line.startswith('depends ='):
                     dep = line.split('=', 1)[1].strip()
-                    if dep:
+                    if dep and not any(x in dep for x in ['$', '{', '}']):
                         deps.append(dep)
+                elif line.startswith('makedepends ='):
+                    dep = line.split('=', 1)[1].strip()
+                    if dep and not any(x in dep for x in ['$', '{', '}']):
+                        makedeps.append(dep)
+                elif line.startswith('checkdepends ='):
+                    dep = line.split('=', 1)[1].strip()
+                    if dep and not any(x in dep for x in ['$', '{', '}']):
+                        checkdeps.append(dep)
         
-        if not deps:
+        all_deps = deps + makedeps + checkdeps
+        
+        if not all_deps:
             logger.info(f"No dependencies for {pkg_name}")
             return
         
-        logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
+        logger.info(f"Found {len(all_deps)} dependencies: {', '.join(all_deps[:5])}{'...' if len(all_deps) > 5 else ''}")
         
         logger.info("Refreshing pacman database...")
         self.run_cmd("pacman -Sy --noconfirm", check=False)
         
         installed_count = 0
-        for dep in deps:
+        for dep in all_deps:
+            # Clean dependency name (remove version constraints)
             dep_clean = re.sub(r'[<=>].*', '', dep).strip()
             
             if not dep_clean:
                 continue
             
+            # Skip special variables
+            if any(x in dep_clean for x in ['$', '{', '}', '(', ')']):
+                logger.debug(f"Skipping variable dependency: {dep_clean}")
+                continue
+            
+            # Check if already installed
             check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
             if check_result.returncode == 0:
                 logger.debug(f"Dependency already installed: {dep_clean}")
                 installed_count += 1
                 continue
             
+            # Try pacman first
             print(f"Installing {dep_clean} via pacman...")
             result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
             
@@ -618,7 +648,84 @@ class PackageBuilder:
             else:
                 installed_count += 1
         
-        logger.info(f"Installed {installed_count}/{len(deps)} dependencies")
+        logger.info(f"Installed {installed_count}/{len(all_deps)} dependencies")
+    
+    def _parse_pkgbuild_deps(self, pkg_dir, pkg_name):
+        """Parse dependencies directly from PKGBUILD when .SRCINFO is not available."""
+        pkgbuild_path = pkg_dir / "PKGBUILD"
+        if not pkgbuild_path.exists():
+            return
+        
+        try:
+            with open(pkgbuild_path, 'r') as f:
+                content = f.read()
+            
+            # Simple parsing for depends and makedepends arrays
+            # This is a basic parser and might not handle all edge cases
+            deps = []
+            
+            # Look for depends=(
+            dep_match = re.search(r'depends\s*=\s*\((.*?)\)', content, re.DOTALL)
+            if dep_match:
+                dep_content = dep_match.group(1)
+                # Split by lines and clean
+                for line in dep_content.split('\n'):
+                    line = line.strip().strip("'\"")
+                    if line and not line.startswith('#') and not any(x in line for x in ['$', '{', '}']):
+                        deps.append(line)
+            
+            # Look for makedepends=(
+            makedep_match = re.search(r'makedepends\s*=\s*\((.*?)\)', content, re.DOTALL)
+            if makedep_match:
+                makedep_content = makedep_match.group(1)
+                for line in makedep_content.split('\n'):
+                    line = line.strip().strip("'\"")
+                    if line and not line.startswith('#') and not any(x in line for x in ['$', '{', '}']):
+                        deps.append(line)
+            
+            if not deps:
+                logger.info(f"No dependencies found in PKGBUILD for {pkg_name}")
+                return
+            
+            logger.info(f"Found {len(deps)} dependencies from PKGBUILD: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
+            
+            logger.info("Refreshing pacman database...")
+            self.run_cmd("pacman -Sy --noconfirm", check=False)
+            
+            installed_count = 0
+            for dep in deps:
+                # Clean dependency name
+                dep_clean = re.sub(r'[<=>].*', '', dep).strip()
+                
+                if not dep_clean:
+                    continue
+                
+                # Check if already installed
+                check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
+                if check_result.returncode == 0:
+                    logger.debug(f"Dependency already installed: {dep_clean}")
+                    installed_count += 1
+                    continue
+                
+                # Try pacman first
+                print(f"Installing {dep_clean} via pacman...")
+                result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+                
+                if result.returncode != 0:
+                    logger.info(f"Trying yay for {dep_clean}...")
+                    yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
+                                             check=False, capture=True)
+                    if yay_result.returncode == 0:
+                        installed_count += 1
+                    else:
+                        logger.warning(f"Failed to install dependency: {dep_clean}")
+                else:
+                    installed_count += 1
+            
+            logger.info(f"Installed {installed_count}/{len(deps)} dependencies")
+            
+        except Exception as e:
+            logger.error(f"Failed to parse PKGBUILD for dependencies: {e}")
     
     def _extract_package_metadata(self, pkg_file_path):
         """Extract metadata from built package file for hokibot observation."""
@@ -758,80 +865,20 @@ class PackageBuilder:
             return False
     
     def _install_local_deps(self, pkg_dir, pkg_name):
-        """Install dependencies for local package."""
+        """Install dependencies for local package using .SRCINFO file."""
         print(f"Checking dependencies for {pkg_name}...")
         
-        # Parse dependencies from PKGBUILD
-        deps = []
-        pkgbuild_path = pkg_dir / "PKGBUILD"
+        # First try to generate .SRCINFO
+        srcinfo_result = self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
         
-        try:
-            with open(pkgbuild_path, 'r') as f:
-                content = f.read()
-            
-            # Extract depends and makedepends
-            lines = content.split('\n')
-            current_section = None
-            
-            for line in lines:
-                line = line.strip()
-                if line.startswith('depends=('):
-                    current_section = 'depends'
-                    continue
-                elif line.startswith('makedepends=('):
-                    current_section = 'makedepends'
-                    continue
-                elif line.startswith(')'):
-                    current_section = None
-                    continue
-                
-                if current_section and line and not line.startswith('#'):
-                    # Remove quotes and strip
-                    dep = line.strip("'\" ").strip()
-                    if dep:
-                        deps.append(dep)
-        
-        except Exception as e:
-            logger.warning(f"Could not parse PKGBUILD for dependencies: {e}")
+        srcinfo = pkg_dir / ".SRCINFO"
+        if srcinfo.exists():
+            # Use .SRCINFO parsing (same as AUR)
+            self._install_aur_deps(pkg_dir, pkg_name)
             return
         
-        if not deps:
-            logger.info(f"No dependencies for {pkg_name}")
-            return
-        
-        logger.info(f"Found {len(deps)} dependencies: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
-        
-        logger.info("Refreshing pacman database...")
-        self.run_cmd("pacman -Sy --noconfirm", check=False)
-        
-        installed_count = 0
-        for dep in deps:
-            dep_clean = re.sub(r'[<=>].*', '', dep).strip()
-            
-            if not dep_clean:
-                continue
-            
-            check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
-            if check_result.returncode == 0:
-                logger.debug(f"Dependency already installed: {dep_clean}")
-                installed_count += 1
-                continue
-            
-            print(f"Installing {dep_clean} via pacman...")
-            result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
-            
-            if result.returncode != 0:
-                logger.info(f"Trying yay for {dep_clean}...")
-                yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
-                                         check=False, capture=True)
-                if yay_result.returncode == 0:
-                    installed_count += 1
-                else:
-                    logger.warning(f"Failed to install dependency: {dep_clean}")
-            else:
-                installed_count += 1
-        
-        logger.info(f"Installed {installed_count}/{len(deps)} dependencies")
+        # Fall back to PKGBUILD parsing
+        self._parse_pkgbuild_deps(pkg_dir, pkg_name)
     
     def update_database(self):
         """Update repository database."""
