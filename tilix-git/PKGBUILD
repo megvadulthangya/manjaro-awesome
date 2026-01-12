@@ -65,4 +65,3 @@ check() {
 package() {
   meson install -C build --no-rebuild --destdir "$pkgdir"
 }
-Copyright © 2004-2025 aurweb Development Team – AUR packages are user produced content. Any use of the provided files is at your own risk.
