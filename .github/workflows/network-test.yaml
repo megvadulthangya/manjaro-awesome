@@ -74,38 +74,40 @@ jobs:
           echo "=== SSH KULCS INFO ==="
           ssh-keygen -l -f /home/builder/.ssh/id_ed25519
           
-          # SSH config létrehozása - KIJAVÍTVA A SZINTAXIST
-          cat > /home/builder/.ssh/config << 'EOF'
-Host ${VPS_HOST}
-    HostName ${VPS_HOST}
-    User ${VPS_USER}
-    IdentityFile ~/.ssh/id_ed25519
-    StrictHostKeyChecking no
-    ConnectTimeout 30
-    ServerAliveInterval 15
-    ServerAliveCountMax 3
-    LogLevel DEBUG3
-EOF
-          
-          # Változók behelyettesítése
-          sed -i "s/\${VPS_HOST}/$VPS_HOST/g" /home/builder/.ssh/config
-          sed -i "s/\${VPS_USER}/$VPS_USER/g" /home/builder/.ssh/config
+          # SSH config létrehozása - EGYSZERŰBB MÓDON, HERE-DOC NÉLKÜL
+          echo "Host $VPS_HOST" > /home/builder/.ssh/config
+          echo "  HostName $VPS_HOST" >> /home/builder/.ssh/config
+          echo "  User $VPS_USER" >> /home/builder/.ssh/config
+          echo "  IdentityFile ~/.ssh/id_ed25519" >> /home/builder/.ssh/config
+          echo "  StrictHostKeyChecking no" >> /home/builder/.ssh/config
+          echo "  ConnectTimeout 30" >> /home/builder/.ssh/config
+          echo "  ServerAliveInterval 15" >> /home/builder/.ssh/config
+          echo "  ServerAliveCountMax 3" >> /home/builder/.ssh/config
+          echo "  LogLevel DEBUG3" >> /home/builder/.ssh/config
           
           echo "Adding host to known_hosts..."
           ssh-keyscan -H $VPS_HOST >> /home/builder/.ssh/known_hosts 2>/dev/null
           
           chown -R builder:builder /home/builder/.ssh
           
-          # Environment változók fájlba mentése
-          cat > /home/builder/env_vars.sh << EOF
-export REMOTE_DIR="$REMOTE_DIR"
-export VPS_USER="$VPS_USER"
-export VPS_HOST="$VPS_HOST"
-export TEST_FILE_SIZE_MB="${{ github.event.inputs.test_file_size_mb }}"
-export USE_COMPRESSION="${{ github.event.inputs.use_compression }}"
-export BUILD_TIMESTAMP="\$(date +%s)"
-export TEST_PREFIX="github_test_\${BUILD_TIMESTAMP}"
-EOF
+          # Environment változók fájlba mentése - itt használhatunk here-doc-ot mert nincs benne $VPS_HOST stb.
+          cat > /home/builder/env_vars.sh << 'EOF'
+          # Environment variables for test script
+          export REMOTE_DIR="$REMOTE_DIR"
+          export VPS_USER="$VPS_USER"
+          export VPS_HOST="$VPS_HOST"
+          export TEST_FILE_SIZE_MB="$TEST_FILE_SIZE_MB"
+          export USE_COMPRESSION="$USE_COMPRESSION"
+          export BUILD_TIMESTAMP="$(date +%s)"
+          export TEST_PREFIX="github_test_${BUILD_TIMESTAMP}"
+          EOF
+          
+          # A változók behelyettesítése
+          sed -i "s#\$REMOTE_DIR#$REMOTE_DIR#g" /home/builder/env_vars.sh
+          sed -i "s#\$VPS_USER#$VPS_USER#g" /home/builder/env_vars.sh
+          sed -i "s#\$VPS_HOST#$VPS_HOST#g" /home/builder/env_vars.sh
+          sed -i "s#\$TEST_FILE_SIZE_MB#${{ github.event.inputs.test_file_size_mb }}#g" /home/builder/env_vars.sh
+          sed -i "s#\$USE_COMPRESSION#${{ github.event.inputs.use_compression }}#g" /home/builder/env_vars.sh
           
           chown builder:builder /home/builder/env_vars.sh
           
@@ -121,23 +123,24 @@ EOF
         run: |
           echo "=== TESZT SCRIPT BEÁLLÍTÁSA ==="
           
-          # Átmásoljuk a szkriptet a builder home könyvtárába
-          cp ./.github/scripts/upload-test.sh /home/builder/upload-test.sh
-          chmod +x /home/builder/upload-test.sh
-          chown builder:builder /home/builder/upload-test.sh
+          # Ellenőrizzük, hogy létezik-e a szkript
+          if [ ! -f ./.github/scripts/upload-test.sh ]; then
+            echo "❌ A upload-test.sh szkript nem található!"
+            echo "Készítsd el a .github/scripts/upload-test.sh fájlt"
+            exit 1
+          fi
           
-          echo "Script másolva és executable-re állítva"
-          echo "Script helye: /home/builder/upload-test.sh"
+          # Átmásoljuk a szkriptet
+          mkdir -p /home/builder/.github/scripts/
+          cp ./.github/scripts/upload-test.sh /home/builder/.github/scripts/
+          chmod +x /home/builder/.github/scripts/upload-test.sh
+          chown -R builder:builder /home/builder/.github
           
-          # Environment változók átadása
-          export REMOTE_DIR="$REMOTE_DIR"
-          export VPS_USER="$VPS_USER"
-          export VPS_HOST="$VPS_HOST"
-          export TEST_FILE_SIZE_MB="${{ github.event.inputs.test_file_size_mb }}"
-          export USE_COMPRESSION="${{ github.event.inputs.use_compression }}"
+          echo "Script helye: /home/builder/.github/scripts/upload-test.sh"
           
+          # Futtatjuk a szkriptet builder userként
           echo "=== TESZT SCRIPT INDUL ==="
-          su builder -c "cd /home/builder && source env_vars.sh && ./upload-test.sh"
+          su builder -c "cd /home/builder && source env_vars.sh && ./.github/scripts/upload-test.sh"
 
       - name: Generate Final Report
         if: always()
@@ -170,6 +173,6 @@ EOF
           echo "   - REMOTE_DIR: ${{ secrets.REMOTE_DIR }}"
           echo "   - VPS_USER: ${{ secrets.VPS_USER }}"
           echo "   - VPS_HOST: ${{ secrets.VPS_HOST }}"
-          echo "   - VPS_SSH_KEY: $(if [ -n "${{ secrets.VPS_SSH_KEY }}" ]; then echo "✓ Beállítva"; else echo "✗ Hiányzik"; fi)"
+          echo "   - VPS_SSH_KEY: $(if [ -n "${{ secrets.VPS_SSH_KEY }}" ]; then echo '✓ Beállítva'; else echo '✗ Hiányzik'; fi)"
           echo ""
           echo "=== TESZT VÉGE ==="
