@@ -1098,7 +1098,7 @@ class PackageBuilder:
             os.chdir(old_cwd)
     
     def upload_packages(self):
-        """Upload packages to server using SCP."""
+        """Upload packages to server using SCP with retry logic."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
         
@@ -1110,56 +1110,102 @@ class PackageBuilder:
         
         logger.info(f"Uploading {len(all_files)} files...")
         
-        # Upload files
+        # Build SCP command
         scp_cmd = [
             "scp",
-            *self.ssh_options,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=30",
             "-i", "/home/builder/.ssh/id_ed25519",
-            *[str(f) for f in all_files],
-            f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
         ]
         
+        # Add source files
+        for f in all_files:
+            scp_cmd.append(str(f))
+        
+        # Add destination
+        scp_cmd.append(f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/")
+        
+        # Log full command and details
         logger.info(f"RUNNING SCP COMMAND: {' '.join(scp_cmd)}")
+        logger.info(f"SOURCE PATHS: {[str(f) for f in all_files]}")
+        logger.info(f"DESTINATION PATH: {self.remote_dir}/")
+        logger.info(f"SSH TARGET: {self.vps_user}@{self.vps_host}")
+        
+        # First attempt
         result = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
         
-        logger.info(f"EXIT CODE: {result.returncode}")
+        logger.info(f"EXIT CODE (attempt 1): {result.returncode}")
         if result.stdout:
-            logger.info(f"STDOUT: {result.stdout[:500]}")
+            logger.info(f"STDOUT (attempt 1): {result.stdout[:500]}")
         if result.stderr:
-            logger.info(f"STDERR: {result.stderr[:500]}")
+            logger.info(f"STDERR (attempt 1): {result.stderr[:500]}")
         
         if result.returncode == 0:
-            logger.info("✅ Upload successful!")
+            logger.info("✅ Upload successful on first attempt!")
+            return True
+        
+        # If first attempt failed, wait and try again (mirroring bash script behavior)
+        logger.warning("⚠️ First upload attempt failed, waiting 5 seconds and retrying...")
+        time.sleep(5)
+        
+        logger.info(f"RUNNING SCP COMMAND (retry): {' '.join(scp_cmd)}")
+        result2 = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
+        
+        logger.info(f"EXIT CODE (attempt 2): {result2.returncode}")
+        if result2.stdout:
+            logger.info(f"STDOUT (attempt 2): {result2.stdout[:500]}")
+        if result2.stderr:
+            logger.info(f"STDERR (attempt 2): {result2.stderr[:500]}")
+        
+        if result2.returncode == 0:
+            logger.info("✅ Upload successful on second attempt!")
             return True
         else:
-            logger.error(f"Upload failed")
+            logger.error("❌ Upload failed on both attempts")
             return False
     
     def cleanup_old_packages(self):
-        """Remove old package versions."""
+        """Remove old package versions (keep only last 3 versions)."""
         if not self.packages_to_clean:
             logger.info("No packages to clean up")
             return
         
         logger.info(f"Cleaning up old versions for {len(self.packages_to_clean)} packages...")
         
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found at {ssh_key_path}")
+            return
+        
         cleaned = 0
         for pkg in self.packages_to_clean:
-            remote_cmd = f'cd {self.remote_dir} && ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f 2>/dev/null || true'
+            # Keep only the last 3 versions of each package
+            remote_cmd = (
+                f'cd {self.remote_dir} && '
+                f'ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | '
+                f'xargs -r rm -f 2>/dev/null || true'
+            )
             
             ssh_cmd = [
                 "ssh",
-                *self.ssh_options,
-                "-i", "/home/builder/.ssh/id_ed25519",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=30",
+                "-i", ssh_key_path,
                 f"{self.vps_user}@{self.vps_host}",
                 remote_cmd
             ]
             
+            logger.info(f"CLEANUP COMMAND: {' '.join(ssh_cmd)}")
             result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
-            if result and result.returncode == 0:
+            
+            logger.info(f"EXIT CODE: {result.returncode}")
+            if result.returncode == 0:
                 cleaned += 1
+            else:
+                if result.stderr:
+                    logger.warning(f"Cleanup warning for {pkg}: {result.stderr[:200]}")
         
-        logger.info(f"✅ Cleanup complete ({cleaned} packages)")
+        logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
         """Main execution."""
