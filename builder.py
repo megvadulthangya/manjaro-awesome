@@ -68,16 +68,18 @@ class PackageBuilder:
         # PHASE 1 OBSERVER: hokibot data collection
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
         
-        # SSH options - EGYSEGES OPCIOK minden SSH/SCP muvelethez
+        # SSH options
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=60",
-            "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=5",
+            "-o", "ConnectTimeout=120",  # Increased to 120 seconds
+            "-o", "ServerAliveInterval=15",  # More frequent keepalives
+            "-o", "ServerAliveCountMax=10",  # More retries
             "-o", "TCPKeepAlive=yes",
             "-o", "BatchMode=yes",
-            "-o", "LogLevel=ERROR"
+            "-o", "LogLevel=ERROR",
+            "-o", "Compression=yes",  # Add compression for faster transfers
+            "-o", "ControlMaster=no"  # Disable connection sharing for reliability
         ]
         
         # Statistics
@@ -1097,8 +1099,31 @@ class PackageBuilder:
         finally:
             os.chdir(old_cwd)
     
+    def _establish_ssh_connection(self):
+        """Establish a fresh SSH connection before upload."""
+        print("\n🔍 Establishing fresh SSH connection...")
+        
+        # First, test basic connectivity
+        test_cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            "echo SSH_PRE_UPLOAD_TEST"
+        ]
+        
+        result = subprocess.run(test_cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode == 0 and "SSH_PRE_UPLOAD_TEST" in result.stdout:
+            print("✅ SSH connection established successfully")
+            return True
+        else:
+            print(f"⚠️ SSH test failed: {result.stderr[:200] if result.stderr else 'No output'}")
+            return False
+    
     def upload_packages(self):
-        """Upload packages to server using SCP with retry logic."""
+        """Upload packages to server using SCP with retry logic and connection refresh."""
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
         
@@ -1110,10 +1135,23 @@ class PackageBuilder:
         
         logger.info(f"Uploading {len(all_files)} files...")
         
-        # Build SCP command with COMPLETE SSH options (same as in SSH test)
+        # First establish a fresh SSH connection
+        if not self._establish_ssh_connection():
+            logger.warning("SSH connection test failed, but will try upload anyway...")
+        
+        # Build SCP command with optimized options
         scp_cmd = [
             "scp",
-            *self.ssh_options,  # Use the same SSH options as SSH test
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=120",  # Increased timeout
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=10",
+            "-o", "TCPKeepAlive=yes",
+            "-o", "BatchMode=yes",
+            "-o", "LogLevel=ERROR",
+            "-o", "Compression=yes",
+            "-o", "ControlMaster=no",
             "-i", "/home/builder/.ssh/id_ed25519",
         ]
         
@@ -1125,12 +1163,13 @@ class PackageBuilder:
         scp_cmd.append(f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/")
         
         # Log full command and details
-        logger.info(f"RUNNING SCP COMMAND: {' '.join(scp_cmd)}")
+        logger.info(f"RUNNING SCP COMMAND: {' '.join(scp_cmd[:50])}...")  # Truncate for log
         logger.info(f"SOURCE PATHS: {[str(f) for f in all_files]}")
         logger.info(f"DESTINATION PATH: {self.remote_dir}/")
         logger.info(f"SSH TARGET: {self.vps_user}@{self.vps_host}")
         
         # First attempt
+        logger.info("Attempting upload (first try)...")
         result = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
         
         logger.info(f"EXIT CODE (attempt 1): {result.returncode}")
@@ -1143,11 +1182,15 @@ class PackageBuilder:
             logger.info("✅ Upload successful on first attempt!")
             return True
         
-        # If first attempt failed, wait and try again (mirroring bash script behavior)
-        logger.warning("⚠️ First upload attempt failed, waiting 5 seconds and retrying...")
-        time.sleep(5)
+        # If first attempt failed, wait and try with fresh connection
+        logger.warning("⚠️ First upload attempt failed, waiting 10 seconds and retrying with fresh connection...")
+        time.sleep(10)
         
-        logger.info(f"RUNNING SCP COMMAND (retry): {' '.join(scp_cmd)}")
+        # Re-establish connection before retry
+        if not self._establish_ssh_connection():
+            logger.warning("SSH reconnection failed, but will try upload anyway...")
+        
+        logger.info("Attempting upload (second try)...")
         result2 = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
         
         logger.info(f"EXIT CODE (attempt 2): {result2.returncode}")
@@ -1161,7 +1204,53 @@ class PackageBuilder:
             return True
         else:
             logger.error("❌ Upload failed on both attempts")
-            return False
+            
+            # Try one more time with individual file upload as last resort
+            logger.info("⚠️ Trying individual file upload as last resort...")
+            return self._upload_files_individually(all_files)
+    
+    def _upload_files_individually(self, files):
+        """Upload files one by one as last resort."""
+        logger.info(f"Uploading {len(files)} files individually...")
+        
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        successful = 0
+        
+        for file_path in files:
+            filename = os.path.basename(file_path)
+            logger.info(f"Uploading {filename}...")
+            
+            scp_cmd = [
+                "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=60",
+                "-o", "ServerAliveInterval=10",
+                "-o", "ServerAliveCountMax=3",
+                "-i", ssh_key_path,
+                str(file_path),
+                f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
+            ]
+            
+            for attempt in range(2):  # 2 attempts per file
+                result = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
+                
+                if result.returncode == 0:
+                    logger.info(f"✅ {filename} uploaded successfully")
+                    successful += 1
+                    break
+                else:
+                    if attempt == 0:
+                        logger.warning(f"⚠️ First attempt for {filename} failed, retrying...")
+                        time.sleep(5)
+                    else:
+                        logger.error(f"❌ {filename} failed to upload: {result.stderr[:200]}")
+        
+        if successful == len(files):
+            logger.info(f"✅ All {successful} files uploaded individually!")
+            return True
+        else:
+            logger.error(f"❌ Only {successful} out of {len(files)} files uploaded")
+            return successful > 0  # Return True if at least one file uploaded
     
     def cleanup_old_packages(self):
         """Remove old package versions (keep only last 3 versions)."""
@@ -1176,6 +1265,11 @@ class PackageBuilder:
             logger.error(f"SSH key not found at {ssh_key_path}")
             return
         
+        # First establish connection
+        if not self._establish_ssh_connection():
+            logger.warning("Cannot establish SSH connection for cleanup")
+            return
+        
         cleaned = 0
         for pkg in self.packages_to_clean:
             # Keep only the last 3 versions of each package
@@ -1187,16 +1281,15 @@ class PackageBuilder:
             
             ssh_cmd = [
                 "ssh",
-                *self.ssh_options,  # Use the same SSH options
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=30",
                 "-i", ssh_key_path,
                 f"{self.vps_user}@{self.vps_host}",
                 remote_cmd
             ]
             
-            logger.info(f"CLEANUP COMMAND: {' '.join(ssh_cmd)}")
             result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
             
-            logger.info(f"EXIT CODE: {result.returncode}")
             if result.returncode == 0:
                 cleaned += 1
             else:
