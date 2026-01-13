@@ -68,7 +68,7 @@ class PackageBuilder:
         # PHASE 1 OBSERVER: hokibot data collection
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
         
-        # SSH options
+        # SSH options - EGYSEGES OPCIOK minden SSH/SCP muvelethez
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -1110,11 +1110,10 @@ class PackageBuilder:
         
         logger.info(f"Uploading {len(all_files)} files...")
         
-        # Build SCP command
+        # Build SCP command with COMPLETE SSH options (same as in SSH test)
         scp_cmd = [
             "scp",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=30",
+            *self.ssh_options,  # Use the same SSH options as SSH test
             "-i", "/home/builder/.ssh/id_ed25519",
         ]
         
@@ -1188,8 +1187,7 @@ class PackageBuilder:
             
             ssh_cmd = [
                 "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=30",
+                *self.ssh_options,  # Use the same SSH options
                 "-i", ssh_key_path,
                 f"{self.vps_user}@{self.vps_host}",
                 remote_cmd
@@ -1251,21 +1249,13 @@ class PackageBuilder:
                 print("="*60)
                 
                 if self.update_database():
-                    if self.test_ssh_connection():
-                        if self.upload_packages():
-                            self.cleanup_old_packages()
-                            self._synchronize_pkgbuilds()
-                            print("\n✅ Build completed successfully!")
-                        else:
-                            print("\n❌ Upload failed!")
+                    # Always try upload, even if SSH test fails
+                    if self.upload_packages():
+                        self.cleanup_old_packages()
+                        self._synchronize_pkgbuilds()
+                        print("\n✅ Build completed successfully!")
                     else:
-                        print("\n⚠️ SSH connection failed, trying upload anyway...")
-                        if self.upload_packages():
-                            self.cleanup_old_packages()
-                            self._synchronize_pkgbuilds()
-                            print("\n✅ Build completed despite connection issues!")
-                        else:
-                            print("\n❌ Upload failed completely!")
+                        print("\n❌ Upload failed!")
                 else:
                     print("\n❌ Database update failed!")
             else:
