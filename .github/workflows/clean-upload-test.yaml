@@ -1,0 +1,207 @@
+name: Clean Upload Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_file_size_mb:
+        description: 'Test file size in MB'
+        default: '10'
+        type: string
+
+jobs:
+  clean-test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        env:
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "=== TESZT KÖRNYEZET BEÁLLÍTÁSA ==="
+          
+          # Alap csomagok
+          pacman -Syu --noconfirm --needed openssh rsync coreutils
+          
+          # SSH kulcs beállítása
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          
+          # SSH config minimalizálva
+          echo "Host $VPS_HOST" > ~/.ssh/config
+          echo "  HostName $VPS_HOST" >> ~/.ssh/config
+          echo "  User $VPS_USER" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/id_ed25519" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "  ConnectTimeout 45" >> ~/.ssh/config
+          echo "  ServerAliveInterval 20" >> ~/.ssh/config
+          echo "  LogLevel ERROR" >> ~/.ssh/config
+          
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          
+          echo "✅ SSH beállítva"
+
+      - name: Run Upload Test
+        env:
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          TEST_FILE_SIZE_MB: ${{ github.event.inputs.test_file_size_mb }}
+        run: |
+          echo "🚀 TESZT INDUL..."
+          echo "======================"
+          
+          # Ellenőrizzük a változókat
+          echo "VPS_HOST: $VPS_HOST"
+          echo "VPS_USER: $VPS_USER"
+          echo "REMOTE_DIR: $REMOTE_DIR"
+          echo "TEST_FILE_SIZE_MB: $TEST_FILE_SIZE_MB"
+          echo ""
+          
+          # === 1. SSH KAPCSOLAT TESZT ===
+          echo "📡 1. SSH kapcsolat teszt..."
+          if timeout 10 ssh "$VPS_USER@$VPS_HOST" "echo '✓ SSH kapcsolat OK' && hostname"; then
+            echo "✅ SSH kapcsolat SIKERES"
+          else
+            echo "❌ SSH kapcsolat SIKERTELEN"
+            exit 1
+          fi
+          
+          echo ""
+          
+          # === 2. KÖNYVTÁR ELLENŐRZÉS ===
+          echo "📁 2. Távoli könyvtár ellenőrzés..."
+          if ssh "$VPS_USER@$VPS_HOST" "[ -d '$REMOTE_DIR' ] && echo '✓ Könyvtár létezik' || echo '❌ Könyvtár nem létezik'"; then
+            echo "✅ Könyvtár elérhető"
+          else
+            echo "⚠️  Könyvtár ellenőrzés nem sikerült"
+          fi
+          
+          echo ""
+          
+          # === 3. FÁJL LÉTREHOZÁS ===
+          echo "📦 3. Tesztfájl létrehozása (${TEST_FILE_SIZE_MB}MB)..."
+          TEST_FILE="/tmp/upload_test_$(date +%s).bin"
+          dd if=/dev/urandom of="$TEST_FILE" bs=1M count=$TEST_FILE_SIZE_MB status=none
+          FILE_SIZE=$(ls -lh "$TEST_FILE" | awk '{print $5}')
+          echo "✅ Fájl létrehozva: $FILE_SIZE"
+          
+          echo ""
+          
+          # === 4. SCP FELTÖLTÉS ===
+          echo "⚡ 4. SCP feltöltés teszt..."
+          REMOTE_FILE_SCP="$REMOTE_DIR/scp_test_$(date +%s).bin"
+          
+          START_TIME=$(date +%s)
+          if scp -q "$TEST_FILE" "$VPS_USER@$VPS_HOST:$REMOTE_FILE_SCP"; then
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+            if [ $DURATION -eq 0 ]; then DURATION=1; fi
+            SPEED=$(echo "scale=2; $TEST_FILE_SIZE_MB / $DURATION" | bc)
+            echo "✅ SCP SIKERES ($DURATION másodperc, ~${SPEED} MB/s)"
+            SCP_SUCCESS=true
+          else
+            echo "❌ SCP SIKERTELEN"
+            SCP_SUCCESS=false
+          fi
+          
+          echo ""
+          
+          # === 5. RSYNC FELTÖLTÉS ===
+          echo "🔄 5. RSYNC feltöltés teszt..."
+          REMOTE_FILE_RSYNC="$REMOTE_DIR/rsync_test_$(date +%s).bin"
+          
+          START_TIME=$(date +%s)
+          if rsync -az --quiet "$TEST_FILE" "$VPS_USER@$VPS_HOST:$REMOTE_FILE_RSYNC"; then
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+            if [ $DURATION -eq 0 ]; then DURATION=1; fi
+            SPEED=$(echo "scale=2; $TEST_FILE_SIZE_MB / $DURATION" | bc)
+            echo "✅ RSYNC SIKERES ($DURATION másodperc, ~${SPEED} MB/s)"
+            RSYNC_SUCCESS=true
+          else
+            echo "❌ RSYNC SIKERTELEN"
+            RSYNC_SUCCESS=false
+          fi
+          
+          echo ""
+          
+          # === 6. FÁJL ELLENŐRZÉS ===
+          echo "🔍 6. Fájlok ellenőrzése a szerveren..."
+          ssh "$VPS_USER@$VPS_HOST" "
+            echo 'Fájlok a szerveren:'
+            ls -lh '$REMOTE_DIR'/*test*.bin 2>/dev/null || echo 'Nincsenek tesztfájlok'
+            
+            if [ -f '$REMOTE_FILE_SCP' ]; then
+              echo 'SCP fájl mérete:'
+              ls -lh '$REMOTE_FILE_SCP'
+            fi
+            
+            if [ -f '$REMOTE_FILE_RSYNC' ]; then
+              echo 'RSYNC fájl mérete:'
+              ls -lh '$REMOTE_FILE_RSYNC'
+            fi
+          "
+          
+          echo ""
+          
+          # === 7. TAKARÍTÁS ===
+          echo "🧹 7. Takarítás..."
+          # Lokális fájl
+          rm -f "$TEST_FILE"
+          echo "✓ Lokális fájl törölve"
+          
+          # Távoli fájlok
+          ssh "$VPS_USER@$VPS_HOST" "
+            rm -f '$REMOTE_FILE_SCP' '$REMOTE_FILE_RSYNC' 2>/dev/null && \
+            echo '✓ Távoli fájlok törölve' || \
+            echo '⚠️  Nincsenek törlendő fájlok'
+          "
+          
+          echo ""
+          
+          # === 8. ÖSSZEFOGLALÓ ===
+          echo "📊 === TESZT EREDMÉNYEK ÖSSZEFOGLALÓ ==="
+          echo ""
+          echo "SSH kapcsolat: ✅ MŰKÖDIK"
+          echo "SCP feltöltés: $(if [ "$SCP_SUCCESS" = "true" ]; then echo "✅ SIKERES"; else echo "❌ SIKERTELEN"; fi)"
+          echo "RSYNC feltöltés: $(if [ "$RSYNC_SUCCESS" = "true" ]; then echo "✅ SIKERES"; else echo "❌ SIKERTELEN"; fi)"
+          echo ""
+          echo "Fájlméret: ${TEST_FILE_SIZE_MB}MB"
+          echo "Remote dir: $REMOTE_DIR"
+          echo ""
+          
+          if [ "$SCP_SUCCESS" = "true" ] && [ "$RSYNC_SUCCESS" = "true" ]; then
+            echo "🎉 MINDEN TESZT SIKERES!"
+            echo ""
+            echo "Az eredeti CI script kapcsolódási információi helyesek."
+            echo "SCP és RSYNC működnek a jelenlegi konfigurációval."
+          elif [ "$SCP_SUCCESS" = "true" ] && [ "$RSYNC_SUCCESS" = "false" ]; then
+            echo "⚠️  FIGYELEM: Csak SCP működik"
+            echo ""
+            echo "RSYNC nem működik, de SCP igen."
+            echo "Az eredeti CI script csak SCP-t használ, így működnie kell."
+          elif [ "$SCP_SUCCESS" = "false" ] && [ "$RSYNC_SUCCESS" = "true" ]; then
+            echo "⚠️  FIGYELEM: Csak RSYNC működik"
+            echo ""
+            echo "Az eredeti CI script SCP-t használ, de az nem működik."
+            echo "Javasolt az eredeti script SCP részének javítása."
+          else
+            echo "❌ EGYIK MÓDSZER SEM MŰKÖDIK"
+            echo ""
+            echo "Problémák lehetnek:"
+            echo "1. SSH kulcs hibás"
+            echo "2. Tűzfal blokkolja a kapcsolatot"
+            echo "3. Remote könyvtár nem írható"
+          fi
+          
+          echo ""
+          echo "🕒 Teszt vége: $(date)"
+          echo "======================"

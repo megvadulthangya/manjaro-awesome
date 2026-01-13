@@ -1,0 +1,99 @@
+name: Quick Upload Test
+
+on:
+  workflow_dispatch
+
+jobs:
+  quick-test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Quick Upload Test
+        env:
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          # Setup
+          pacman -Syu --noconfirm --needed openssh rsync > /dev/null 2>&1
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          
+          echo "=== QUICK UPLOAD TEST ==="
+          echo "Host: $VPS_HOST"
+          echo "User: $VPS_USER"
+          echo "Remote: $REMOTE_DIR"
+          echo ""
+          
+          # 1. SSH test
+          echo "1. SSH test..."
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+             "$VPS_USER@$VPS_HOST" "echo OK" > /dev/null 2>&1; then
+            echo "   ✅ SSH OK"
+            SSH_OK=1
+          else
+            echo "   ❌ SSH FAILED"
+            SSH_OK=0
+          fi
+          
+          # 2. Directory test
+          echo "2. Directory test..."
+          if [ $SSH_OK -eq 1 ]; then
+            if ssh "$VPS_USER@$VPS_HOST" "[ -d '$REMOTE_DIR' ]" 2>/dev/null; then
+              echo "   ✅ Directory exists"
+              DIR_OK=1
+            else
+              echo "   ⚠️  Directory doesn't exist"
+              DIR_OK=0
+            fi
+          fi
+          
+          # 3. Upload test (only if SSH and directory OK)
+          if [ $SSH_OK -eq 1 ] && [ $DIR_OK -eq 1 ]; then
+            # Create test file
+            echo "3. Upload tests..."
+            TEST_FILE="/tmp/test_quick.bin"
+            dd if=/dev/urandom of="$TEST_FILE" bs=1M count=1 status=none
+            
+            # SCP test
+            echo -n "   SCP: "
+            if scp -q "$TEST_FILE" "$VPS_USER@$VPS_HOST:$REMOTE_DIR/test_scp.bin" 2>/dev/null; then
+              echo "✅"
+              SCP_OK=1
+            else
+              echo "❌"
+              SCP_OK=0
+            fi
+            
+            # RSYNC test  
+            echo -n "   RSYNC: "
+            if rsync -aqz "$TEST_FILE" "$VPS_USER@$VPS_HOST:$REMOTE_DIR/test_rsync.bin" 2>/dev/null; then
+              echo "✅"
+              RSYNC_OK=1
+            else
+              echo "❌"
+              RSYNC_OK=0
+            fi
+            
+            # Cleanup
+            rm -f "$TEST_FILE"
+            ssh "$VPS_USER@$VPS_HOST" "rm -f '$REMOTE_DIR'/test_*.bin" 2>/dev/null
+          fi
+          
+          echo ""
+          echo "=== SUMMARY ==="
+          echo "SSH: $(if [ $SSH_OK -eq 1 ]; then echo '✅'; else echo '❌'; fi)"
+          echo "Directory: $(if [ $DIR_OK -eq 1 ]; then echo '✅'; else echo '⚠️'; fi)"
+          echo "SCP: $(if [ $SCP_OK -eq 1 ]; then echo '✅'; else echo '❌'; fi)"
+          echo "RSYNC: $(if [ $RSYNC_OK -eq 1 ]; then echo '✅'; else echo '❌'; fi)"
+          echo ""
+          
+          if [ $SSH_OK -eq 1 ] && [ $SCP_OK -eq 1 ]; then
+            echo "🎉 CI SCRIPT SHOULD WORK!"
+          else
+            echo "❌ CI SCRIPT MAY FAIL!"
+          fi
