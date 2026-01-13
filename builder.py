@@ -288,8 +288,8 @@ class PackageBuilder:
             return False
     
     def fetch_remote_packages(self):
-        """Fetch list of packages from server and determine repository state."""
-        print("\n📡 Fetching remote package list...")
+        """Fetch list of packages from server and determine repository state via SSH."""
+        print("\n📡 Fetching remote package list via SSH...")
         
         try:
             ssh_cmd = [
@@ -303,69 +303,97 @@ class PackageBuilder:
             test_cmd = ssh_cmd + [f"test -d {self.remote_dir} && echo 'EXISTS' || echo 'NOT_EXISTS'"]
             test_result = subprocess.run(test_cmd, capture_output=True, text=True, check=False)
             
+            ssh_has_directory = False
             if test_result.returncode == 0 and "EXISTS" in test_result.stdout:
                 self.repo_exists = True
-                
-                # Now list package files
-                list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | head -50']
-                list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
-                
-                if list_result and list_result.returncode == 0 and list_result.stdout.strip():
-                    lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
-                    self.remote_files = [os.path.basename(f) for f in lines]
-                    
-                    if self.remote_files:
-                        logger.info(f"Found {len(self.remote_files)} packages on server")
-                        self.repo_has_packages = True
-                    else:
-                        logger.info("Repository exists but has no packages")
-                        self.repo_has_packages = False
-                else:
-                    self.remote_files = []
-                    self.repo_has_packages = False
-                    logger.info("Repository exists but could not list packages")
+                ssh_has_directory = True
+                logger.info("SSH: Repository directory exists")
             else:
                 self.repo_exists = False
-                self.repo_has_packages = False
+                logger.info("SSH: Repository directory does not exist")
+                return
+            
+            # Now list ALL package files, not just first 50
+            list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null']
+            list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
+            
+            if list_result and list_result.returncode == 0 and list_result.stdout.strip():
+                lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
+                self.remote_files = [os.path.basename(f) for f in lines]
+                
+                if self.remote_files:
+                    logger.info(f"SSH: Found {len(self.remote_files)} package files")
+                    self.repo_has_packages = True
+                else:
+                    logger.info("SSH: Repository exists but has no package files")
+                    self.repo_has_packages = False
+                    
+                # Also check for database files to confirm it's a valid repository
+                db_cmd = ssh_cmd + [f'ls {self.remote_dir}/{self.repo_name}.db 2>/dev/null || ls {self.remote_dir}/{self.repo_name}.db.tar.gz 2>/dev/null || true']
+                db_result = subprocess.run(db_cmd, capture_output=True, text=True, check=False)
+                
+                if db_result and db_result.stdout.strip():
+                    logger.info(f"SSH: Found repository database file")
+                else:
+                    logger.warning("SSH: No repository database file found")
+            else:
                 self.remote_files = []
-                logger.info("Repository directory does not exist on server")
+                self.repo_has_packages = False
+                logger.info("SSH: Could not list any package files (repository might be empty)")
                 
         except Exception as e:
             self.repo_exists = False
             self.repo_has_packages = False
             self.remote_files = []
-            logger.info(f"Error checking repository: {str(e)[:100]}")
+            logger.error(f"SSH error checking repository: {str(e)[:100]}")
     
     def _check_repository_via_pacman(self):
         """Check repository status via pacman command.
         
         Returns:
-            tuple: (has_packages, error)
+            tuple: (has_packages, error, output)
                 has_packages: True if pacman lists packages for this repository
                 error: True if pacman command failed
+                output: The output from pacman command
         """
         try:
+            # First refresh pacman database to ensure we have latest state
+            logger.info("Refreshing pacman database before checking repository...")
+            refresh_result = subprocess.run(
+                ["pacman", "-Sy", "--noconfirm"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if refresh_result.returncode != 0:
+                logger.warning(f"Pacman refresh had issues: {refresh_result.stderr[:200]}")
+            
+            # Now query the repository
             cmd = ["pacman", "-Sl", self.repo_name]
             logger.info(f"Querying pacman for repository '{self.repo_name}'")
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             
             if result.returncode != 0:
                 logger.info(f"Pacman query failed for repository '{self.repo_name}': {result.stderr[:100]}")
-                return False, True  # Error occurred
+                return False, True, result.stderr
             
-            if result.stdout.strip():
-                # Pacman lists packages
-                package_count = len([line for line in result.stdout.strip().split('\n') if line])
+            output = result.stdout.strip()
+            if output:
+                # Count packages listed
+                package_count = len([line for line in output.split('\n') if line and not line.isspace()])
                 logger.info(f"Pacman lists {package_count} packages in repository '{self.repo_name}'")
-                return True, False
+                if package_count > 0:
+                    logger.debug(f"First few packages: {output.split('\n')[:3]}")
+                return True, False, output
             else:
                 # Pacman lists nothing
                 logger.info(f"Pacman lists no packages in repository '{self.repo_name}'")
-                return False, False
+                return False, False, output
                 
         except Exception as e:
             logger.error(f"Exception while querying pacman: {str(e)[:100]}")
-            return False, True
+            return False, True, str(e)
     
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
@@ -1235,38 +1263,47 @@ class PackageBuilder:
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
             
-            # First, check and configure repository
+            # First, check and configure repository via SSH
             self.fetch_remote_packages()
             
             # Check repository via pacman (primary authority)
-            pacman_has_packages, pacman_error = self._check_repository_via_pacman()
+            print("\n🔍 Checking repository status via pacman...")
+            pacman_has_packages, pacman_error, pacman_output = self._check_repository_via_pacman()
             
-            # Apply decision rules
+            # Apply decision rules with explicit logging
+            print("\n📋 Applying repository detection rules:")
+            
             if pacman_has_packages:
                 # Rule: If pacman lists packages → repository is ENABLED
-                print(f"📦 Pacman confirms packages in repository - enabling in pacman.conf")
+                print(f"✅ RULE 1: Pacman confirms {pacman_output.count(chr(10))+1} packages - ENABLING repository")
+                logger.info(f"Repository ENABLED: pacman lists packages")
                 self._manage_repository_state(enable=True)
-                logger.info("Repository ENABLED: pacman lists packages")
                 
             elif pacman_error:
                 # Rule: If pacman errors AND SSH confirms repo exists → log warning, DISABLED
                 if self.repo_exists:
-                    print(f"⚠️ Pacman error but SSH confirms repository exists - disabling")
+                    print(f"⚠️ RULE 3: Pacman error but SSH confirms repository exists - DISABLING with warning")
                     logger.warning("Repository DISABLED: pacman error, SSH confirms repository exists")
                 else:
-                    print(f"📭 Pacman error and SSH confirms no repository - disabling")
+                    print(f"📭 RULE 3: Pacman error and SSH confirms no repository - DISABLING")
                     logger.info("Repository DISABLED: pacman error, SSH confirms no repository")
                 self._manage_repository_state(enable=False)
                 
             else:
                 # Rule: If pacman lists nothing BUT SSH confirms empty repo → DISABLED
                 if self.repo_has_packages:
-                    print(f"⚠️ Pacman lists no packages but SSH reports packages - disabling to avoid false negative")
+                    print(f"⚠️ RULE 2: Pacman lists no packages but SSH reports {len(self.remote_files)} packages - DISABLING (pacman is authority)")
                     logger.warning("Repository DISABLED: pacman lists nothing but SSH reports packages")
                 else:
-                    print(f"📭 Pacman and SSH agree repository is empty - disabling")
+                    print(f"📭 RULE 2: Pacman and SSH agree repository is empty - DISABLING")
                     logger.info("Repository DISABLED: pacman and SSH confirm empty repository")
                 self._manage_repository_state(enable=False)
+            
+            # Debug information
+            print(f"\n📊 Detection summary:")
+            print(f"   Pacman result: {'Packages found' if pacman_has_packages else 'No packages' + ' (error)' if pacman_error else 'No packages'}")
+            print(f"   SSH directory exists: {self.repo_exists}")
+            print(f"   SSH package files: {len(self.remote_files)}")
             
             total_built = self.build_packages()
             
