@@ -26,23 +26,18 @@ jobs:
         run: |
           echo "=== TESZT KÖRNYEZET ELŐKÉSZÍTÉSE ==="
           echo "Dátum: $(date)"
-          echo "Git commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'N/A')"
           
           pacman-key --init
           pacman-key --populate archlinux
           
-          # Csak a szükséges csomagok, rsync is telepítve
           pacman -Syu --noconfirm --needed \
             git rsync openssh \
             base-devel sudo coreutils \
-            curl wget jq bc \
-            parallel  # Párhuzamos feltöltéshez
+            curl wget jq bc
           
-          # Builder user létrehozása
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Git konfiguráció
           git config --system --add safe.directory '*'
           export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
           
@@ -50,10 +45,8 @@ jobs:
           
           echo "=== RENDSZER INFORMÁCIÓ ==="
           echo "Hostname: $(hostname)"
-          echo "Container ID: $(cat /etc/machine-id 2>/dev/null || echo 'N/A')"
           echo "SSH: $(ssh -V 2>&1)"
           echo "RSYNC: $(rsync --version | head -1)"
-          echo "Available disk: $(df -h / | tail -1)"
 
       - name: Setup SSH and Environment Variables
         env:
@@ -63,16 +56,6 @@ jobs:
         run: |
           echo "=== KÖRNYEZETI VÁLTOZÓK BEÁLLÍTÁSA ==="
           
-          # Minden változót environment fájlba mentünk
-          cat > /tmp/env_vars.sh << EOF
-          export REMOTE_DIR="$REMOTE_DIR"
-          export VPS_USER="$VPS_USER"
-          export VPS_HOST="$VPS_HOST"
-          export BUILD_TIMESTAMP="$(date +%s)"
-          export TEST_PREFIX="github_test_\${BUILD_TIMESTAMP}"
-          EOF
-          
-          # Debug információ
           echo "REMOTE_DIR: $REMOTE_DIR"
           echo "VPS_USER: $VPS_USER"
           echo "VPS_HOST: $VPS_HOST"
@@ -83,22 +66,19 @@ jobs:
             exit 1
           fi
           
-          # SSH könyvtár létrehozása
           mkdir -p /home/builder/.ssh
           
-          # SSH kulcs ellenőrzése és mentése
           echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
           chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Kulcs információk
           echo "=== SSH KULCS INFO ==="
           ssh-keygen -l -f /home/builder/.ssh/id_ed25519
           
-          # SSH config
-          cat > /home/builder/.ssh/config << EOF
-Host $VPS_HOST
-    HostName $VPS_HOST
-    User $VPS_USER
+          # SSH config létrehozása - KIJAVÍTVA A SZINTAXIST
+          cat > /home/builder/.ssh/config << 'EOF'
+Host ${VPS_HOST}
+    HostName ${VPS_HOST}
+    User ${VPS_USER}
     IdentityFile ~/.ssh/id_ed25519
     StrictHostKeyChecking no
     ConnectTimeout 30
@@ -107,374 +87,57 @@ Host $VPS_HOST
     LogLevel DEBUG3
 EOF
           
-          # Known hosts
+          # Változók behelyettesítése
+          sed -i "s/\${VPS_HOST}/$VPS_HOST/g" /home/builder/.ssh/config
+          sed -i "s/\${VPS_USER}/$VPS_USER/g" /home/builder/.ssh/config
+          
           echo "Adding host to known_hosts..."
           ssh-keyscan -H $VPS_HOST >> /home/builder/.ssh/known_hosts 2>/dev/null
           
-          # Jogosultságok
           chown -R builder:builder /home/builder/.ssh
           
-          # Environment fájl másolása builder számára
-          cp /tmp/env_vars.sh /home/builder/env_vars.sh
+          # Environment változók fájlba mentése
+          cat > /home/builder/env_vars.sh << EOF
+export REMOTE_DIR="$REMOTE_DIR"
+export VPS_USER="$VPS_USER"
+export VPS_HOST="$VPS_HOST"
+export TEST_FILE_SIZE_MB="${{ github.event.inputs.test_file_size_mb }}"
+export USE_COMPRESSION="${{ github.event.inputs.use_compression }}"
+export BUILD_TIMESTAMP="\$(date +%s)"
+export TEST_PREFIX="github_test_\${BUILD_TIMESTAMP}"
+EOF
+          
           chown builder:builder /home/builder/env_vars.sh
           
           echo "=== SSH BEÁLLÍTÁSOK KÉSZ ==="
+          echo "SSH config tartalma:"
+          cat /home/builder/.ssh/config
 
-      - name: Create Test Files
-        env:
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-        run: |
-          echo "=== TESZT FÁJLOK LÉTREHOZÁSA ==="
-          
-          # Ugyanaz a struktúra, mint az eredeti scriptben
-          OUTPUT_DIR="/home/builder/built_packages"
-          mkdir -p $OUTPUT_DIR
-          
-          # Random fájlnevek (mint valódi csomagok)
-          TEST_PREFIX="github_test_$(date +%s)"
-          
-          # 5MB fájl (mint egy kisebb csomag)
-          echo "Creating 5MB test package..."
-          dd if=/dev/urandom of="$OUTPUT_DIR/${TEST_PREFIX}-test-5mb-1.0-1-x86_64.pkg.tar.zst" \
-             bs=1M count=5 status=progress 2>&1 | tail -1
-          
-          # 190MB fájl (mint egy nagyobb csomag)
-          echo "Creating 190MB test package..."
-          dd if=/dev/urandom of="$OUTPUT_DIR/${TEST_PREFIX}-test-large-2.0-1-x86_64.pkg.tar.zst" \
-             bs=1M count=190 status=progress 2>&1 | tail -1
-          
-          # Custom méretű fájl
-          CUSTOM_SIZE="${{ github.event.inputs.test_file_size_mb }}"
-          echo "Creating ${CUSTOM_SIZE}MB custom test package..."
-          dd if=/dev/urandom of="$OUTPUT_DIR/${TEST_PREFIX}-test-custom-1.5-1-x86_64.pkg.tar.zst" \
-             bs=1M count=$CUSTOM_SIZE status=progress 2>&1 | tail -1
-          
-          # Adatbázis fájl szimulálása
-          echo "Creating fake database file..."
-          cd $OUTPUT_DIR
-          tar czf "${TEST_PREFIX}-manjaro-awesome.db.tar.gz" \
-            "${TEST_PREFIX}"-*.pkg.tar.zst 2>/dev/null || true
-          
-          # Fájl információk részletesen
-          echo "=== FÁJL INFORMÁCIÓK ==="
-          echo "Directory: $OUTPUT_DIR"
-          ls -la "$OUTPUT_DIR/"
-          echo ""
-          echo "File sizes:"
-          ls -lh "$OUTPUT_DIR/"*.pkg.tar.*
-          echo ""
-          echo "Total size: $(du -sh $OUTPUT_DIR/)"
-          echo "File count: $(ls -1 $OUTPUT_DIR/*.pkg.tar.* 2>/dev/null | wc -l)"
-          
-          # Checksum-ok
-          echo "=== CHECKSUM-OK ==="
-          for f in "$OUTPUT_DIR"/*.pkg.tar.*; do
-            echo "$(basename $f): $(md5sum $f | cut -d' ' -f1)"
-          done
-          
-          # Jogosultságok
-          chown -R builder:builder $OUTPUT_DIR
-
-      - name: Remote Directory Verification
+      - name: Copy and Run Test Script
         env:
           REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          echo "=== TÁVOLI KÖNYVTÁR ELLENŐRZÉSE ==="
+          echo "=== TESZT SCRIPT BEÁLLÍTÁSA ==="
           
-          # Ellenőrizzük, hogy létezik-e a távoli könyvtár
-          REMOTE_CMD="
-            echo 'Remote host: \$(hostname)';
-            echo 'Remote user: \$(whoami)';
-            echo 'Checking directory: $REMOTE_DIR';
-            if [ -d '$REMOTE_DIR' ]; then
-              echo '✓ Directory exists';
-              ls -ld '$REMOTE_DIR';
-              echo 'Permissions:';
-              ls -la '$REMOTE_DIR/' | head -10;
-              echo 'Disk usage:';
-              df -h '$REMOTE_DIR' 2>/dev/null || df -h | grep -E '/var|/www|/home';
-            else
-              echo '✗ Directory does NOT exist: $REMOTE_DIR';
-              echo 'Creating directory...';
-              sudo mkdir -p '$REMOTE_DIR' 2>/dev/null || \
-              mkdir -p '$REMOTE_DIR' 2>/dev/null || \
-              { echo 'Failed to create directory'; exit 1; }
-              sudo chown \$USER: '\$REMOTE_DIR' 2>/dev/null || \
-              chown \$USER: '$REMOTE_DIR' 2>/dev/null;
-              echo 'Directory created with permissions:';
-              ls -ld '$REMOTE_DIR';
-            fi;
-            echo 'Available space:';
-            df -h . 2>/dev/null || df -h / 2>/dev/null;
-          "
+          # Átmásoljuk a szkriptet a builder home könyvtárába
+          cp ./.github/scripts/upload-test.sh /home/builder/upload-test.sh
+          chmod +x /home/builder/upload-test.sh
+          chown builder:builder /home/builder/upload-test.sh
           
-          echo "Executing remote check..."
-          timeout 45 su builder -c "ssh $VPS_USER@$VPS_HOST '$REMOTE_CMD'"
+          echo "Script másolva és executable-re állítva"
+          echo "Script helye: /home/builder/upload-test.sh"
           
-          # Exportáljuk a változókat a következő lépésekhez
-          echo "TEST_PREFIX=github_test_$(date +%s)" >> $GITHUB_ENV
-          echo "OUTPUT_DIR=/home/builder/built_packages" >> $GITHUB_ENV
-
-      - name: Test SCP Upload with Multiple Files
-        env:
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          echo "=== SCP FELTÖLTÉS TESZT (TÖBB FÁJL) ==="
+          # Environment változók átadása
+          export REMOTE_DIR="$REMOTE_DIR"
+          export VPS_USER="$VPS_USER"
+          export VPS_HOST="$VPS_HOST"
+          export TEST_FILE_SIZE_MB="${{ github.event.inputs.test_file_size_mb }}"
+          export USE_COMPRESSION="${{ github.event.inputs.use_compression }}"
           
-          TIMESTAMP="$(date +%s)"
-          OUTPUT_DIR="/home/builder/built_packages"
-          
-          # Feltöltés minden fájlból
-          for FILE in "$OUTPUT_DIR"/*.pkg.tar.*; do
-            if [ -f "$FILE" ]; then
-              FILENAME=$(basename "$FILE")
-              FILESIZE=$(ls -lh "$FILE" | awk '{print $5}')
-              
-              echo ""
-              echo "=== FELTÖLTÉS: $FILENAME ($FILESIZE) ==="
-              echo "From: $FILE"
-              echo "To: $VPS_USER@$VPS_HOST:$REMOTE_DIR/$FILENAME"
-              
-              # SCP feltöltés időméréssel
-              START_TIME=$(date +%s.%N)
-              
-              if timeout 300 su builder -c "scp \
-                -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=30 \
-                '$FILE' \
-                '$VPS_USER@$VPS_HOST:$REMOTE_DIR/$FILENAME'"; then
-                
-                END_TIME=$(date +%s.%N)
-                DURATION=$(echo "$END_TIME - $START_TIME" | bc)
-                echo "✅ Sikeres feltöltés"
-                echo "⏱️  Idő: ${DURATION}s"
-                
-                # Ellenőrzés
-                echo "Ellenőrzés a szerveren..."
-                su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' \
-                  'ls -lh \"$REMOTE_DIR/$FILENAME\" && \
-                   echo \"MD5: \$(md5sum \"$REMOTE_DIR/$FILENAME\" 2>/dev/null | cut -d\" \" -f1)\"'"
-              else
-                echo "❌ SCP hiba"
-                SCP_ERROR=$?
-                echo "Exit code: $SCP_ERROR"
-                
-                # Hálózati diagnosztika
-                echo "Hálózati teszt..."
-                timeout 5 su builder -c "ping -c 2 $VPS_HOST 2>/dev/null || echo 'Ping failed'"
-                timeout 5 su builder -c "nc -zv -w 3 $VPS_HOST 22 2>&1 || echo 'Port test failed'"
-              fi
-            fi
-          done
-          
-          echo ""
-          echo "=== SCP ÖSSZEFOGLALÓ ==="
-          su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' \
-            'echo \"Files in $REMOTE_DIR:\"; \
-             ls -la \"$REMOTE_DIR/\"*.pkg.tar.* 2>/dev/null | wc -l; \
-             echo \"Total size:\"; \
-             du -sh \"$REMOTE_DIR\" 2>/dev/null'"
-
-      - name: Test RSYNC Upload with Compression
-        env:
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          echo "=== RSYNC FELTÖLTÉS TESZT ==="
-          
-          TIMESTAMP="$(date +%s)"
-          OUTPUT_DIR="/home/builder/built_packages"
-          RSYNC_TEST_DIR="$REMOTE_DIR/rsync_test_$TIMESTAMP"
-          
-          echo "RSYNC célkönyvtár: $RSYNC_TEST_DIR"
-          echo "Forrás: $OUTPUT_DIR/*.pkg.tar.*"
-          
-          # Ellenőrizzük, hogy telepítve van-e rsync
-          if ! command -v rsync >/dev/null; then
-            echo "Rsync nincs telepítve, telepítés..."
-            pacman -S --noconfirm rsync
-          fi
-          
-          # Rsync opciók
-          RSYNC_OPTS="-avz --progress --stats"
-          if [ "${{ github.event.inputs.use_compression }}" = "true" ]; then
-            RSYNC_OPTS="$RSYNC_OPTS -z"
-            echo "Tömörítés használata"
-          fi
-          
-          # Távoli könyvtár létrehozása
-          echo "Távoli könyvtár létrehozása..."
-          su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' \
-            'mkdir -p \"$RSYNC_TEST_DIR\" && echo \"Directory created\"'"
-          
-          # Rsync feltöltés
-          echo ""
-          echo "=== RSYNC FELTÖLTÉS INDUL ==="
-          START_TIME=$(date +%s.%N)
-          
-          # Rsync futtatása részletes loggal
-          su builder -c "
-            set -x
-            rsync $RSYNC_OPTS \
-              -e 'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30' \
-              '$OUTPUT_DIR/'*.pkg.tar.* \
-              '$VPS_USER@$VPS_HOST:$RSYNC_TEST_DIR/'
-          " 2>&1 | tee /tmp/rsync_output.log
-          
-          RSYNC_EXIT=$?
-          END_TIME=$(date +%s.%N)
-          DURATION=$(echo "$END_TIME - $START_TIME" | bc)
-          
-          echo ""
-          echo "=== RSYNC EREDMÉNY ==="
-          echo "Exit code: $RSYNC_EXIT"
-          echo "Időtartam: ${DURATION}s"
-          
-          if [ $RSYNC_EXIT -eq 0 ]; then
-            echo "✅ RSYNC sikeres"
-            
-            # Rsync statisztikák
-            echo ""
-            echo "=== RSYNC STATISZTIKÁK ==="
-            grep -A 20 "Number of files:" /tmp/rsync_output.log || \
-            grep -i "total\|speed\|sent\|received" /tmp/rsync_output.log
-            
-            # Ellenőrzés a szerveren
-            echo ""
-            echo "=== TÁVOLI ELLENŐRZÉS ==="
-            su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' \
-              'echo \"Files in $RSYNC_TEST_DIR:\"; \
-               ls -lh \"$RSYNC_TEST_DIR/\" 2>/dev/null || echo \"Directory not found\"; \
-               echo \"File count: \$(ls -1 \"$RSYNC_TEST_DIR/\"*.pkg.tar.* 2>/dev/null | wc -l)\"; \
-               echo \"Total size: \$(du -sh \"$RSYNC_TEST_DIR\" 2>/dev/null || echo \"0\")\"'"
-          else
-            echo "❌ RSYNC hiba"
-            
-            # Hibaelhárítás
-            echo ""
-            echo "=== HIBAINFÓ ==="
-            tail -20 /tmp/rsync_output.log
-            
-            # SSH kapcsolat teszt
-            echo ""
-            echo "SSH connection test..."
-            timeout 10 su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' 'echo SSH OK'" || \
-            echo "SSH connection failed"
-          fi
-
-      - name: Compare Transfer Methods
-        env:
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          echo "=== FELTÖLTÉSI MÓDSZEREK ÖSSZEHASONLÍTÁSA ==="
-          
-          # Összefoglaló készítése
-          cat > /tmp/transfer_summary.md << EOF
-          # Feltöltési Teszt Összefoglaló
-          
-          **Dátum:** $(date)
-          **GitHub Run:** ${{ github.run_id }}
-          **Forrás könyvtár:** /home/builder/built_packages
-          **Cél könyvtár:** $REMOTE_DIR
-          
-          ## Tesztfájlok:
-          \`\`\`
-          $(ls -lh /home/builder/built_packages/*.pkg.tar.* 2>/dev/null || echo "N/A")
-          \`\`\`
-          
-          ## SCP eredmény:
-          - Fájlok feltöltve: $(su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' 'ls \"$REMOTE_DIR/\"*.pkg.tar.* 2>/dev/null | wc -l'")
-          - Utolsó SCP exit code: $(echo $?)
-          
-          ## RSYNC eredmény:
-          - Rsync exit code: $(tail -1 /tmp/rsync_output.log 2>/dev/null | grep -o 'exit code [0-9]*' || echo "N/A")
-          - Átviteli sebesség: $(grep -i 'speedup\|bytes/sec' /tmp/rsync_output.log 2>/dev/null | tail -1 || echo "N/A")
-          
-          ## Ajánlások:
-          1. **SCP** használata, ha egyszerű fájlátvitelre van szükség
-          2. **RSYNC** használata, ha:
-             - Nagy fájlokat kell átvinni
-             - Többszöri feltöltés (csak a változások)
-             - Hálózati kapcsolat instabil
-          3. **Compression** (tömörítés) használata, ha:
-             - A hálózati sávszélesség korlátozott
-             - Nagy fájlokat viszünk át
-          
-          \`\`\`bash
-          # SCP példa:
-          scp -o StrictHostKeyChecking=no -C file.pkg.tar.zst user@host:/remote/dir/
-          
-          # RSYNC példa:
-          rsync -avz --progress -e ssh file.pkg.tar.zst user@host:/remote/dir/
-          \`\`\`
-          EOF
-          
-          cat /tmp/transfer_summary.md
-
-      - name: Cleanup Test Files
-        env:
-          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          echo "=== TESZT FÁJLOK TÖRLÉSE ==="
-          
-          TIMESTAMP="$(date +%s)"
-          
-          # Törlési script
-          CLEANUP_SCRIPT="
-            echo 'Starting cleanup...';
-            echo 'Current directory: \$(pwd)';
-            echo '';
-            
-            # SCP-vel feltöltött fájlok törlése
-            echo '1. Removing SCP test files...';
-            TEST_FILES=\$(ls '$REMOTE_DIR/'github_test_*.pkg.tar.* 2>/dev/null || echo '');
-            if [ -n \"\$TEST_FILES\" ]; then
-              echo 'Found files:';
-              ls -lh '$REMOTE_DIR/'github_test_*.pkg.tar.*;
-              rm -f '$REMOTE_DIR/'github_test_*.pkg.tar.*;
-              echo 'SCP files removed.';
-            else
-              echo 'No SCP test files found.';
-            fi;
-            
-            echo '';
-            
-            # RSYNC teszt könyvtárak törlése
-            echo '2. Removing RSYNC test directories...';
-            RSYNC_DIRS=\$(find '$REMOTE_DIR/' -type d -name 'rsync_test_*' 2>/dev/null || echo '');
-            if [ -n \"\$RSYNC_DIRS\" ]; then
-              echo 'Found directories:';
-              echo \"\$RSYNC_DIRS\";
-              rm -rf '$REMOTE_DIR/'rsync_test_*/ 2>/dev/null;
-              echo 'RSYNC directories removed.';
-            else
-              echo 'No RSYNC test directories found.';
-            fi;
-            
-            echo '';
-            echo '3. Final directory state:';
-            ls -la '$REMOTE_DIR/' 2>/dev/null | head -20 || echo 'Directory empty or not accessible';
-            echo '';
-            echo 'Cleanup completed at \$(date)';
-          "
-          
-          echo "Executing cleanup on remote server..."
-          timeout 60 su builder -c "ssh -o StrictHostKeyChecking=no '$VPS_USER@$VPS_HOST' '$CLEANUP_SCRIPT'"
-          
-          # Lokális fájlok törlése is
-          echo ""
-          echo "Cleaning local test files..."
-          rm -rf /home/builder/built_packages/*
-          echo "Local cleanup done."
+          echo "=== TESZT SCRIPT INDUL ==="
+          su builder -c "cd /home/builder && source env_vars.sh && ./upload-test.sh"
 
       - name: Generate Final Report
         if: always()
@@ -496,11 +159,12 @@ EOF
           echo "   - SSH kulcs hitelesítés"
           echo "   - SCP fájlátvitel"
           echo "   - RSYNC szinkronizáció"
-          echo "   - Tömörítés (opcionális)"
-          echo ""
-          echo "📈 Teljesítmény:"
-          echo "   - Fájlok mérete: 5MB, 190MB, ${{ github.event.inputs.test_file_size_mb }}MB"
           echo "   - Tömörítés: ${{ github.event.inputs.use_compression }}"
+          echo ""
+          echo "📈 Tesztfájl méretek:"
+          echo "   - 5MB"
+          echo "   - 190MB"
+          echo "   - ${{ github.event.inputs.test_file_size_mb }}MB"
           echo ""
           echo "🔐 Secrets használat:"
           echo "   - REMOTE_DIR: ${{ secrets.REMOTE_DIR }}"
@@ -508,16 +172,4 @@ EOF
           echo "   - VPS_HOST: ${{ secrets.VPS_HOST }}"
           echo "   - VPS_SSH_KEY: $(if [ -n "${{ secrets.VPS_SSH_KEY }}" ]; then echo "✓ Beállítva"; else echo "✗ Hiányzik"; fi)"
           echo ""
-          echo "💡 Ajánlások az eredeti scripthez:"
-          echo "   1. Használj RSYNC-t nagy fájlokhoz"
-          echo "   2. Add hozzá: ServerAliveInterval 15 az SSH-hoz"
-          echo "   3. Ellenőrizd a távoli könyvtár írási jogosultságokat"
-          echo "   4. Használj -C opciót SCP-vel tömörítéshez"
-          echo ""
-          echo "🕒 Teszt kezdete: $(date -d @$(cat /tmp/test_start_time 2>/dev/null || echo $(date +%s)) '+%Y-%m-%d %H:%M:%S')"
-          echo "🕒 Teszt vége: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo ""
           echo "=== TESZT VÉGE ==="
-          
-          # Időmérés vége
-          echo "Total duration: $(($(date +%s) - $(cat /tmp/test_start_time 2>/dev/null || echo $(date +%s)))) seconds"
