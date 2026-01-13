@@ -306,24 +306,34 @@ class PackageBuilder:
             if test_result.returncode == 0 and "EXISTS" in test_result.stdout:
                 self.repo_exists = True
                 
-                # Now list package files
-                list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | head -50']
-                list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
-                
-                if list_result and list_result.returncode == 0 and list_result.stdout.strip():
-                    lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
-                    self.remote_files = [os.path.basename(f) for f in lines]
-                    
-                    if self.remote_files:
-                        logger.info(f"Found {len(self.remote_files)} packages on server")
-                        self.repo_has_packages = True
+                # Now list package files using pacman -Sl FIRST
+                pacman_check = self._check_pacman_for_repository()
+                if pacman_check["exists"]:
+                    # Repository is known to pacman and has packages
+                    self.repo_has_packages = pacman_check["has_packages"]
+                    if self.repo_has_packages:
+                        logger.info(f"Repository {self.repo_name} has packages (via pacman -Sl)")
                     else:
-                        logger.info("Repository exists but has no packages")
-                        self.repo_has_packages = False
+                        logger.info(f"Repository {self.repo_name} exists in pacman but has no packages")
                 else:
-                    self.remote_files = []
-                    self.repo_has_packages = False
-                    logger.info("Repository exists but could not list packages")
+                    # Fall back to SSH listing
+                    list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null | head -50']
+                    list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
+                    
+                    if list_result and list_result.returncode == 0 and list_result.stdout.strip():
+                        lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
+                        self.remote_files = [os.path.basename(f) for f in lines]
+                        
+                        if self.remote_files:
+                            logger.info(f"Found {len(self.remote_files)} packages on server (via SSH)")
+                            self.repo_has_packages = True
+                        else:
+                            logger.info("Repository exists but has no packages (via SSH)")
+                            self.repo_has_packages = False
+                    else:
+                        self.remote_files = []
+                        self.repo_has_packages = False
+                        logger.info("Repository exists but could not list packages")
             else:
                 self.repo_exists = False
                 self.repo_has_packages = False
@@ -336,16 +346,81 @@ class PackageBuilder:
             self.remote_files = []
             logger.info(f"Error checking repository: {str(e)[:100]}")
     
+    def _check_pacman_for_repository(self):
+        """Check if repository exists and has packages using pacman -Sl."""
+        result = {
+            "exists": False,
+            "has_packages": False
+        }
+        
+        try:
+            # First refresh pacman database
+            logger.info("Refreshing pacman database (sudo pacman -Sy)...")
+            refresh_result = subprocess.run(
+                ["sudo", "pacman", "-Sy", "--noconfirm"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if refresh_result.returncode != 0:
+                logger.warning(f"Failed to refresh pacman database: {refresh_result.stderr[:200]}")
+                # Continue anyway
+            
+            # Check if repository is known to pacman
+            logger.info(f"Checking pacman for repository {self.repo_name}...")
+            pacman_result = subprocess.run(
+                ["pacman", "-Sl", self.repo_name],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if pacman_result.returncode == 0:
+                result["exists"] = True
+                # Check if there's any output (packages in the repository)
+                if pacman_result.stdout.strip():
+                    lines = pacman_result.stdout.strip().split('\n')
+                    # Count actual package lines (skip empty lines)
+                    package_count = sum(1 for line in lines if line.strip() and not line.startswith('['))
+                    if package_count > 0:
+                        result["has_packages"] = True
+                        logger.info(f"Found {package_count} packages in repository {self.repo_name} (via pacman -Sl)")
+                    else:
+                        logger.info(f"Repository {self.repo_name} exists in pacman but has no packages")
+                else:
+                    logger.info(f"Repository {self.repo_name} exists in pacman but has no packages")
+            else:
+                logger.info(f"Repository {self.repo_name} not found in pacman database")
+                
+        except Exception as e:
+            logger.warning(f"Error checking pacman for repository: {e}")
+        
+        return result
+    
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
+        # First try pacman -Sl for the specific package
+        try:
+            logger.debug(f"Checking pacman -Sl for {pkg_name} in {self.repo_name}...")
+            pacman_result = subprocess.run(
+                ["pacman", "-Sl", self.repo_name, pkg_name],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if pacman_result.returncode == 0 and pacman_result.stdout.strip():
+                logger.debug(f"Package {pkg_name} found in pacman database")
+                return True
+        except Exception as e:
+            logger.debug(f"Pacman check failed for {pkg_name}: {e}")
+        
+        # Fall back to SSH file listing if pacman check fails
         if not self.remote_files:
             return False
         
-        if version:
-            pattern = f"^{re.escape(pkg_name)}-{re.escape(version)}-"
-        else:
-            pattern = f"^{re.escape(pkg_name)}-"
-        
+        pattern = f"^{re.escape(pkg_name)}-"
         matches = [f for f in self.remote_files if re.match(pattern, f)]
         
         if matches:
@@ -356,10 +431,34 @@ class PackageBuilder:
     
     def get_remote_version(self, pkg_name):
         """Get the version of a package from remote server."""
+        # First try pacman -Sl for version info
+        try:
+            pacman_result = subprocess.run(
+                ["pacman", "-Sl", self.repo_name, pkg_name],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if pacman_result.returncode == 0 and pacman_result.stdout.strip():
+                # Parse output like: "manjaro-awesome awesome-git 4.3.165.g88a6c2b4-1"
+                lines = pacman_result.stdout.strip().split('\n')
+                for line in lines:
+                    if line.strip() and not line.startswith('['):
+                        parts = line.split()
+                        if len(parts) >= 3 and parts[1] == pkg_name:
+                            version = parts[2]
+                            logger.debug(f"Found version for {pkg_name} via pacman: {version}")
+                            return version
+        except Exception as e:
+            logger.debug(f"Pacman version check failed for {pkg_name}: {e}")
+        
+        # Fall back to SSH file listing regex
         if not self.remote_files:
             return None
         
-        pattern = f"^{re.escape(pkg_name)}-([0-9].*?)-"
+        # Improved regex to match package versions including epoch
+        pattern = f"^{re.escape(pkg_name)}-([0-9][^-]*)-[0-9]+-[^-]+\\.pkg\\.tar\\.(?:zst|xz)$"
         for filename in self.remote_files:
             match = re.match(pattern, filename)
             if match:
@@ -511,13 +610,13 @@ class PackageBuilder:
             logger.info(f"Found special dependencies for {pkg_name}: {self.special_dependencies[pkg_name]}")
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"makepkg -od --noconfirm",
+            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
                                         cwd=pkg_dir, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
@@ -568,7 +667,7 @@ class PackageBuilder:
         if pkg_name in self.special_dependencies:
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         # Generate .SRCINFO file
         srcinfo_result = self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
@@ -615,7 +714,7 @@ class PackageBuilder:
         logger.info(f"Found {len(all_deps)} dependencies: {', '.join(all_deps[:5])}{'...' if len(all_deps) > 5 else ''}")
         
         logger.info("Refreshing pacman database...")
-        self.run_cmd("pacman -Sy --noconfirm", check=False)
+        self.run_cmd("sudo pacman -Sy --noconfirm", check=False)
         
         installed_count = 0
         for dep in all_deps:
@@ -643,7 +742,7 @@ class PackageBuilder:
             
             if result.returncode != 0:
                 logger.info(f"Trying yay for {dep_clean}...")
-                yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}",
+                yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
                                          check=False, capture=True)
                 if yay_result.returncode == 0:
                     installed_count += 1
@@ -694,7 +793,7 @@ class PackageBuilder:
             logger.info(f"Found {len(deps)} dependencies from PKGBUILD: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
             
             logger.info("Refreshing pacman database...")
-            self.run_cmd("pacman -Sy --noconfirm", check=False)
+            self.run_cmd("sudo pacman -Sy --noconfirm", check=False)
             
             installed_count = 0
             for dep in deps:
@@ -717,7 +816,7 @@ class PackageBuilder:
                 
                 if result.returncode != 0:
                     logger.info(f"Trying yay for {dep_clean}...")
-                    yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}",
+                    yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
                                              check=False, capture=True)
                     if yay_result.returncode == 0:
                         installed_count += 1
@@ -801,13 +900,13 @@ class PackageBuilder:
             logger.info(f"Found special dependencies for {pkg_name}")
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self.run_cmd(f"sudo pacman -S --needed --noconfirm {dep}", check=False)
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"makepkg -od --noconfirm",
+            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
                                         cwd=pkg_dir, check=False, capture=True)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
@@ -899,7 +998,7 @@ class PackageBuilder:
         try:
             db_file = f"{self.repo_name}.db.tar.gz"
             
-            for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz",
+            for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
                       f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
                 if os.path.exists(f):
                     os.remove(f)
