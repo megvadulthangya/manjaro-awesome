@@ -131,45 +131,6 @@ jobs:
           
           echo "✅ SSH setup for VPS complete"
 
-      - name: Configure Pacman Repository
-        run: |
-          echo "=== Configuring Pacman Repository ==="
-          echo "Repository: $REPO_NAME"
-          echo "Server URL: $REPO_SERVER_URL"
-          
-          if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
-            echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
-            exit 1
-          fi
-          
-          # Check if repository already exists in pacman.conf
-          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
-            echo "✅ Repository '$REPO_NAME' already exists in pacman.conf"
-            echo "Updating server URL if needed..."
-            
-            sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
-          else
-            echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
-            
-            TEMP_FILE=$(mktemp)
-            echo "" >> "$TEMP_FILE"
-            echo "# Custom repository: $REPO_NAME" >> "$TEMP_FILE"
-            echo "# Repository will be dynamically enabled/disabled by builder.py" >> "$TEMP_FILE"
-            echo "[$REPO_NAME]" >> "$TEMP_FILE"
-            echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
-            echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
-            
-            cat "$TEMP_FILE" >> /etc/pacman.conf
-            rm -f "$TEMP_FILE"
-          fi
-          
-          echo "=== Pacman.conf repository section ==="
-          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
-          
-          echo ""
-          echo "✅ Pacman repository configuration complete"
-          echo "Note: Repository will be enabled/disabled dynamically by builder.py"
-
       - name: Rsync Connection Test
         run: |
           echo "=== Rsync Connection Test ==="

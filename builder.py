@@ -63,8 +63,8 @@ class PackageBuilder:
         self.rebuilt_local_packages = []  # Track local packages that were rebuilt
         
         # Repository state tracking
-        self.repo_exists = False  # Will be determined by fetch_remote_packages()
-        self.repo_has_packages = False  # Will be determined by fetch_remote_packages()
+        self.repo_exists = False  # Will be determined by SSH check
+        self.repo_has_packages = False  # Will be determined by SSH check
         
         # PHASE 1 OBSERVER: hokibot data collection (in-memory only)
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
@@ -147,68 +147,131 @@ class PackageBuilder:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
     
-    def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None):
-        """Run command with error handling."""
-        logger.debug(f"Running: {cmd}")
+    def _run_command_with_logging(self, cmd, description="", check=False, shell=False):
+        """Run command with full logging of stdout, stderr, and exit code."""
+        logger.info(f"{description}")
+        logger.info(f"Command: {cmd}")
         
-        # If no cwd specified, use repo_root
-        if cwd is None:
-            cwd = self.repo_root
-        
-        # If user is specified, we need to handle it differently
-        if user:
-            # Use sudo -u with env variables
-            env = os.environ.copy()
-            env['HOME'] = f'/home/{user}'
-            env['USER'] = user
-            
-            try:
-                # Build the command with sudo -u
-                sudo_cmd = ['sudo', '-u', user]
-                if shell:
-                    # For shell commands, use bash -c
-                    sudo_cmd.extend(['bash', '-c', f'cd "{cwd}" && {cmd}'])
-                else:
-                    # For non-shell commands, add the command directly
-                    sudo_cmd.extend(cmd)
-                
-                result = subprocess.run(
-                    sudo_cmd,
-                    capture_output=capture,
-                    text=True,
-                    check=check,
-                    env=env
-                )
-                return result
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Command failed: {cmd}")
-                if e.stderr:
-                    logger.error(f"Error: {e.stderr[:200]}")
-                if check:
-                    raise
-                return e
+        if shell:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         else:
-            # Run as current user
-            try:
-                result = subprocess.run(
-                    cmd,
-                    cwd=cwd,
-                    shell=shell,
-                    capture_output=capture,
-                    text=True,
-                    check=check
-                )
-                return result
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Command failed: {cmd}")
-                if e.stderr:
-                    logger.error(f"Error: {e.stderr[:200]}")
-                if check:
-                    raise
-                return e
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        logger.info(f"Exit code: {result.returncode}")
+        if result.stdout:
+            logger.info(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            logger.info(f"STDERR:\n{result.stderr}")
+        
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        
+        return result
+    
+    def _ssh_physical_check(self):
+        """STEP 1 - SSH PHYSICAL CHECK (PRIMARY SOURCE OF TRUTH)."""
+        print("\n" + "="*60)
+        print("🔍 STEP 1: SSH Physical Repository Check")
+        print("="*60)
+        
+        # Build SSH command
+        ssh_base_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}"
+        ]
+        
+        # Command 1: Check directory existence
+        logger.info("\n📁 Checking remote directory existence...")
+        cmd1 = ssh_base_cmd + [f"ls -lah {self.remote_dir}"]
+        result1 = self._run_command_with_logging(cmd1, "Directory check")
+        
+        # Command 2: Check for package files
+        logger.info("\n📦 Checking for package files...")
+        cmd2 = ssh_base_cmd + [f"ls -lah {self.remote_dir}/*.pkg.tar.zst"]
+        result2 = self._run_command_with_logging(cmd2, "Package files check")
+        
+        # Analyze results
+        directory_exists = (result1.returncode == 0)
+        
+        # Check if any package files exist
+        packages_exist = False
+        self.remote_files = []
+        
+        if result2.returncode == 0 and result2.stdout:
+            # Parse output to find package files
+            lines = result2.stdout.strip().split('\n')
+            for line in lines:
+                if line.endswith('.pkg.tar.zst'):
+                    # Extract filename from ls output (last column)
+                    parts = line.strip().split()
+                    if len(parts) >= 9:
+                        filename = parts[-1]
+                        self.remote_files.append(filename)
+            
+            if self.remote_files:
+                packages_exist = True
+                logger.info(f"✅ Found {len(self.remote_files)} package(s) via SSH")
+            else:
+                logger.info("ℹ️ SSH found directory but no packages")
+        elif result2.returncode == 2 and "No such file or directory" in result2.stderr:
+            # ls returns 2 when no files match the pattern
+            logger.info("ℹ️ SSH found no package files (exit code 2)")
+        else:
+            # Some other error
+            logger.warning(f"⚠️ SSH package check had unexpected result")
+        
+        # Decision rules based on SSH results only
+        if packages_exist:
+            self.repo_exists = True
+            self.repo_has_packages = True
+            logger.info("🎯 SSH DECISION: Repository HAS packages → WILL ENABLE")
+        elif directory_exists:
+            self.repo_exists = True
+            self.repo_has_packages = False
+            logger.info("🎯 SSH DECISION: Directory exists but NO packages → WILL DISABLE")
+        else:
+            self.repo_exists = False
+            self.repo_has_packages = False
+            logger.info("🎯 SSH DECISION: Directory does NOT exist → WILL DISABLE")
+        
+        return self.repo_has_packages
+    
+    def _pacman_validation(self):
+        """STEP 2 - Pacman validation (ONLY IF SSH said packages exist)."""
+        print("\n" + "="*60)
+        print("🔍 STEP 2: Pacman Repository Validation")
+        print("="*60)
+        
+        if not self.repo_has_packages:
+            logger.info("Skipping pacman validation (SSH said no packages)")
+            return
+        
+        # First, ensure the repo is enabled in pacman.conf
+        self._manage_repository_state(enable=True)
+        
+        # Run pacman -Sy
+        logger.info("\n🔄 Running pacman -Sy...")
+        cmd1 = ["pacman", "-Sy"]
+        result1 = self._run_command_with_logging(cmd1, "pacman -Sy")
+        
+        # Run pacman -Sl $REPO_NAME
+        logger.info(f"\n📋 Running pacman -Sl {self.repo_name}...")
+        cmd2 = ["pacman", "-Sl", self.repo_name]
+        result2 = self._run_command_with_logging(cmd2, f"pacman -Sl {self.repo_name}")
+        
+        # Log warning if pacman fails but don't disable repo
+        if result2.returncode != 0:
+            logger.warning(f"⚠️ Pacman validation failed for {self.repo_name}")
+            logger.warning("⚠️ This is only a WARNING - repository remains ENABLED (SSH decision)")
+        else:
+            logger.info(f"✅ Pacman validation successful for {self.repo_name}")
+        
+        # IMPORTANT: Pacman result NEVER overrides SSH decision
     
     def _manage_repository_state(self, enable=True):
-        """Enable or disable our repository in pacman.conf dynamically."""
+        """Enable or disable our repository in pacman.conf based on SSH decision."""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -288,112 +351,9 @@ class PackageBuilder:
             return False
     
     def fetch_remote_packages(self):
-        """Fetch list of packages from server and determine repository state via SSH."""
-        print("\n📡 Fetching remote package list via SSH...")
-        
-        try:
-            ssh_cmd = [
-                "ssh",
-                *self.ssh_options,
-                "-i", "/home/builder/.ssh/id_ed25519",
-                f"{self.vps_user}@{self.vps_host}"
-            ]
-            
-            # First check if remote directory exists
-            test_cmd = ssh_cmd + [f"test -d {self.remote_dir} && echo 'EXISTS' || echo 'NOT_EXISTS'"]
-            test_result = subprocess.run(test_cmd, capture_output=True, text=True, check=False)
-            
-            ssh_has_directory = False
-            if test_result.returncode == 0 and "EXISTS" in test_result.stdout:
-                self.repo_exists = True
-                ssh_has_directory = True
-                logger.info("SSH: Repository directory exists")
-            else:
-                self.repo_exists = False
-                logger.info("SSH: Repository directory does not exist")
-                return
-            
-            # Now list ALL package files, not just first 50
-            list_cmd = ssh_cmd + [f'find {self.remote_dir} -name "*.pkg.tar.*" -type f 2>/dev/null']
-            list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
-            
-            if list_result and list_result.returncode == 0 and list_result.stdout.strip():
-                lines = [f.strip() for f in list_result.stdout.split('\n') if f.strip()]
-                self.remote_files = [os.path.basename(f) for f in lines]
-                
-                if self.remote_files:
-                    logger.info(f"SSH: Found {len(self.remote_files)} package files")
-                    self.repo_has_packages = True
-                else:
-                    logger.info("SSH: Repository exists but has no package files")
-                    self.repo_has_packages = False
-                    
-                # Also check for database files to confirm it's a valid repository
-                db_cmd = ssh_cmd + [f'ls {self.remote_dir}/{self.repo_name}.db 2>/dev/null || ls {self.remote_dir}/{self.repo_name}.db.tar.gz 2>/dev/null || true']
-                db_result = subprocess.run(db_cmd, capture_output=True, text=True, check=False)
-                
-                if db_result and db_result.stdout.strip():
-                    logger.info(f"SSH: Found repository database file")
-                else:
-                    logger.warning("SSH: No repository database file found")
-            else:
-                self.remote_files = []
-                self.repo_has_packages = False
-                logger.info("SSH: Could not list any package files (repository might be empty)")
-                
-        except Exception as e:
-            self.repo_exists = False
-            self.repo_has_packages = False
-            self.remote_files = []
-            logger.error(f"SSH error checking repository: {str(e)[:100]}")
-    
-    def _check_repository_via_pacman(self):
-        """Check repository status via pacman command.
-        
-        Returns:
-            tuple: (has_packages, error, output)
-                has_packages: True if pacman lists packages for this repository
-                error: True if pacman command failed
-                output: The output from pacman command
-        """
-        try:
-            # First refresh pacman database to ensure we have latest state
-            logger.info("Refreshing pacman database before checking repository...")
-            refresh_result = subprocess.run(
-                ["pacman", "-Sy", "--noconfirm"],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if refresh_result.returncode != 0:
-                logger.warning(f"Pacman refresh had issues: {refresh_result.stderr[:200]}")
-            
-            # Now query the repository
-            cmd = ["pacman", "-Sl", self.repo_name]
-            logger.info(f"Querying pacman for repository '{self.repo_name}'")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            
-            if result.returncode != 0:
-                logger.info(f"Pacman query failed for repository '{self.repo_name}': {result.stderr[:100]}")
-                return False, True, result.stderr
-            
-            output = result.stdout.strip()
-            if output:
-                # Count packages listed
-                package_count = len([line for line in output.split('\n') if line and not line.isspace()])
-                logger.info(f"Pacman lists {package_count} packages in repository '{self.repo_name}'")
-                if package_count > 0:
-                    logger.debug(f"First few packages: {output.split('\n')[:3]}")
-                return True, False, output
-            else:
-                # Pacman lists nothing
-                logger.info(f"Pacman lists no packages in repository '{self.repo_name}'")
-                return False, False, output
-                
-        except Exception as e:
-            logger.error(f"Exception while querying pacman: {str(e)[:100]}")
-            return False, True, str(e)
+        """DEPRECATED: Use _ssh_physical_check instead."""
+        # This function is kept for compatibility but uses the new SSH check
+        return self._ssh_physical_check()
     
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
@@ -489,18 +449,19 @@ class PackageBuilder:
         clone_success = False
         for aur_url in aur_urls:
             logger.info(f"Trying AUR URL: {aur_url}")
-            result = self.run_cmd(
+            result = self._run_command_with_logging(
                 f"git clone --depth 1 {aur_url} {pkg_dir}",
-                check=False
+                description=f"Cloning {pkg_name} from {aur_url}",
+                shell=True
             )
-            if result and result.returncode == 0:
+            if result.returncode == 0:
                 clone_success = True
                 logger.info(f"Successfully cloned {pkg_name} from {aur_url}")
                 break
             else:
                 if pkg_dir.exists():
                     shutil.rmtree(pkg_dir, ignore_errors=True)
-                logger.warning(f"Failed to clone from {aur_url}: {result.stderr[:100] if result and result.stderr else 'Unknown error'}")
+                logger.warning(f"Failed to clone from {aur_url}")
         
         if not clone_success:
             logger.error(f"Failed to clone {pkg_name} from any AUR URL")
@@ -511,11 +472,23 @@ class PackageBuilder:
                 aur_tar_url = f"https://aur.archlinux.org/cgit/aur.git/snapshot/{pkg_name}.tar.gz"
                 tar_file = aur_dir / f"{pkg_name}.tar.gz"
                 
-                result = self.run_cmd(f"wget -q -O {tar_file} {aur_tar_url}", check=False)
-                if result and result.returncode == 0:
+                result = self._run_command_with_logging(
+                    f"wget -q -O {tar_file} {aur_tar_url}",
+                    description=f"Downloading {pkg_name}.tar.gz",
+                    shell=True
+                )
+                if result.returncode == 0:
                     # Extract the tar.gz
-                    self.run_cmd(f"mkdir -p {pkg_dir}", check=False)
-                    self.run_cmd(f"tar -xzf {tar_file} -C {aur_dir}", check=False)
+                    self._run_command_with_logging(
+                        f"mkdir -p {pkg_dir}",
+                        description=f"Creating directory {pkg_dir}",
+                        shell=True
+                    )
+                    self._run_command_with_logging(
+                        f"tar -xzf {tar_file} -C {aur_dir}",
+                        description=f"Extracting {tar_file}",
+                        shell=True
+                    )
                     # Move contents to pkg_dir
                     extracted_dir = aur_dir / pkg_name
                     if extracted_dir.exists() and extracted_dir != pkg_dir:
@@ -532,7 +505,11 @@ class PackageBuilder:
             return False
         
         # Set correct permissions
-        self.run_cmd(f"chown -R builder:builder {pkg_dir}", check=False)
+        self._run_command_with_logging(
+            f"chown -R builder:builder {pkg_dir}",
+            description=f"Setting permissions for {pkg_dir}",
+            shell=True
+        )
         
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
@@ -566,27 +543,33 @@ class PackageBuilder:
             logger.info(f"Found special dependencies for {pkg_name}: {self.special_dependencies[pkg_name]}")
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self._run_command_with_logging(
+                    f"pacman -S --needed --noconfirm {dep}",
+                    description=f"Installing special dependency {dep}",
+                    shell=True
+                )
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True)
+            source_result = self._run_command_with_logging(
+                f"makepkg -od --noconfirm",
+                description=f"Downloading sources for {pkg_name}",
+                shell=True
+            )
             if source_result.returncode != 0:
-                logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
+                logger.error(f"Failed to download sources for {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
             self._install_aur_deps(pkg_dir, pkg_name)
             
             print("Building package...")
-            build_result = self.run_cmd(
+            build_result = self._run_command_with_logging(
                 f"makepkg -si --noconfirm --clean --nocheck",
-                cwd=pkg_dir,
-                capture=True,
-                check=False
+                description=f"Building {pkg_name}",
+                shell=True
             )
             
             if build_result.returncode == 0:
@@ -607,7 +590,7 @@ class PackageBuilder:
                     logger.error(f"No package files created for {pkg_name}")
                     return False
             else:
-                logger.error(f"Failed to build {pkg_name}: {build_result.stderr[:500]}")
+                logger.error(f"Failed to build {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
                 
@@ -623,10 +606,18 @@ class PackageBuilder:
         if pkg_name in self.special_dependencies:
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self._run_command_with_logging(
+                    f"pacman -S --needed --noconfirm {dep}",
+                    description=f"Installing special dependency {dep}",
+                    shell=True
+                )
         
         # Generate .SRCINFO file
-        srcinfo_result = self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
+        srcinfo_result = self._run_command_with_logging(
+            "makepkg --printsrcinfo",
+            description=f"Generating .SRCINFO for {pkg_name}",
+            shell=True
+        )
         
         srcinfo = pkg_dir / ".SRCINFO"
         if not srcinfo.exists():
@@ -670,7 +661,11 @@ class PackageBuilder:
         logger.info(f"Found {len(all_deps)} dependencies: {', '.join(all_deps[:5])}{'...' if len(all_deps) > 5 else ''}")
         
         logger.info("Refreshing pacman database...")
-        self.run_cmd("pacman -Sy --noconfirm", check=False)
+        self._run_command_with_logging(
+            "pacman -Sy --noconfirm",
+            description="Refreshing pacman database",
+            shell=True
+        )
         
         installed_count = 0
         for dep in all_deps:
@@ -686,7 +681,11 @@ class PackageBuilder:
                 continue
             
             # Check if already installed
-            check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
+            check_result = self._run_command_with_logging(
+                f"pacman -Qi {dep_clean} >/dev/null 2>&1",
+                description=f"Checking if {dep_clean} is installed",
+                shell=True
+            )
             if check_result.returncode == 0:
                 logger.debug(f"Dependency already installed: {dep_clean}")
                 installed_count += 1
@@ -694,12 +693,19 @@ class PackageBuilder:
             
             # Try pacman first
             print(f"Installing {dep_clean} via pacman...")
-            result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+            result = self._run_command_with_logging(
+                f"pacman -S --needed --noconfirm {dep_clean}",
+                description=f"Installing {dep_clean} via pacman",
+                shell=True
+            )
             
             if result.returncode != 0:
                 logger.info(f"Trying yay for {dep_clean}...")
-                yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
-                                         check=False, capture=True)
+                yay_result = self._run_command_with_logging(
+                    f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}",
+                    description=f"Installing {dep_clean} via yay",
+                    shell=True
+                )
                 if yay_result.returncode == 0:
                     installed_count += 1
                 else:
@@ -749,7 +755,11 @@ class PackageBuilder:
             logger.info(f"Found {len(deps)} dependencies from PKGBUILD: {', '.join(deps[:5])}{'...' if len(deps) > 5 else ''}")
             
             logger.info("Refreshing pacman database...")
-            self.run_cmd("pacman -Sy --noconfirm", check=False)
+            self._run_command_with_logging(
+                "pacman -Sy --noconfirm",
+                description="Refreshing pacman database for PKGBUILD deps",
+                shell=True
+            )
             
             installed_count = 0
             for dep in deps:
@@ -760,7 +770,11 @@ class PackageBuilder:
                     continue
                 
                 # Check if already installed
-                check_result = self.run_cmd(f"pacman -Qi {dep_clean} >/dev/null 2>&1", check=False)
+                check_result = self._run_command_with_logging(
+                    f"pacman -Qi {dep_clean} >/dev/null 2>&1",
+                    description=f"Checking if {dep_clean} is installed (PKGBUILD)",
+                    shell=True
+                )
                 if check_result.returncode == 0:
                     logger.debug(f"Dependency already installed: {dep_clean}")
                     installed_count += 1
@@ -768,12 +782,19 @@ class PackageBuilder:
                 
                 # Try pacman first
                 print(f"Installing {dep_clean} via pacman...")
-                result = self.run_cmd(f"pacman -S --needed --noconfirm {dep_clean}", check=False, capture=True)
+                result = self._run_command_with_logging(
+                    f"pacman -S --needed --noconfirm {dep_clean}",
+                    description=f"Installing {dep_clean} via pacman (PKGBUILD)",
+                    shell=True
+                )
                 
                 if result.returncode != 0:
                     logger.info(f"Trying yay for {dep_clean}...")
-                    yay_result = self.run_cmd(f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}", 
-                                             check=False, capture=True)
+                    yay_result = self._run_command_with_logging(
+                        f"yay -S --aur --asdeps --needed --noconfirm {dep_clean}",
+                        description=f"Installing {dep_clean} via yay (PKGBUILD)",
+                        shell=True
+                    )
                     if yay_result.returncode == 0:
                         installed_count += 1
                     else:
@@ -856,16 +877,23 @@ class PackageBuilder:
             logger.info(f"Found special dependencies for {pkg_name}")
             for dep in self.special_dependencies[pkg_name]:
                 logger.info(f"Installing special dependency: {dep}")
-                self.run_cmd(f"pacman -S --needed --noconfirm {dep}", check=False)
+                self._run_command_with_logging(
+                    f"pacman -S --needed --noconfirm {dep}",
+                    description=f"Installing special dependency {dep} for {pkg_name}",
+                    shell=True
+                )
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
             
             print("Downloading sources...")
-            source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True)
+            source_result = self._run_command_with_logging(
+                f"makepkg -od --noconfirm",
+                description=f"Downloading sources for {pkg_name}",
+                shell=True
+            )
             if source_result.returncode != 0:
-                logger.error(f"Failed to download sources for {pkg_name}: {source_result.stderr[:200]}")
+                logger.error(f"Failed to download sources for {pkg_name}")
                 return False
             
             # Install dependencies
@@ -877,11 +905,10 @@ class PackageBuilder:
                 makepkg_flags += " --nocheck"
                 logger.info("GTK2: Skipping check step (long)")
             
-            build_result = self.run_cmd(
+            build_result = self._run_command_with_logging(
                 f"makepkg {makepkg_flags}",
-                cwd=pkg_dir,
-                capture=True,
-                check=False
+                description=f"Building {pkg_name}",
+                shell=True
             )
             
             if build_result.returncode == 0:
@@ -916,7 +943,7 @@ class PackageBuilder:
                     logger.error(f"No package files created for {pkg_name}")
                     return False
             else:
-                logger.error(f"Failed to build {pkg_name}: {build_result.stderr[:500]}")
+                logger.error(f"Failed to build {pkg_name}")
                 return False
                 
         except Exception as e:
@@ -928,7 +955,11 @@ class PackageBuilder:
         print(f"Checking dependencies for {pkg_name}...")
         
         # First try to generate .SRCINFO
-        srcinfo_result = self.run_cmd("makepkg --printsrcinfo", cwd=pkg_dir, check=False)
+        srcinfo_result = self._run_command_with_logging(
+            "makepkg --printsrcinfo",
+            description=f"Generating .SRCINFO for {pkg_name}",
+            shell=True
+        )
         
         srcinfo = pkg_dir / ".SRCINFO"
         if srcinfo.exists():
@@ -962,7 +993,7 @@ class PackageBuilder:
             logger.info("Creating new database...")
             cmd = ["repo-add", db_file] + [os.path.basename(str(p)) for p in pkg_files]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            result = self._run_command_with_logging(cmd, "Creating repository database")
             
             if result.returncode == 0:
                 created_files = [
@@ -982,7 +1013,7 @@ class PackageBuilder:
                 logger.info("✅ Database created successfully")
                 return True
             else:
-                logger.error(f"repo-add failed: {result.stderr}")
+                logger.error(f"repo-add failed")
                 return False
                 
         finally:
@@ -1010,9 +1041,9 @@ class PackageBuilder:
             f"mkdir -p {self.remote_dir}"
         ]
         
-        mkdir_result = subprocess.run(mkdir_cmd, capture_output=True, text=True, check=False)
+        mkdir_result = self._run_command_with_logging(mkdir_cmd, "Creating remote directory")
         if mkdir_result.returncode != 0:
-            logger.warning(f"Failed to create remote directory: {mkdir_result.stderr[:200]}")
+            logger.warning(f"Failed to create remote directory")
         
         # Upload files
         scp_cmd = [
@@ -1023,13 +1054,13 @@ class PackageBuilder:
             f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
         ]
         
-        result = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
+        result = self._run_command_with_logging(scp_cmd, "Uploading files via SCP")
         
         if result.returncode == 0:
             logger.info("✅ Upload successful!")
             return True
         else:
-            logger.error(f"Upload failed: {result.stderr[:200]}")
+            logger.error(f"Upload failed")
             return False
     
     def cleanup_old_packages(self):
@@ -1052,7 +1083,7 @@ class PackageBuilder:
                 remote_cmd
             ]
             
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
+            result = self._run_command_with_logging(ssh_cmd, f"Cleaning old versions of {pkg}")
             if result and result.returncode == 0:
                 cleaned += 1
         
@@ -1168,25 +1199,24 @@ class PackageBuilder:
             repo_url = f"https://x-access-token:{github_ssh_key}@github.com/megvadulthangya/manjaro-awesome.git"
             
             print(f"📥 Cloning repository to {clone_dir}...")
-            clone_result = subprocess.run(
+            clone_result = self._run_command_with_logging(
                 ['git', 'clone', repo_url, str(clone_dir)],
-                capture_output=True,
-                text=True
+                description="Cloning repository for PKGBUILD sync"
             )
             
             if clone_result.returncode != 0:
-                logger.error(f"Failed to clone repository: {clone_result.stderr}")
+                logger.error(f"Failed to clone repository")
                 return
             
-            subprocess.run(
+            self._run_command_with_logging(
                 ['git', 'config', 'user.name', 'GitHub Actions Builder'],
-                cwd=clone_dir,
-                capture_output=True
+                description="Setting git user name",
+                cwd=clone_dir
             )
-            subprocess.run(
+            self._run_command_with_logging(
                 ['git', 'config', 'user.email', 'builder@github-actions.local'],
-                cwd=clone_dir,
-                capture_output=True
+                description="Setting git user email",
+                cwd=clone_dir
             )
             
             modified_packages = []
@@ -1206,10 +1236,10 @@ class PackageBuilder:
             for pkg_name in modified_packages:
                 pkgbuild_path = clone_dir / pkg_name / "PKGBUILD"
                 if pkgbuild_path.exists():
-                    subprocess.run(
+                    self._run_command_with_logging(
                         ['git', 'add', str(pkgbuild_path.relative_to(clone_dir))],
-                        cwd=clone_dir,
-                        capture_output=True
+                        description=f"Adding {pkg_name}/PKGBUILD to git",
+                        cwd=clone_dir
                     )
             
             commit_msg = f"chore: synchronize PKGBUILDs with built versions\n\n"
@@ -1220,30 +1250,28 @@ class PackageBuilder:
                         commit_msg += f"- {pkg_name}: {pkg_data['built_version']}\n"
                         break
             
-            commit_result = subprocess.run(
+            commit_result = self._run_command_with_logging(
                 ['git', 'commit', '-m', commit_msg],
-                cwd=clone_dir,
-                capture_output=True,
-                text=True
+                description="Committing PKGBUILD changes",
+                cwd=clone_dir
             )
             
             if commit_result.returncode == 0:
                 print("✅ Changes committed")
                 
                 print("\n📤 Pushing changes to main branch...")
-                push_result = subprocess.run(
+                push_result = self._run_command_with_logging(
                     ['git', 'push', 'origin', 'main'],
-                    cwd=clone_dir,
-                    capture_output=True,
-                    text=True
+                    description="Pushing PKGBUILD changes to remote",
+                    cwd=clone_dir
                 )
                 
                 if push_result.returncode == 0:
                     print("✅ Changes pushed to main branch")
                 else:
-                    logger.error(f"Failed to push changes: {push_result.stderr}")
+                    logger.error(f"Failed to push changes")
             else:
-                logger.warning(f"Commit failed or no changes: {commit_result.stderr}")
+                logger.warning(f"Commit failed or no changes")
             
         except Exception as e:
             logger.error(f"Error during PKGBUILD synchronization: {e}")
@@ -1263,48 +1291,21 @@ class PackageBuilder:
             print(f"Output directory: {self.output_dir}")
             print(f"Special dependencies loaded: {len(self.special_dependencies)}")
             
-            # First, check and configure repository via SSH
-            self.fetch_remote_packages()
+            # STEP 1: SSH Physical Check (PRIMARY SOURCE OF TRUTH)
+            ssh_has_packages = self._ssh_physical_check()
             
-            # Check repository via pacman (primary authority)
-            print("\n🔍 Checking repository status via pacman...")
-            pacman_has_packages, pacman_error, pacman_output = self._check_repository_via_pacman()
-            
-            # Apply decision rules with explicit logging
-            print("\n📋 Applying repository detection rules:")
-            
-            if pacman_has_packages:
-                # Rule: If pacman lists packages → repository is ENABLED
-                print(f"✅ RULE 1: Pacman confirms {pacman_output.count(chr(10))+1} packages - ENABLING repository")
-                logger.info(f"Repository ENABLED: pacman lists packages")
+            # STEP 2: Apply repository enable/disable based on SSH decision
+            if ssh_has_packages:
+                print(f"\n📦 SSH says repository HAS packages - enabling in pacman.conf")
                 self._manage_repository_state(enable=True)
                 
-            elif pacman_error:
-                # Rule: If pacman errors AND SSH confirms repo exists → log warning, DISABLED
-                if self.repo_exists:
-                    print(f"⚠️ RULE 3: Pacman error but SSH confirms repository exists - DISABLING with warning")
-                    logger.warning("Repository DISABLED: pacman error, SSH confirms repository exists")
-                else:
-                    print(f"📭 RULE 3: Pacman error and SSH confirms no repository - DISABLING")
-                    logger.info("Repository DISABLED: pacman error, SSH confirms no repository")
-                self._manage_repository_state(enable=False)
-                
+                # STEP 3: Pacman validation (secondary, only if SSH says packages exist)
+                self._pacman_validation()
             else:
-                # Rule: If pacman lists nothing BUT SSH confirms empty repo → DISABLED
-                if self.repo_has_packages:
-                    print(f"⚠️ RULE 2: Pacman lists no packages but SSH reports {len(self.remote_files)} packages - DISABLING (pacman is authority)")
-                    logger.warning("Repository DISABLED: pacman lists nothing but SSH reports packages")
-                else:
-                    print(f"📭 RULE 2: Pacman and SSH agree repository is empty - DISABLING")
-                    logger.info("Repository DISABLED: pacman and SSH confirm empty repository")
+                print(f"\n📭 SSH says repository EMPTY - disabling in pacman.conf")
                 self._manage_repository_state(enable=False)
             
-            # Debug information
-            print(f"\n📊 Detection summary:")
-            print(f"   Pacman result: {'Packages found' if pacman_has_packages else 'No packages' + ' (error)' if pacman_error else 'No packages'}")
-            print(f"   SSH directory exists: {self.repo_exists}")
-            print(f"   SSH package files: {len(self.remote_files)}")
-            
+            # Continue with package building
             total_built = self.build_packages()
             
             if total_built > 0:
