@@ -1,0 +1,60 @@
+name: Minimal Upload Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_file_size_mb:
+        description: 'Test file size in MB'
+        default: '10'
+        type: string
+
+jobs:
+  minimal-test:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          pacman -Syu --noconfirm --needed openssh rsync
+
+      - name: Setup SSH
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          
+          # Alacsonyabb log szint
+          echo "Host $VPS_HOST" > ~/.ssh/config
+          echo "  HostName $VPS_HOST" >> ~/.ssh/config
+          echo "  User $VPS_USER" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/id_ed25519" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "  ConnectTimeout 45" >> ~/.ssh/config
+          echo "  ServerAliveInterval 20" >> ~/.ssh/config
+          echo "  LogLevel ERROR" >> ~/.ssh/config
+
+      - name: Run Simple Test
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          TEST_FILE_SIZE_MB: ${{ github.event.inputs.test_file_size_mb }}
+        run: |
+          # Letöltjük a minimalizált szkriptet
+          curl -s https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/.github/scripts/simple-upload-test.sh \
+            -o /tmp/simple-test.sh
+          chmod +x /tmp/simple-test.sh
+          
+          echo "🚀 TESZT INDUL..."
+          echo "===================="
+          /tmp/simple-test.sh
