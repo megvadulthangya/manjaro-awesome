@@ -13,6 +13,7 @@ import time
 import hashlib
 import logging
 import socket
+import glob
 from pathlib import Path
 from datetime import datetime
 
@@ -68,16 +69,11 @@ class PackageBuilder:
         # PHASE 1 OBSERVER: hokibot data collection
         self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
         
-        # SSH options
+        # SSH options - UPDATED TO MATCH RSYNC TEST
         self.ssh_options = [
             "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=60",
-            "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=5",
-            "-o", "TCPKeepAlive=yes",
-            "-o", "BatchMode=yes",
-            "-o", "LogLevel=ERROR"
+            "-o", "ConnectTimeout=30",
+            "-o", "BatchMode=yes"
         ]
         
         # Statistics
@@ -88,9 +84,6 @@ class PackageBuilder:
             "aur_failed": 0,
             "local_failed": 0,
         }
-        
-        # Set up SSH config for builder user
-        self._setup_ssh_config()
     
     def _get_repo_root(self):
         """Get the repository root directory reliably."""
@@ -109,60 +102,6 @@ class PackageBuilder:
         current_dir = Path.cwd()
         logger.info(f"Using current directory: {current_dir}")
         return current_dir
-    
-    def _setup_ssh_config(self):
-        """Set up SSH config file for builder user (as in the successful test)."""
-        ssh_dir = Path("/home/builder/.ssh")
-        ssh_config_file = ssh_dir / "config"
-        
-        # Create .ssh directory if it doesn't exist
-        ssh_dir.mkdir(parents=True, exist_ok=True)
-        ssh_dir.chmod(0o700)
-        
-        # Create SSH config content (same as in the successful test)
-        ssh_config_content = f"""Host {self.vps_host}
-  HostName {self.vps_host}
-  User {self.vps_user}
-  IdentityFile /home/builder/.ssh/id_ed25519
-  StrictHostKeyChecking no
-  ConnectTimeout 30
-  ServerAliveInterval 15
-  ServerAliveCountMax 3
-"""
-        
-        # Write SSH config file
-        ssh_config_file.write_text(ssh_config_content)
-        ssh_config_file.chmod(0o600)
-        
-        # Create known_hosts file with host key
-        ssh_keyscan_cmd = [
-            "ssh-keyscan",
-            "-H",
-            self.vps_host
-        ]
-        
-        try:
-            result = subprocess.run(
-                ssh_keyscan_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                known_hosts_file = ssh_dir / "known_hosts"
-                known_hosts_file.write_text(result.stdout)
-                known_hosts_file.chmod(0o600)
-                logger.info(f"✅ Added {self.vps_host} to known_hosts")
-            else:
-                logger.warning(f"ssh-keyscan failed: {result.stderr}")
-        except Exception as e:
-            logger.warning(f"Could not run ssh-keyscan: {e}")
-        
-        # Set ownership to builder user
-        subprocess.run(['chown', '-R', 'builder:builder', str(ssh_dir)], check=False)
-        
-        logger.info(f"✅ SSH config set up for {self.vps_user}@{self.vps_host}")
     
     def _load_config(self):
         """Load configuration from environment and config files."""
@@ -270,14 +209,18 @@ class PackageBuilder:
                 return e
     
     def test_ssh_connection(self):
-        """Test SSH connection to VPS using SSH config."""
+        """Test SSH connection to VPS."""
         print("\n🔍 Testing SSH connection to VPS...")
         
-        # Test using SSH config (same as in successful test)
-        test_cmd = f"ssh {self.vps_host} 'echo SSH_TEST_SUCCESS && hostname'"
+        ssh_test_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            "echo SSH_TEST_SUCCESS"
+        ]
         
-        result = self.run_cmd(test_cmd, user="builder", capture=True, check=False, shell=True, log_cmd=True)
-        
+        result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, check=False)
         if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
             print("✅ SSH connection successful")
             return True
@@ -333,13 +276,29 @@ class PackageBuilder:
         print("STEP 2: Verifying repository via SSH (find *.pkg.tar.zst files)")
         print("="*60)
         
-        # Use SSH config (same as successful test)
-        ssh_cmd = f"ssh {self.vps_host} 'find {self.remote_dir} -maxdepth 1 -type f -name \"*.pkg.tar.zst\" 2>/dev/null'"
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found at {ssh_key_path}")
+            self.repo_has_packages_ssh = False
+            return False
         
-        logger.info(f"RUNNING SSH COMMAND: {ssh_cmd}")
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", ssh_key_path,
+            f"{self.vps_user}@{self.vps_host}",
+            f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.zst' 2>/dev/null"
+        ]
+        
+        logger.info(f"RUNNING SSH COMMAND: {' '.join(ssh_cmd)}")
         
         try:
-            result = self.run_cmd(ssh_cmd, user="builder", capture=True, text=True, check=False, shell=True)
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
             
             logger.info(f"EXIT CODE: {result.returncode}")
             if result.stdout:
@@ -1135,7 +1094,8 @@ class PackageBuilder:
             os.chdir(old_cwd)
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC (as in successful test)."""
+        """Upload packages to server using RSYNC (as per successful test)."""
+        # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
         
@@ -1145,42 +1105,136 @@ class PackageBuilder:
             logger.warning("No files to upload")
             return False
         
-        logger.info(f"Uploading {len(all_files)} files using RSYNC...")
+        logger.info(f"Uploading {len(all_files)} files...")
         
-        # Build RSYNC command (same as successful test)
-        rsync_cmd = "rsync -avz --progress --stats --chmod=0644"
+        # Collect files using glob patterns (as in the test script)
+        file_patterns = [
+            str(self.output_dir / "*.pkg.tar.*"),
+            str(self.output_dir / f"{self.repo_name}.*")
+        ]
         
-        # Add source files
-        file_patterns = []
-        for f in all_files:
-            file_patterns.append(f'"{f}"')
+        files_to_upload = []
+        for pattern in file_patterns:
+            files_to_upload.extend(glob.glob(pattern))
         
-        rsync_cmd += f" {' '.join(file_patterns)}"
-        
-        # Add destination using SSH config (same as successful test)
-        rsync_cmd += f" {self.vps_host}:{self.remote_dir}/"
-        
-        # Log full command and details
-        logger.info(f"RUNNING RSYNC COMMAND: {rsync_cmd}")
-        logger.info(f"SOURCE PATHS: {[str(f) for f in all_files]}")
-        logger.info(f"DESTINATION PATH: {self.remote_dir}/")
-        logger.info(f"SSH TARGET (from config): {self.vps_host}")
-        
-        # Run RSYNC as builder user (same as successful test)
-        result = self.run_cmd(rsync_cmd, user="builder", capture=True, check=False, shell=True, log_cmd=True)
-        
-        logger.info(f"EXIT CODE: {result.returncode}")
-        if result.stdout:
-            logger.info(f"STDOUT: {result.stdout[:1000]}")
-        if result.stderr:
-            logger.info(f"STDERR: {result.stderr[:500]}")
-        
-        if result.returncode == 0:
-            logger.info("✅ Upload successful using RSYNC!")
-            return True
-        else:
-            logger.error("❌ RSYNC upload failed")
+        if not files_to_upload:
+            logger.error("No files found to upload!")
             return False
+        
+        # Log files to upload
+        logger.info(f"Files to upload ({len(files_to_upload)}):")
+        for f in files_to_upload:
+            size_mb = os.path.getsize(f) / (1024 * 1024)
+            logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB)")
+        
+        # Build RSYNC command - EXACTLY as in the working test script
+        rsync_cmd = f"""
+        rsync -avz \\
+          --progress \\
+          --stats \\
+          --chmod=0644 \\
+          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes" \\
+          {" ".join(f"'{f}'" for f in files_to_upload)} \\
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+        """
+        
+        # Log the command
+        logger.info(f"RUNNING RSYNC COMMAND:")
+        logger.info(rsync_cmd.strip())
+        logger.info(f"SOURCE: {self.output_dir}/")
+        logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
+        
+        start_time = time.time()
+        
+        try:
+            # Run rsync in shell mode (as in the test script)
+            result = subprocess.run(
+                rsync_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            end_time = time.time()
+            duration = int(end_time - start_time)
+            
+            # Log the output
+            logger.info(f"EXIT CODE: {result.returncode}")
+            if result.stdout:
+                # Print each line of output
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"RSYNC: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip():
+                        logger.error(f"RSYNC ERR: {line}")
+            
+            if result.returncode == 0:
+                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
+                
+                # Verify files on remote server
+                self._verify_uploaded_files(files_to_upload)
+                return True
+            else:
+                logger.error(f"❌ RSYNC upload failed!")
+                return False
+                
+        except Exception as e:
+            logger.error(f"RSYNC execution error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _verify_uploaded_files(self, uploaded_files):
+        """Verify uploaded files on remote server."""
+        logger.info("Verifying uploaded files on remote server...")
+        
+        # Get list of files we uploaded
+        uploaded_filenames = [os.path.basename(f) for f in uploaded_files]
+        
+        # Check remote directory
+        remote_cmd = f"""
+        echo "=== REMOTE DIRECTORY CONTENTS ==="
+        ls -la "{self.remote_dir}/" 2>/dev/null || echo "Directory not accessible"
+        echo ""
+        echo "=== UPLOADED FILES ==="
+        for file in {" ".join(uploaded_filenames)}; do
+            if [ -f "{self.remote_dir}/$file" ]; then
+                echo "✅ $file - $(stat -c%s "{self.remote_dir}/$file" 2>/dev/null || echo "?") bytes"
+            else
+                echo "❌ $file - MISSING"
+            fi
+        done
+        """
+        
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options,
+            "-i", "/home/builder/.ssh/id_ed25519",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"VERIFY: {line}")
+            else:
+                if result.stderr:
+                    logger.warning(f"Verification warning: {result.stderr[:200]}")
+                    
+        except Exception as e:
+            logger.warning(f"Verification error: {e}")
     
     def cleanup_old_packages(self):
         """Remove old package versions (keep only last 3 versions)."""
@@ -1190,20 +1244,30 @@ class PackageBuilder:
         
         logger.info(f"Cleaning up old versions for {len(self.packages_to_clean)} packages...")
         
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found at {ssh_key_path}")
+            return
+        
         cleaned = 0
         for pkg in self.packages_to_clean:
-            # Keep only the last 3 versions of each package (same as bash script)
+            # Keep only the last 3 versions of each package
             remote_cmd = (
                 f'cd {self.remote_dir} && '
                 f'ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | '
                 f'xargs -r rm -f 2>/dev/null || true'
             )
             
-            # Use SSH config (same as successful test)
-            ssh_cmd = f"ssh {self.vps_host} '{remote_cmd}'"
+            ssh_cmd = [
+                "ssh",
+                *self.ssh_options,
+                "-i", ssh_key_path,
+                f"{self.vps_user}@{self.vps_host}",
+                remote_cmd
+            ]
             
-            logger.info(f"CLEANUP COMMAND: {ssh_cmd}")
-            result = self.run_cmd(ssh_cmd, user="builder", capture=True, check=False, shell=True)
+            logger.info(f"CLEANUP COMMAND: {' '.join(ssh_cmd)}")
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
             
             logger.info(f"EXIT CODE: {result.returncode}")
             if result.returncode == 0:
@@ -1217,7 +1281,7 @@ class PackageBuilder:
     def run(self):
         """Main execution."""
         print("\n" + "="*60)
-        print("🚀 MANJARO PACKAGE BUILDER (WITH RSYNC UPLOAD)")
+        print("🚀 MANJARO PACKAGE BUILDER (STRICT REPOSITORY HANDLING)")
         print("="*60)
         
         try:
@@ -1258,7 +1322,7 @@ class PackageBuilder:
                 print("="*60)
                 
                 if self.update_database():
-                    # Try upload (using RSYNC which worked in test)
+                    # Try upload without SSH test (rsync works better)
                     if self.upload_packages():
                         self.cleanup_old_packages()
                         self._synchronize_pkgbuilds()
