@@ -154,7 +154,8 @@ jobs:
             TEMP_FILE=$(mktemp)
             echo "" >> "$TEMP_FILE"
             echo "# Custom repository: $REPO_NAME" >> "$TEMP_FILE"
-            echo "# Repository will be dynamically enabled/disabled by builder.py" >> "$TEMP_FILE"
+            echo "# Repository will be dynamically enabled/disabled by builder.py based on pacman -Sl output" >> "$TEMP_FILE"
+            echo "# This avoids 404 errors when repository is empty" >> "$TEMP_FILE"
             echo "[$REPO_NAME]" >> "$TEMP_FILE"
             echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
             echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
@@ -168,7 +169,7 @@ jobs:
           
           echo ""
           echo "✅ Pacman repository configuration complete"
-          echo "Note: Repository will be enabled/disabled dynamically by builder.py"
+          echo "Note: Repository will be enabled/disabled dynamically by builder.py based on pacman -Sl output"
 
       - name: Rsync Connection Test
         run: |
@@ -211,7 +212,8 @@ jobs:
           # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
-          # Temporarily comment out our repository to avoid 404 errors
+          # Temporarily comment out our repository to avoid 404 errors during dependency installation
+          # Builder will enable it dynamically based on pacman -Sl output
           echo "Temporarily commenting out $REPO_NAME repository for dependency installation..."
           sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
           
@@ -231,7 +233,7 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf  # tilix-git specific dependencies
             
-          # Restore pacman.conf
+          # Restore pacman.conf (with repository commented out - builder.py will handle it)
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
           # Install yay for AUR dependencies
