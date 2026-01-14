@@ -283,64 +283,21 @@ class PackageBuilder:
             print(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
             return False
     
-    def _sync_pacman_databases(self):
-        """STEP 0: Sync pacman databases (REQUIRED)."""
+    def _list_remote_packages(self):
+        """STEP 1: List all *.pkg.tar.zst files in the remote repository directory."""
         print("\n" + "="*60)
-        print("STEP 0: Syncing pacman databases (sudo pacman -Sy --noconfirm)")
-        print("="*60)
-        
-        cmd = "sudo pacman -Sy --noconfirm"
-        result = self.run_cmd(cmd, log_cmd=True)
-        
-        if result.returncode != 0:
-            logger.error("❌ Failed to sync pacman databases - FAIL HARD")
-            sys.exit(1)
-        
-        logger.info("✅ Pacman databases synced successfully")
-        return True
-    
-    def _query_pacman_repository(self):
-        """STEP 1: Pacman repository query (PRIMARY SOURCE)."""
-        print("\n" + "="*60)
-        print(f"STEP 1: Querying pacman repository '{self.repo_name}' (pacman -Sl)")
-        print("="*60)
-        
-        cmd = f"pacman -Sl {self.repo_name}"
-        result = self.run_cmd(cmd, log_cmd=True, check=False, shell=True)
-        
-        if result.returncode == 0:
-            if result.stdout.strip():
-                lines = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-                package_count = len(lines)
-                logger.info(f"✅ pacman -Sl returned {package_count} package lines")
-                print(f"Sample output: {lines[:3] if lines else 'None'}")
-                self.repo_has_packages_pacman = True
-                return True
-            else:
-                logger.info("ℹ️ pacman -Sl returned empty stdout (inconclusive)")
-                self.repo_has_packages_pacman = False
-                return False
-        else:
-            logger.warning(f"⚠️ pacman -Sl returned error (not authoritative): {result.stderr[:200]}")
-            self.repo_has_packages_pacman = None  # Error state
-            return None
-    
-    def _verify_repository_via_ssh(self):
-        """STEP 2: SSH filesystem verification (SECONDARY, REQUIRED)."""
-        print("\n" + "="*60)
-        print("STEP 2: Verifying repository via SSH (find *.pkg.tar.zst files)")
+        print("STEP 1: Listing remote repository packages (SSH find)")
         print("="*60)
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
             logger.error(f"SSH key not found at {ssh_key_path}")
-            self.repo_has_packages_ssh = False
-            return False
+            return []
         
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.zst' 2>/dev/null"
+            f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null"
         ]
         
         logger.info(f"RUNNING SSH COMMAND: {' '.join(ssh_cmd)}")
@@ -355,7 +312,7 @@ class PackageBuilder:
             
             logger.info(f"EXIT CODE: {result.returncode}")
             if result.stdout:
-                logger.info(f"STDOUT: {result.stdout[:1000]}")
+                logger.info(f"STDOUT (first 1000 chars): {result.stdout[:1000]}")
             if result.stderr:
                 logger.info(f"STDERR: {result.stderr[:500]}")
             
@@ -365,59 +322,248 @@ class PackageBuilder:
                 logger.info(f"✅ SSH find returned {file_count} package files")
                 if file_count > 0:
                     print(f"Sample files: {files[:5]}")
-                    self.repo_has_packages_ssh = True
                     self.remote_files = [os.path.basename(f) for f in files]
                 else:
-                    self.repo_has_packages_ssh = False
-                return True
+                    logger.info("ℹ️ No package files found on remote server")
+                return files
             else:
                 logger.warning(f"⚠️ SSH find returned error: {result.stderr[:200]}")
-                self.repo_has_packages_ssh = None
-                return False
+                return []
                 
         except Exception as e:
             logger.error(f"SSH command failed: {e}")
-            self.repo_has_packages_ssh = None
-            return False
+            return []
     
-    def _decide_repository_state(self):
-        """STEP C: Repository decision matrix (NO DEVIATION)."""
+    def _check_database_files(self):
+        """Check if repository database files exist on server."""
         print("\n" + "="*60)
-        print("REPOSITORY DECISION MATRIX")
+        print("STEP 2: Checking existing database files on server")
         print("="*60)
         
-        print(f"pacman -Sl result: {self.repo_has_packages_pacman}")
-        print(f"SSH find result: {self.repo_has_packages_ssh}")
+        db_files = [
+            f"{self.repo_name}.db",
+            f"{self.repo_name}.db.tar.gz",
+            f"{self.repo_name}.files",
+            f"{self.repo_name}.files.tar.gz"
+        ]
         
-        # Decision matrix
-        if self.repo_has_packages_pacman is True:
-            # packages | any → ENABLE repo
-            logger.info("✅ Decision: ENABLE repository (pacman -Sl shows packages)")
-            self.repo_final_state = "ENABLE"
-            return "ENABLE"
+        existing_files = []
+        missing_files = []
         
-        elif self.repo_has_packages_pacman is None and self.repo_has_packages_ssh is True:
-            # error | files → ENABLE repo
-            logger.info("✅ Decision: ENABLE repository (SSH find shows files)")
-            self.repo_final_state = "ENABLE"
-            return "ENABLE"
+        for db_file in db_files:
+            remote_cmd = f"test -f {self.remote_dir}/{db_file} && echo 'EXISTS' || echo 'MISSING'"
+            
+            ssh_cmd = [
+                "ssh",
+                f"{self.vps_user}@{self.vps_host}",
+                remote_cmd
+            ]
+            
+            try:
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0 and "EXISTS" in result.stdout:
+                    existing_files.append(db_file)
+                    logger.info(f"✅ Database file exists: {db_file}")
+                else:
+                    missing_files.append(db_file)
+                    logger.info(f"ℹ️ Database file missing: {db_file}")
+                    
+            except Exception as e:
+                logger.warning(f"Could not check {db_file}: {e}")
+                missing_files.append(db_file)
         
-        elif self.repo_has_packages_pacman is False and self.repo_has_packages_ssh is False:
-            # empty | empty → DISABLE repo
-            logger.info("✅ Decision: DISABLE repository (both checks empty)")
-            self.repo_final_state = "DISABLE"
-            return "DISABLE"
-        
-        elif self.repo_has_packages_pacman is None and self.repo_has_packages_ssh is None:
-            # error | error → FAIL HARD
-            logger.error("❌ Decision: FAIL HARD (both checks errored)")
-            sys.exit(1)
-        
+        if existing_files:
+            logger.info(f"Found {len(existing_files)} database files on server")
         else:
-            # Default: enable if unsure
-            logger.warning("⚠️ Ambiguous state, defaulting to ENABLE")
-            self.repo_final_state = "ENABLE"
-            return "ENABLE"
+            logger.info("No database files found on server")
+        
+        return existing_files, missing_files
+    
+    def _fetch_existing_database(self, existing_files):
+        """Fetch existing database files from server."""
+        if not existing_files:
+            return
+        
+        print("\n📥 Fetching existing database files from server...")
+        
+        for db_file in existing_files:
+            remote_path = f"{self.remote_dir}/{db_file}"
+            local_path = self.output_dir / db_file
+            
+            # Remove local copy if exists
+            if local_path.exists():
+                local_path.unlink()
+            
+            ssh_cmd = [
+                "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=30",
+                f"{self.vps_user}@{self.vps_host}:{remote_path}",
+                str(local_path)
+            ]
+            
+            try:
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0 and local_path.exists():
+                    size_mb = local_path.stat().st_size / (1024 * 1024)
+                    logger.info(f"✅ Fetched: {db_file} ({size_mb:.2f} MB)")
+                else:
+                    logger.warning(f"⚠️ Could not fetch {db_file}")
+            except Exception as e:
+                logger.warning(f"Could not fetch {db_file}: {e}")
+    
+    def _get_all_server_packages(self):
+        """Get ALL package files from server (full state)."""
+        print("\n🔍 Getting complete package list from server...")
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' 2>/dev/null"
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                server_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+                server_filenames = [os.path.basename(f) for f in server_files]
+                
+                # Also include newly built packages from output_dir
+                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
+                local_filenames = [f.name for f in local_files]
+                
+                # Combine lists, preferring local (new) versions
+                all_packages = {}
+                for filename in server_filenames + local_filenames:
+                    # Extract package name (without version)
+                    match = re.match(r'^([a-zA-Z0-9_-]+)-[0-9]', filename)
+                    if match:
+                        pkg_name = match.group(1)
+                        all_packages[pkg_name] = filename
+                    else:
+                        all_packages[filename] = filename  # Fallback
+                
+                logger.info(f"📊 Package counts:")
+                logger.info(f"  Server packages: {len(server_filenames)}")
+                logger.info(f"  Local packages: {len(local_filenames)}")
+                logger.info(f"  Total unique packages: {len(all_packages)}")
+                
+                return list(all_packages.values())
+            else:
+                logger.info("ℹ️ No packages found on server")
+                # Return only local packages
+                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
+                return [f.name for f in local_files]
+                
+        except Exception as e:
+            logger.error(f"Failed to get server packages: {e}")
+            # Fallback to local packages only
+            local_files = list(self.output_dir.glob("*.pkg.tar.*"))
+            return [f.name for f in local_files]
+    
+    def _generate_full_database(self):
+        """Generate repository database from ALL packages."""
+        all_packages = self._get_all_server_packages()
+        
+        if not all_packages:
+            logger.info("No packages to add to database")
+            return False
+        
+        logger.info(f"Generating database with {len(all_packages)} packages...")
+        logger.info(f"Packages: {', '.join(all_packages[:10])}{'...' if len(all_packages) > 10 else ''}")
+        
+        old_cwd = os.getcwd()
+        os.chdir(self.output_dir)
+        
+        try:
+            db_file = f"{self.repo_name}.db.tar.gz"
+            
+            # Clean old database files
+            for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
+                      f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
+                if os.path.exists(f):
+                    os.remove(f)
+            
+            # First, ensure all package files exist locally
+            local_package_paths = []
+            missing_packages = []
+            
+            for pkg in all_packages:
+                local_path = Path(pkg)
+                if local_path.exists():
+                    local_package_paths.append(str(local_path))
+                else:
+                    missing_packages.append(pkg)
+            
+            if missing_packages:
+                logger.warning(f"⚠️ Some packages exist on server but not locally: {missing_packages}")
+                logger.info("Database will be created with available packages only")
+            
+            if not local_package_paths:
+                logger.error("No package files available for database creation")
+                return False
+            
+            cmd = ["repo-add", db_file] + local_package_paths
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if result.returncode == 0:
+                logger.info("✅ Database created with full repository state")
+                
+                # Verify the database was created
+                db_path = Path(db_file)
+                if db_path.exists():
+                    size_mb = db_path.stat().st_size / (1024 * 1024)
+                    logger.info(f"Database size: {size_mb:.2f} MB")
+                    
+                    # List packages in database for verification
+                    list_cmd = ["tar", "-tzf", db_file]
+                    list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
+                    if list_result.returncode == 0:
+                        db_entries = [line for line in list_result.stdout.split('\n') if line.endswith('/desc')]
+                        logger.info(f"Database contains {len(db_entries)} package entries")
+                
+                return True
+            else:
+                logger.error(f"repo-add failed: {result.stderr}")
+                return False
+                
+        finally:
+            os.chdir(old_cwd)
+    
+    def _sync_pacman_databases(self):
+        """Sync pacman databases ONLY after repository database is guaranteed."""
+        print("\n" + "="*60)
+        print("FINAL STEP: Syncing pacman databases (sudo pacman -Sy --noconfirm)")
+        print("="*60)
+        
+        cmd = "sudo pacman -Sy --noconfirm"
+        result = self.run_cmd(cmd, log_cmd=True)
+        
+        if result.returncode != 0:
+            logger.error("❌ Failed to sync pacman databases")
+            return False
+        
+        logger.info("✅ Pacman databases synced successfully")
+        return True
     
     def _apply_repository_decision(self, decision):
         """Apply repository enable/disable decision."""
@@ -1111,180 +1257,6 @@ class PackageBuilder:
             import traceback
             traceback.print_exc()
     
-    def _fetch_existing_database(self):
-        """Fetch existing repository database files from server."""
-        print("\n📥 Fetching existing repository database from server...")
-        
-        db_files = [
-            f"{self.repo_name}.db",
-            f"{self.repo_name}.db.tar.gz",
-            f"{self.repo_name}.files",
-            f"{self.repo_name}.files.tar.gz"
-        ]
-        
-        for db_file in db_files:
-            remote_path = f"{self.remote_dir}/{db_file}"
-            local_path = self.output_dir / db_file
-            
-            # Remove local copy if exists
-            if local_path.exists():
-                local_path.unlink()
-            
-            ssh_cmd = [
-                "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=30",
-                f"{self.vps_user}@{self.vps_host}:{remote_path}",
-                str(local_path)
-            ]
-            
-            try:
-                result = subprocess.run(
-                    ssh_cmd,
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                
-                if result.returncode == 0 and local_path.exists():
-                    logger.info(f"✅ Fetched: {db_file}")
-                else:
-                    logger.info(f"ℹ️ Database file not found on server: {db_file}")
-            except Exception as e:
-                logger.warning(f"Could not fetch {db_file}: {e}")
-    
-    def _get_all_server_packages(self):
-        """Get ALL package files from server (full state)."""
-        print("\n🔍 Getting complete package list from server...")
-        
-        ssh_cmd = [
-            "ssh",
-            f"{self.vps_user}@{self.vps_host}",
-            f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' 2>/dev/null"
-        ]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                server_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-                server_filenames = [os.path.basename(f) for f in server_files]
-                
-                # Also include newly built packages from output_dir
-                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-                local_filenames = [f.name for f in local_files]
-                
-                # Combine lists, preferring local (new) versions
-                all_packages = {}
-                for filename in server_filenames + local_filenames:
-                    # Extract package name (without version)
-                    match = re.match(r'^([a-zA-Z0-9_-]+)-[0-9]', filename)
-                    if match:
-                        pkg_name = match.group(1)
-                        all_packages[pkg_name] = filename
-                    else:
-                        all_packages[filename] = filename  # Fallback
-                
-                logger.info(f"📊 Package counts:")
-                logger.info(f"  Server packages: {len(server_filenames)}")
-                logger.info(f"  Local packages: {len(local_filenames)}")
-                logger.info(f"  Total unique packages: {len(all_packages)}")
-                
-                return list(all_packages.values())
-            else:
-                logger.info("ℹ️ No packages found on server")
-                # Return only local packages
-                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-                return [f.name for f in local_files]
-                
-        except Exception as e:
-            logger.error(f"Failed to get server packages: {e}")
-            # Fallback to local packages only
-            local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-            return [f.name for f in local_files]
-    
-    def update_database(self):
-        """Update repository database with FULL repository state."""
-        # Fetch existing database from server
-        self._fetch_existing_database()
-        
-        # Get ALL packages that should be in repository
-        all_packages = self._get_all_server_packages()
-        
-        if not all_packages:
-            logger.info("No packages to add to database")
-            return False
-        
-        logger.info(f"Updating database with {len(all_packages)} packages...")
-        logger.info(f"Packages: {', '.join(all_packages[:10])}{'...' if len(all_packages) > 10 else ''}")
-        
-        old_cwd = os.getcwd()
-        os.chdir(self.output_dir)
-        
-        try:
-            db_file = f"{self.repo_name}.db.tar.gz"
-            
-            # Clean old database files
-            for f in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
-                      f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
-                if os.path.exists(f):
-                    os.remove(f)
-            
-            # Create database with ALL packages
-            logger.info("Creating new database with full repository state...")
-            
-            # First, ensure all package files exist locally
-            local_package_paths = []
-            missing_packages = []
-            
-            for pkg in all_packages:
-                local_path = Path(pkg)
-                if local_path.exists():
-                    local_package_paths.append(str(local_path))
-                else:
-                    missing_packages.append(pkg)
-            
-            if missing_packages:
-                logger.warning(f"⚠️ Some packages exist on server but not locally: {missing_packages}")
-                logger.info("Database will be created with available packages only")
-            
-            if not local_package_paths:
-                logger.error("No package files available for database creation")
-                return False
-            
-            cmd = ["repo-add", db_file] + local_package_paths
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            
-            if result.returncode == 0:
-                logger.info("✅ Database created with full repository state")
-                
-                # Verify the database was created
-                db_path = Path(db_file)
-                if db_path.exists():
-                    size_mb = db_path.stat().st_size / (1024 * 1024)
-                    logger.info(f"Database size: {size_mb:.2f} MB")
-                    
-                    # List packages in database for verification
-                    list_cmd = ["tar", "-tzf", db_file]
-                    list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
-                    if list_result.returncode == 0:
-                        db_entries = [line for line in list_result.stdout.split('\n') if line.endswith('/desc')]
-                        logger.info(f"Database contains {len(db_entries)} package entries")
-                
-                return True
-            else:
-                logger.error(f"repo-add failed: {result.stderr}")
-                return False
-                
-        finally:
-            os.chdir(old_cwd)
-    
     def upload_packages(self):
         """Upload packages to server using RSYNC - WITH RETRY LOGIC."""
         # Get all package files and database files
@@ -1516,9 +1488,9 @@ class PackageBuilder:
         logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
-        """Main execution."""
+        """Main execution with CORRECT Arch Linux repository ordering."""
         print("\n" + "="*60)
-        print("🚀 MANJARO PACKAGE BUILDER (STRICT REPOSITORY HANDLING)")
+        print("🚀 MANJARO PACKAGE BUILDER (CORRECT ARCH ORDERING)")
         print("="*60)
         
         try:
@@ -1530,55 +1502,62 @@ class PackageBuilder:
             special_deps = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
             print(f"Special dependencies loaded: {len(special_deps)}")
             
-            # STEP 0: Sync pacman databases (REQUIRED)
-            self._sync_pacman_databases()
+            # STEP 1: SSH/rsync - List all *.pkg.tar.zst files
+            print("\n" + "="*60)
+            print("PHASE 1: REPOSITORY FILESYSTEM STATE (SOURCE OF TRUTH)")
+            print("="*60)
             
-            # STEP 1: Pacman repository query (PRIMARY SOURCE)
-            pacman_result = self._query_pacman_repository()
+            # Disable repository initially to prevent pacman errors
+            self._apply_repository_decision("DISABLE")
             
-            # STEP 2: SSH filesystem verification (SECONDARY, REQUIRED)
-            ssh_result = self._verify_repository_via_ssh()
+            remote_packages = self._list_remote_packages()
             
-            # STEP C: Repository decision matrix (NO DEVIATION)
-            decision = self._decide_repository_state()
+            # STEP 2: Check existing database files
+            existing_db_files, missing_db_files = self._check_database_files()
             
-            # Apply repository decision
-            self._apply_repository_decision(decision)
+            # Fetch existing database if available
+            if existing_db_files:
+                self._fetch_existing_database(existing_db_files)
             
-            # Only continue if repository is enabled
-            if decision == "DISABLE":
-                logger.info("Repository disabled, no packages to build")
-                return 0
+            # Build packages (repository is disabled during build)
+            print("\n" + "="*60)
+            print("PHASE 2: PACKAGE BUILDING")
+            print("="*60)
             
-            # Build packages
             total_built = self.build_packages()
             
-            if total_built > 0:
+            if total_built > 0 or remote_packages:
                 print("\n" + "="*60)
-                print("📦 Finalizing build")
+                print("PHASE 3: REPOSITORY DATABASE HANDLING")
                 print("="*60)
                 
-                # FIRST: Upload new packages to server
-                if not self.test_ssh_connection():
-                    logger.warning("SSH test failed, but trying upload anyway...")
-                
-                # Upload packages (but NOT database yet)
-                if self.upload_packages():
-                    # Cleanup old packages on server
-                    self.cleanup_old_packages()
+                # Always regenerate database with FULL repository state
+                if self._generate_full_database():
+                    # Upload regenerated database and packages
+                    if not self.test_ssh_connection():
+                        logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # SECOND: Update database with FULL repository state
-                    if self.update_database():
-                        # THIRD: Upload the regenerated database back to server
-                        if self.upload_packages():  # This will now upload the database
-                            self._synchronize_pkgbuilds()
-                            print("\n✅ Build completed successfully!")
-                        else:
-                            print("\n❌ Database upload failed!")
+                    # Upload everything (packages + database)
+                    if self.upload_packages():
+                        # Cleanup old packages
+                        self.cleanup_old_packages()
+                        
+                        # STEP 4: ONLY NOW enable repository and sync pacman
+                        print("\n" + "="*60)
+                        print("PHASE 4: PACMAN SYNCHRONIZATION (CONSUMER)")
+                        print("="*60)
+                        
+                        self._apply_repository_decision("ENABLE")
+                        self._sync_pacman_databases()
+                        
+                        # Synchronize PKGBUILDs
+                        self._synchronize_pkgbuilds()
+                        
+                        print("\n✅ Build completed successfully!")
                     else:
-                        print("\n❌ Database update failed!")
+                        print("\n❌ Upload failed!")
                 else:
-                    print("\n❌ Package upload failed!")
+                    print("\n❌ Database generation failed!")
             else:
                 print("\n📊 Build summary:")
                 print(f"   AUR packages built: {self.stats['aur_success']}")
@@ -1591,6 +1570,11 @@ class PackageBuilder:
                     print("⚠️ Some packages failed to build")
                 else:
                     print("✅ All packages are up to date or built successfully!")
+                
+                # Even if no packages built, ensure repository is in correct state
+                if remote_packages:
+                    self._apply_repository_decision("ENABLE")
+                    self._sync_pacman_databases()
             
             elapsed = time.time() - self.stats["start_time"]
             
