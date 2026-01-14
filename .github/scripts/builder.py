@@ -17,6 +17,10 @@ import glob
 from pathlib import Path
 from datetime import datetime
 
+# Add the script directory to sys.path for imports
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, script_dir)
+
 # Try to import our config files
 try:
     import config
@@ -155,6 +159,13 @@ class PackageBuilder:
         if container_workspace.exists():
             logger.info(f"Using container workspace: {container_workspace}")
             return container_workspace
+        
+        # Get script directory and go up to repo root
+        script_path = Path(__file__).resolve()
+        repo_root = script_path.parent.parent.parent  # .github/scripts -> .github -> repo root
+        if repo_root.exists():
+            logger.info(f"Using repository root from script location: {repo_root}")
+            return repo_root
         
         current_dir = Path.cwd()
         logger.info(f"Using current directory: {current_dir}")

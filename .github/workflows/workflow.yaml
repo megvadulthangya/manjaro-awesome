@@ -1,4 +1,4 @@
-name: Manjaro Package Builder
+name: MPB - with diagnostic
 
 on:
   workflow_dispatch:
@@ -80,7 +80,8 @@ jobs:
             pacman-contrib \
             curl wget ca-certificates \
             openssh rsync \
-            netcat iproute2
+            netcat iproute2 \
+            jq  # Added for JSON parsing in diagnostics
             
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
@@ -250,11 +251,98 @@ jobs:
           
           echo "✅ Build dependencies installed"
 
+      - name: Hálózati diagnosztika
+        run: |
+          echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
+          
+          echo "1. Aktuális IP címek és információk:"
+          echo "   - Publikus IP (fail2ban-hoz):"
+          PUBLIC_IP1=$(curl -s https://api.ipify.org)
+          PUBLIC_IP2=$(curl -s https://checkip.amazonaws.com | tr -d '\n')
+          echo "     IP 1: $PUBLIC_IP1"
+          echo "     IP 2: $PUBLIC_IP2"
+          
+          echo ""
+          echo "   - Részletes IP információk:"
+          curl -s https://ipinfo.io/json | jq -r '"     IP: " + .ip, "     Város: " + .city, "     Régió: " + .region, "     Ország: " + .country, "     Szolgáltató: " + .org' || echo "     Nem sikerült lekérni az IP infókat"
+          
+          echo ""
+          echo "2. Kimenő interface információk:"
+          ip route show default 2>/dev/null | head -1 || echo "     Alapértelmezett route nem található"
+          echo ""
+          echo "   - Aktuális IP címek (összes interface):"
+          ip addr show 2>/dev/null | grep 'inet ' | awk '{print "     " $2 " on " $NF}' || echo "     Nem sikerült lekérni az interface-eket"
+          
+          echo ""
+          echo "3. DNS konfiguráció:"
+          cat /etc/resolv.conf 2>/dev/null | grep -v '^#' | grep -v '^$' | while read line; do echo "   $line"; done || echo "   Nem sikerült lekérni a DNS konfigurációt"
+          
+          echo ""
+          echo "4. GitHub Actions specifikus információk:"
+          echo "     GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo "     GITHUB_RUN_ID: $GITHUB_RUN_ID"
+          echo "     RUNNER_OS: $RUNNER_OS"
+          
+          echo ""
+          echo "5. Letöltő eszközök:"
+          command -v curl && curl --version | head -1 || echo "     curl nem található"
+          command -v wget && wget --version | head -1 || echo "     wget nem található"
+          command -v rsync && rsync --version | head -1 || echo "     rsync nem található"
+          
+          echo ""
+          echo "6. Elérhetőség tesztek:"
+          echo "   - GitHub:"
+          timeout 5 curl -s -I https://github.com 2>/dev/null | head -1 || echo "     Nem elérhető"
+          echo "   - AUR:"
+          timeout 5 curl -s -I https://aur.archlinux.org 2>/dev/null | head -1 || echo "     Nem elérhető"
+          echo "   - Cél VPS ($VPS_HOST):"
+          timeout 5 ping -c 2 "$VPS_HOST" 2>/dev/null | grep "bytes from" || echo "     Ping nem elérhető"
+          
+          echo ""
+          echo "7. Hálózati kapcsolatok (aktuális):"
+          ss -tunp 2>/dev/null | grep ESTAB | head -5 | while read line; do echo "   $line"; done || echo "   Nem sikerült lekérni a kapcsolatokat"
+          
+          echo ""
+          echo "8. IP cím lista fail2ban-hoz:"
+          echo "   🔍 FAIL2BAN WHITELIST PARANCSOK:"
+          echo "   sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+          echo "   # vagy más jail neve:"
+          echo "   sudo fail2ban-client set apache-auth addignoreip $PUBLIC_IP1"
+          echo "   # Vagy iptables:"
+          echo "   sudo iptables -A INPUT -s $PUBLIC_IP1 -j ACCEPT"
+          
+          echo ""
+          echo "9. VPS teszt kapcsolat:"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo VPS_KAPCSOLAT_OK'" 2>/dev/null; then
+            echo "   ✅ VPS SSH kapcsolat működik"
+          else
+            echo "   ❌ VPS SSH kapcsolat NEM működik"
+            echo "   Ellenőrizd a fail2ban logokat:"
+            echo "   sudo tail -f /var/log/fail2ban.log"
+          fi
+          
+          echo ""
+          echo "10. Csomag ellenőrzések száma (közelítő):"
+          echo "    Ez a szám okozhat fail2ban problémát, ha túl sok kérést indít:"
+          if [ -d "." ]; then
+            PKG_COUNT=$(find . -name "PKGBUILD" -type f | wc -l)
+            echo "    PKGBUILD fájlok száma: $PKG_COUNT"
+            echo "    ~ Ellenőrzések száma: $((PKG_COUNT * 2)) (build előtti és utáni ellenőrzések)"
+          fi
+          
+          echo ""
+          echo "=== DIAGNOSZTIKA VÉGE ==="
+          echo ""
+          echo "⚠️  JEGYZET: Ha fail2ban blokkol, próbáld ki ezt a VPS-en:"
+          echo "    sudo fail2ban-client unban $PUBLIC_IP1"
+          echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+
       - name: Run Builder
         run: |
           echo "=== Starting Builder ==="
           
-          chmod +x builder.py
+          chmod +x .github/scripts/builder.py
           
           echo "Current directory: $(pwd)"
           
@@ -291,7 +379,7 @@ jobs:
           export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
           
           # Run as builder user
-          su builder -c "cd '$PWD' && python3 builder.py 2>&1" | tee build_output.log
+          su builder -c "cd '$PWD' && python3 .github/scripts/builder.py 2>&1" | tee build_output.log
           
           BUILD_STATUS=$?
           echo ""
