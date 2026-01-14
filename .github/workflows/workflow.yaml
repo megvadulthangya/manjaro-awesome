@@ -1,59 +1,32 @@
-# ==================================================================================
-# GITHUB ACTIONS WORKFLOW: Manjaro Package Builder with Diagnostics
-# ==================================================================================
-# This workflow automates building Arch/Manjaro packages and deploying them to a
-# custom repository. It runs in an Arch Linux container and includes network
-# diagnostics to troubleshoot connection issues.
-# 
-# MAIN PURPOSE:
-# 1. Build AUR and custom packages in a clean Arch Linux environment
-# 2. Upload built packages to a remote repository server (VPS)
-# 3. Generate and sync repository database files
-# 4. Run network diagnostics to help troubleshoot SSH/rsync failures
-# 
-# TARGET AUDIENCE: Package maintainers, repository administrators, CI/CD users
-# ==================================================================================
+name: MPB - with diagnostic
 
-name: MPB - with diagnostic  # Workflow name shown in GitHub Actions UI
-
-# TRIGGERS: When this workflow runs
 on:
-  workflow_dispatch:  # Manual trigger from GitHub UI
-  schedule:           # Automatic daily runs
-    - cron: '0 4 * * *'  # Daily at 4 AM UTC (avoids peak hours)
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'  # Daily at 4 AM UTC
 
-# JOBS: The main build job that runs in a container
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest  # GitHub Actions runner OS (host)
-    
-    # CONTAINER: We use Arch Linux container because we're building Arch packages
+    runs-on: ubuntu-latest
     container:
-      image: archlinux:base-devel  # Official Arch image with build tools
+      image: archlinux:base-devel
 
-    # ENVIRONMENT VARIABLES: Secrets injected from GitHub repository settings
-    # These are NEVER hardcoded and come from GitHub Secrets
     env:
-      VPS_USER: ${{ secrets.VPS_USER }}          # SSH username for the VPS
-      VPS_HOST: ${{ secrets.VPS_HOST }}          # Hostname/IP of the VPS
-      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}    # Private SSH key (base64 or plain)
-      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}  # Pacman repository URL
-      REMOTE_DIR: ${{ secrets.REMOTE_DIR }}      # Directory on VPS where packages are stored
-      REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}  # Repository name
-      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}  # GitHub token for pushing PKGBUILD updates
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+      REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+      REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
+      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
 
-    # STEPS: Sequential tasks that make up the workflow
     steps:
-      # STEP 1: Get the source code
       - name: Checkout Code with Full History
-        uses: actions/checkout@v4  # Official GitHub checkout action
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get ALL git history (needed for version comparisons)
-          token: ${{ secrets.GITHUB_TOKEN }}  # Auth token for accessing repository
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # STEP 2: Fix PKGBUILD versioning issues
-      # WHY: Some PKGBUILDs have 'epoch=' field which causes version comparison issues
-      # WHAT: Remove epoch and increment pkgrel to force rebuild
       - name: Fix PKGBUILD Epoch Issues
         run: |
           echo "=== Fixing PKGBUILD epoch issues ==="
@@ -61,11 +34,11 @@ jobs:
           # Fix awesome-freedesktop-git PKGBUILD (remove epoch)
           if [ -f "awesome-freedesktop-git/PKGBUILD" ]; then
             echo "Fixing awesome-freedesktop-git/PKGBUILD..."
-            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD  # Remove epoch line
+            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD
             # Increment pkgrel to ensure new version
             current_pkgrel=$(grep -oP '^pkgrel=\K\d+' awesome-freedesktop-git/PKGBUILD)
             if [ -n "$current_pkgrel" ]; then
-              new_pkgrel=$((current_pkgrel + 1))  # Bump release number by 1
+              new_pkgrel=$((current_pkgrel + 1))
               sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" awesome-freedesktop-git/PKGBUILD
               echo "Updated pkgrel from $current_pkgrel to $new_pkgrel"
             fi
@@ -77,109 +50,94 @@ jobs:
           
           echo "✅ PKGBUILD fixes complete"
 
-      # STEP 3: Prepare the Arch Linux environment for building
-      # WHY: Need to install build tools, configure pacman, set up users
       - name: Prepare Environment
         run: |
           echo "=== Starting Environment Preparation ==="
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
           
-          # Skip key signing issues - necessary for automation
-          # In production, you'd want proper signing, but this is for CI
+          # Skip key signing issues
           echo "Setting up pacman without key signing..."
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
           
           # UPDATE SYSTEM WITHOUT OUR REPOSITORY
-          # WHY: Our repository might not exist yet or might be empty
           echo "Updating system (ignoring our repository for now)..."
           
           # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
           # Temporarily remove our repository section if it exists
-          # This prevents "404 Not Found" errors during system update
           if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
             echo "Temporarily removing $REPO_NAME repository section..."
             sed -i "/^\[$REPO_NAME\]/,/^\[/d" /etc/pacman.conf
           fi
           
           # Update system with minimal packages first
-          # These are required for the build process
-          # ⚠️ WARNING: Ensure there are no empty lines in the package list
-          # An empty line would cause "target not found: " error
           pacman -Syu --noconfirm --needed \
-            git base-devel sudo \  # Basic build environment
-            python python-pip \  # For builder.py script
-            python-requests python-gitpython python-yaml python-setuptools \  # Python dependencies
-            pacman-contrib \  # Contains repo-add for repository management
-            curl wget ca-certificates \  # Networking tools
-            openssh rsync \  # File transfer to VPS
-            netcat iproute2 \  # Network diagnostics
-            jq  # Added for JSON parsing in diagnostics (IP info)
+            git base-devel sudo \
+            python python-pip \
+            python-requests python-gitpython python-yaml python-setuptools \
+            pacman-contrib \
+            curl wget ca-certificates \
+            openssh rsync \
+            netcat iproute2 \
+            jq  # Added for JSON parsing in diagnostics
             
-          # Restore pacman.conf with our repository
+          # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
-          # Create builder user (standard Arch practice)
-          # Running makepkg as root is dangerous
+          # Create builder user
           useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers  # Allow passwordless sudo
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
-          # Set ownership so builder can access the repository
+          # Set ownership
           chown -R builder:builder "$(pwd)"
           
           # Create build directories with correct permissions
-          mkdir -p "$(pwd)/build_aur"  # For AUR package clones
+          mkdir -p "$(pwd)/build_aur"
           chown -R builder:builder "$(pwd)/build_aur"
-          mkdir -p "$(pwd)/built_packages"  # For final built packages
+          mkdir -p "$(pwd)/built_packages"
           chown -R builder:builder "$(pwd)/built_packages"
           
-          # Optimize makepkg for CI environment
-          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf  # Skip debug symbols to save space
-          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf  # Better compression
+          # Optimize makepkg
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
           
           echo "✅ Environment preparation complete"
 
-      # STEP 4: Set up SSH for connecting to the VPS
-      # WHY: Need secure way to upload packages to repository server
       - name: Setup SSH for VPS
         run: |
           echo "=== Setting up SSH for VPS connection ==="
           
-          # Create SSH directory for builder user with secure permissions
+          # Create SSH directory for builder user
           mkdir -p /home/builder/.ssh
-          chmod 700 /home/builder/.ssh  # Only owner can read/write/execute
+          chmod 700 /home/builder/.ssh
           
           # Write SSH key for VPS
           echo "Writing SSH key for VPS..."
-          # Try to decode base64 first (GitHub Secrets sometimes encode in base64)
           if echo "$VPS_SSH_KEY" | base64 -d >/dev/null 2>&1; then
             echo "🔑 Key appears to be base64 encoded, decoding..."
             echo "$VPS_SSH_KEY" | base64 -d > /home/builder/.ssh/id_ed25519
-          else:
+          else
             echo "🔑 Key is plain text, writing as-is..."
             echo "$VPS_SSH_KEY" > /home/builder/.ssh/id_ed25519
           fi
           
-          chmod 600 /home/builder/.ssh/id_ed25519  # Private key must be read-only for owner
+          chmod 600 /home/builder/.ssh/id_ed25519
           
-          # Also add to known_hosts to avoid "authenticity of host" prompt
+          # Also add to known_hosts
           ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || true
           
-          chown -R builder:builder /home/builder/.ssh  # Ensure builder owns the files
+          chown -R builder:builder /home/builder/.ssh
           
           echo "✅ SSH setup for VPS complete"
 
-      # STEP 5: Configure Pacman to use our custom repository
-      # WHY: After packages are built, we need to test them and possibly install dependencies
       - name: Configure Pacman Repository
         run: |
           echo "=== Configuring Pacman Repository ==="
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
           
-          # Safety check: Ensure required variables are set
           if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
             echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
             exit 1
@@ -190,25 +148,22 @@ jobs:
             echo "✅ Repository '$REPO_NAME' already exists in pacman.conf"
             echo "Updating server URL if needed..."
             
-            # Update the Server line for our repository
             sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
-          else:
+          else
             echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
             
-            # Create repository configuration section
             TEMP_FILE=$(mktemp)
             echo "" >> "$TEMP_FILE"
             echo "# Custom repository: $REPO_NAME" >> "$TEMP_FILE"
             echo "# Repository will be dynamically enabled/disabled by builder.py" >> "$TEMP_FILE"
             echo "[$REPO_NAME]" >> "$TEMP_FILE"
             echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
-            echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"  # Skip signature checking for CI
+            echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
             
             cat "$TEMP_FILE" >> /etc/pacman.conf
             rm -f "$TEMP_FILE"
           fi
           
-          # Display the repository section for verification
           echo "=== Pacman.conf repository section ==="
           grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
           
@@ -216,44 +171,40 @@ jobs:
           echo "✅ Pacman repository configuration complete"
           echo "Note: Repository will be enabled/disabled dynamically by builder.py"
 
-      # STEP 6: Test rsync/SSH connectivity before attempting builds
-      # WHY: Fail early if network connectivity is broken
       - name: Rsync Connection Test
         run: |
           echo "=== Rsync Connection Test ==="
           
-          # Test basic internet connectivity
+          # Test basic connectivity
           echo "1. Testing internet connectivity..."
           if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
             echo "✅ Internet connectivity OK"
-          else:
+          else
             echo "⚠️ No internet connectivity via IP - may be a container issue"
           fi
           
-          # Test if we can reach the VPS on SSH port (22)
+          # Test VPS connectivity
           echo ""
           echo "2. Testing VPS connectivity..."
           if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
             echo "✅ VPS port 22 is accessible"
-          else:
+          else
             echo "❌ Cannot reach VPS on port 22"
           fi
           
-          # Test SSH connection with same options builder.py will use
+          # Test SSH as builder user using the EXACT same options builder.py will use
           echo ""
           echo "3. Testing SSH connection as builder user..."
           SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
           
           if su builder -c "timeout 20 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
             echo "✅ SSH connection to VPS successful"
-          else:
+          else
             echo "❌ SSH connection to VPS failed"
           fi
           
           echo "✅ Rsync tests complete"
 
-      # STEP 7: Install build dependencies for packages
-      # WHY: Packages need compilers, libraries, and other build tools
       - name: Install Build Dependencies
         run: |
           echo "=== Installing Build Dependencies ==="
@@ -262,51 +213,44 @@ jobs:
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
           # Temporarily comment out our repository to avoid 404 errors
-          # Our repository might be empty initially, causing pacman errors
           echo "Temporarily commenting out $REPO_NAME repository for dependency installation..."
           sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
           
           # Install remaining build tools
-          # These are common dependencies for many AUR packages
           echo "Installing build tools..."
           pacman -S --needed --noconfirm \
-            appstream appstream-glib \  # For .desktop file validation
-            meson ninja cmake \  # Modern build systems
-            gtk-doc docbook-xsl libxslt \  # Documentation tools
-            gobject-introspection \  # For GNOME/GTK packages
-            autoconf automake libtool pkg-config \  # Autotools build system
-            patch make gcc binutils \  # Core compilation tools
-            file which tar gzip bzip2 xz zstd \  # Archive utilities
-            unzip p7zip gnupg \  # More archive tools and encryption
-            dbus polkit \  # System services
-            systemd systemd-sysvcompat \  # System and init
-            arch-install-scripts \  # Arch-specific tools
+            appstream appstream-glib \
+            meson ninja cmake \
+            gtk-doc docbook-xsl libxslt \
+            gobject-introspection \
+            autoconf automake libtool pkg-config \
+            patch make gcc binutils \
+            file which tar gzip bzip2 xz zstd \
+            unzip p7zip gnupg \
+            dbus polkit \
+            systemd systemd-sysvcompat \
+            arch-install-scripts \
             ldc po4a dconf  # tilix-git specific dependencies
             
-          # Restore pacman.conf with our repository
+          # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
           # Install yay for AUR dependencies
-          # yay is an AUR helper that can install packages from AUR
           echo "=== Installing yay ==="
-          chmod 777 /tmp  # Temporary fix for permission issues
+          chmod 777 /tmp
           cd /tmp
           sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
           cd yay-bin
-          sudo -u builder makepkg -si --noconfirm  # Build and install yay
+          sudo -u builder makepkg -si --noconfirm
           cd /
-          rm -rf /tmp/yay-bin  # Clean up
+          rm -rf /tmp/yay-bin
           
           # Configure yay to use --aur flag by default
-          # This ensures yay only installs from AUR, not official repos
           echo "Configuring yay..."
           sudo -u builder yay --aur --save
           
           echo "✅ Build dependencies installed"
 
-      # STEP 8: Network diagnostics (in Hungarian: "Hálózati diagnosztika")
-      # WHY: Network issues are common in CI environments, especially with fail2ban
-      # This helps debug why SSH/rsync might be failing
       - name: Hálózati diagnosztika
         run: |
           echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
@@ -372,10 +316,11 @@ jobs:
           SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
           if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo VPS_KAPCSOLAT_OK'" 2>/dev/null; then
             echo "   ✅ VPS SSH kapcsolat működik"
-          else:
+          else
             echo "   ❌ VPS SSH kapcsolat NEM működik"
             echo "   Ellenőrizd a fail2ban logokat:"
             echo "   sudo tail -f /var/log/fail2ban.log"
+          fi
           
           echo ""
           echo "10. Csomag ellenőrzések száma (közelítő):"
@@ -393,43 +338,37 @@ jobs:
           echo "    sudo fail2ban-client unban $PUBLIC_IP1"
           echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
 
-      # STEP 9: Run the main builder script
-      # This is the core of the workflow - builds packages and manages repository
       - name: Run Builder
         run: |
           echo "=== Starting Builder ==="
           
-          # Make the Python script executable
           chmod +x .github/scripts/builder.py
           
           echo "Current directory: $(pwd)"
           
           # Test SSH connection one more time with identical options to builder.py
-          # Consistency check: Use same SSH options as the actual script
           echo "=== Final SSH Test ==="
           SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
           
           if su builder -c "timeout 25 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
             echo "✅ SSH connection confirmed"
-          else:
+          else
             echo "⚠️ SSH connection may have issues"
           fi
           
           echo ""
           echo "=== Repository Status ==="
           # Check if repository exists but don't fail if it doesn't
-          # A 404 is OK (empty repository), we only care if server is reachable
           if curl -s -I "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404"; then
             echo "✅ Repository server is accessible"
-          else:
+          else
             echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
           fi
           
           echo ""
           echo "=== Running Builder Script ==="
           
-          # Set environment for builder script
-          # These variables are read by builder.py
+          # Set environment for builder
           export HOME=/home/builder
           export VPS_USER="$VPS_USER"
           export VPS_HOST="$VPS_HOST"
@@ -439,29 +378,22 @@ jobs:
           export REPO_NAME="$REPO_NAME"
           export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
           
-          # Run as builder user (security best practice)
-          # Pipe output to log file AND console (tee)
+          # Run as builder user
           su builder -c "cd '$PWD' && python3 .github/scripts/builder.py 2>&1" | tee build_output.log
           
-          # Capture exit code to determine if build succeeded
           BUILD_STATUS=$?
           echo ""
           echo "=== Build finished with exit code: $BUILD_STATUS ==="
           
-          # Show tail of log file for debugging
           if [ -f "builder.log" ]; then
             echo "=== Last 20 lines of builder.log ==="
             tail -20 builder.log
           fi
           
-          # Exit with same status as builder.py
           exit $BUILD_STATUS
 
-      # STEP 10: Clean up artifact filenames (always runs, even on failure)
-      # WHY: GitHub Actions has restrictions on artifact filenames
-      # Colon characters in package names cause upload failures
       - name: Sanitize Artifact Filenames
-        if: always()  # Run even if previous steps failed
+        if: always()
         run: |
           echo "=== Sanitizing artifact filenames ==="
           
@@ -470,12 +402,10 @@ jobs:
             echo "Creating sanitized artifact directory..."
             mkdir -p artifact_packages
             
-            # Process each package file
             for file in built_packages/*; do
               if [ -f "$file" ]; then
                 filename=$(basename "$file")
                 # Replace invalid characters
-                # Colons (:) are common in version strings (e.g., 1:2.3.4)
                 sanitized_name=$(echo "$filename" | sed 's/:/_/g' | sed 's/[<>|*?"\r\n]//g')
                 echo "Copying: $filename -> $sanitized_name"
                 cp "$file" "artifact_packages/$sanitized_name"
@@ -483,18 +413,17 @@ jobs:
             done
             
             echo "✅ Artifact filenames sanitized"
-          else:
+          else
             echo "⚠️ No built packages found to sanitize"
+          fi
 
-      # STEP 11: Upload build artifacts for debugging (always runs)
-      # WHY: If build fails, we need logs and packages for debugging
       - name: Upload Build Artifacts
-        if: always()  # Run even if build failed
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-results-$(date +%s)  # Unique name with timestamp
-          path: |  # Files to upload
+          name: build-results-$(date +%s)
+          path: |
             builder.log
             build_output.log
             artifact_packages/
-          retention-days: 7  # Keep artifacts for 1 week
+          retention-days: 7
