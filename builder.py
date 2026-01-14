@@ -334,6 +334,111 @@ class PackageBuilder:
             logger.error(f"SSH command failed: {e}")
             return []
     
+    def _mirror_remote_packages(self):
+        """CRITICAL STEP: Download ALL remote package files to local directory."""
+        print("\n" + "="*60)
+        print("MANDATORY STEP: Mirroring remote packages locally")
+        print("="*60)
+        
+        # Create a temporary local repository directory
+        mirror_dir = Path("/tmp/repo_mirror")
+        if mirror_dir.exists():
+            shutil.rmtree(mirror_dir, ignore_errors=True)
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Created local mirror directory: {mirror_dir}")
+        
+        # Use rsync to download ALL package files from server
+        print("📥 Downloading ALL remote package files to local mirror...")
+        
+        rsync_cmd = f"""
+        rsync -avz \
+          --progress \
+          --stats \
+          --include='*.pkg.tar.zst' \
+          --include='*.pkg.tar.xz' \
+          --exclude='*' \
+          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/' \
+          '{mirror_dir}/'
+        """
+        
+        logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
+        logger.info(rsync_cmd.strip())
+        
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(
+                rsync_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            end_time = time.time()
+            duration = int(end_time - start_time)
+            
+            logger.info(f"EXIT CODE: {result.returncode}")
+            if result.stdout:
+                for line in result.stdout.splitlines()[-20:]:  # Last 20 lines
+                    if line.strip():
+                        logger.info(f"RSYNC MIRROR: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip():
+                        logger.error(f"RSYNC MIRROR ERR: {line}")
+            
+            if result.returncode == 0:
+                # List downloaded files
+                downloaded_files = list(mirror_dir.glob("*.pkg.tar.*"))
+                file_count = len(downloaded_files)
+                
+                if file_count > 0:
+                    logger.info(f"✅ Successfully mirrored {file_count} package files ({duration} seconds)")
+                    logger.info(f"Sample mirrored files: {[f.name for f in downloaded_files[:5]]}")
+                    
+                    # Verify file integrity
+                    valid_files = []
+                    for pkg_file in downloaded_files:
+                        if pkg_file.stat().st_size > 0:
+                            valid_files.append(pkg_file)
+                        else:
+                            logger.warning(f"⚠️ Empty file: {pkg_file.name}")
+                    
+                    logger.info(f"Valid mirrored packages: {len(valid_files)}/{file_count}")
+                    
+                    # Copy mirrored packages to output directory
+                    print(f"📋 Copying {len(valid_files)} mirrored packages to output directory...")
+                    copied_count = 0
+                    for pkg_file in valid_files:
+                        dest = self.output_dir / pkg_file.name
+                        if not dest.exists():  # Don't overwrite newly built packages
+                            shutil.copy2(pkg_file, dest)
+                            copied_count += 1
+                    
+                    logger.info(f"Copied {copied_count} mirrored packages to output directory")
+                    
+                    # Clean up mirror directory
+                    shutil.rmtree(mirror_dir, ignore_errors=True)
+                    
+                    return True
+                else:
+                    logger.warning("ℹ️ No package files were mirrored (repository might be empty)")
+                    shutil.rmtree(mirror_dir, ignore_errors=True)
+                    return True  # Not an error, just empty repository
+            else:
+                logger.error(f"❌ RSYNC mirror failed with code {result.returncode}")
+                shutil.rmtree(mirror_dir, ignore_errors=True)
+                return False
+                
+        except Exception as e:
+            logger.error(f"RSYNC mirror execution error: {e}")
+            if mirror_dir.exists():
+                shutil.rmtree(mirror_dir, ignore_errors=True)
+            return False
+    
     def _check_database_files(self):
         """Check if repository database files exist on server."""
         print("\n" + "="*60)
@@ -424,67 +529,34 @@ class PackageBuilder:
             except Exception as e:
                 logger.warning(f"Could not fetch {db_file}: {e}")
     
-    def _get_all_server_packages(self):
-        """Get ALL package files from server (full state)."""
-        print("\n🔍 Getting complete package list from server...")
+    def _get_all_local_packages(self):
+        """Get ALL package files from local output directory (mirrored + newly built)."""
+        print("\n🔍 Getting complete package list from local directory...")
         
-        ssh_cmd = [
-            "ssh",
-            f"{self.vps_user}@{self.vps_host}",
-            f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' 2>/dev/null"
-        ]
+        local_files = list(self.output_dir.glob("*.pkg.tar.*"))
         
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                server_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-                server_filenames = [os.path.basename(f) for f in server_files]
-                
-                # Also include newly built packages from output_dir
-                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-                local_filenames = [f.name for f in local_files]
-                
-                # Combine lists, preferring local (new) versions
-                all_packages = {}
-                for filename in server_filenames + local_filenames:
-                    # Extract package name (without version)
-                    match = re.match(r'^([a-zA-Z0-9_-]+)-[0-9]', filename)
-                    if match:
-                        pkg_name = match.group(1)
-                        all_packages[pkg_name] = filename
-                    else:
-                        all_packages[filename] = filename  # Fallback
-                
-                logger.info(f"📊 Package counts:")
-                logger.info(f"  Server packages: {len(server_filenames)}")
-                logger.info(f"  Local packages: {len(local_filenames)}")
-                logger.info(f"  Total unique packages: {len(all_packages)}")
-                
-                return list(all_packages.values())
-            else:
-                logger.info("ℹ️ No packages found on server")
-                # Return only local packages
-                local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-                return [f.name for f in local_files]
-                
-        except Exception as e:
-            logger.error(f"Failed to get server packages: {e}")
-            # Fallback to local packages only
-            local_files = list(self.output_dir.glob("*.pkg.tar.*"))
-            return [f.name for f in local_files]
+        if not local_files:
+            logger.info("ℹ️ No package files found locally")
+            return []
+        
+        local_filenames = [f.name for f in local_files]
+        
+        logger.info(f"📊 Local package count: {len(local_filenames)}")
+        logger.info(f"Sample packages: {local_filenames[:10]}")
+        
+        return local_filenames
     
     def _generate_full_database(self):
-        """Generate repository database from ALL packages."""
-        all_packages = self._get_all_server_packages()
+        """Generate repository database from ALL locally available packages."""
+        print("\n" + "="*60)
+        print("PHASE: Repository Database Generation")
+        print("="*60)
+        
+        # Get all package files from local output directory
+        all_packages = self._get_all_local_packages()
         
         if not all_packages:
-            logger.info("No packages to add to database")
+            logger.info("No packages available for database generation")
             return False
         
         logger.info(f"Generating database with {len(all_packages)} packages...")
@@ -502,31 +574,41 @@ class PackageBuilder:
                 if os.path.exists(f):
                     os.remove(f)
             
-            # First, ensure all package files exist locally
-            local_package_paths = []
+            # Verify each package file exists locally before database generation
             missing_packages = []
+            valid_packages = []
             
-            for pkg in all_packages:
-                local_path = Path(pkg)
-                if local_path.exists():
-                    local_package_paths.append(str(local_path))
+            for pkg_filename in all_packages:
+                if Path(pkg_filename).exists():
+                    valid_packages.append(pkg_filename)
                 else:
-                    missing_packages.append(pkg)
+                    missing_packages.append(pkg_filename)
             
             if missing_packages:
-                logger.warning(f"⚠️ Some packages exist on server but not locally: {missing_packages}")
-                logger.info("Database will be created with available packages only")
-            
-            if not local_package_paths:
-                logger.error("No package files available for database creation")
+                logger.error(f"❌ CRITICAL: {len(missing_packages)} packages missing locally:")
+                for pkg in missing_packages[:5]:
+                    logger.error(f"   - {pkg}")
+                if len(missing_packages) > 5:
+                    logger.error(f"   ... and {len(missing_packages) - 5} more")
+                
+                logger.error("Cannot generate database without all package files present locally")
+                logger.error("This indicates a failure in the package mirroring step")
                 return False
             
-            cmd = ["repo-add", db_file] + local_package_paths
+            if not valid_packages:
+                logger.error("No valid package files found for database generation")
+                return False
             
+            logger.info(f"✅ All {len(valid_packages)} package files verified locally")
+            
+            # Generate database with repo-add
+            cmd = ["repo-add", db_file] + valid_packages
+            
+            logger.info(f"Running repo-add with {len(valid_packages)} packages...")
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             
             if result.returncode == 0:
-                logger.info("✅ Database created with full repository state")
+                logger.info("✅ Database created successfully")
                 
                 # Verify the database was created
                 db_path = Path(db_file)
@@ -1488,9 +1570,9 @@ class PackageBuilder:
         logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
-        """Main execution with CORRECT Arch Linux repository ordering."""
+        """Main execution with CORRECT Arch Linux repository ordering and LOCAL MIRRORING."""
         print("\n" + "="*60)
-        print("🚀 MANJARO PACKAGE BUILDER (CORRECT ARCH ORDERING)")
+        print("🚀 MANJARO PACKAGE BUILDER (CORRECT ARCH ORDERING + LOCAL MIRROR)")
         print("="*60)
         
         try:
@@ -1512,6 +1594,19 @@ class PackageBuilder:
             
             remote_packages = self._list_remote_packages()
             
+            # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
+            if remote_packages:
+                print("\n" + "="*60)
+                print("MANDATORY PRECONDITION: Mirroring remote packages locally")
+                print("="*60)
+                
+                if not self._mirror_remote_packages():
+                    logger.error("❌ FAILED to mirror remote packages locally")
+                    logger.error("Cannot proceed without local package mirror")
+                    return 1
+            else:
+                logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
+            
             # STEP 2: Check existing database files
             existing_db_files, missing_db_files = self._check_database_files()
             
@@ -1526,12 +1621,15 @@ class PackageBuilder:
             
             total_built = self.build_packages()
             
-            if total_built > 0 or remote_packages:
+            # Check if we have any packages locally (mirrored + newly built)
+            local_packages = self._get_all_local_packages()
+            
+            if local_packages or remote_packages:
                 print("\n" + "="*60)
-                print("PHASE 3: REPOSITORY DATABASE HANDLING")
+                print("PHASE 3: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
                 print("="*60)
                 
-                # Always regenerate database with FULL repository state
+                # Generate database with ALL locally available packages
                 if self._generate_full_database():
                     # Upload regenerated database and packages
                     if not self.test_ssh_connection():
