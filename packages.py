@@ -4,7 +4,8 @@ Package definitions for Manjaro Package Builder
 
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
-    "gghelper"
+    "gghelper",
+    "awesome-git"
 ]
 
 # AUR packages (from Arch User Repository)
