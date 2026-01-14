@@ -1417,7 +1417,11 @@ class PackageBuilder:
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
-                self._verify_uploaded_files(files_to_upload)
+                # Verification is now non-blocking - errors don't affect success
+                try:
+                    self._verify_uploaded_files(files_to_upload)
+                except Exception as e:
+                    logger.warning(f"⚠️ Verification error (upload still successful): {e}")
                 return True
             else:
                 logger.warning(f"⚠️ First RSYNC attempt failed (code: {result.returncode})")
@@ -1469,7 +1473,11 @@ class PackageBuilder:
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
-                self._verify_uploaded_files(files_to_upload)
+                # Verification is now non-blocking - errors don't affect success
+                try:
+                    self._verify_uploaded_files(files_to_upload)
+                except Exception as e:
+                    logger.warning(f"⚠️ Verification error (upload still successful): {e}")
                 return True
             else:
                 logger.error(f"❌ RSYNC upload failed on both attempts!")
@@ -1486,7 +1494,7 @@ class PackageBuilder:
         # Get list of files we uploaded
         uploaded_filenames = [os.path.basename(f) for f in uploaded_files]
         
-        # Check remote directory
+        # Check remote directory - FIXED: Use proper string formatting for shell variable
         remote_cmd = f"""
         echo "=== REMOTE DIRECTORY ==="
         ls -la "{self.remote_dir}/" 2>/dev/null | head -30
@@ -1496,7 +1504,7 @@ class PackageBuilder:
             if [ -f "{self.remote_dir}/$file" ]; then
                 size=$(stat -c%s "{self.remote_dir}/$file" 2>/dev/null || echo "0")
                 size_mb=$(echo "scale=2; $size / 1048576" | bc 2>/dev/null || echo "0")
-                echo "✅ $file ({size_mb}MB)"
+                echo "✅ $file (${{size_mb}}MB)"
             else
                 echo "❌ $file - MISSING"
             fi
@@ -1636,7 +1644,9 @@ class PackageBuilder:
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
                     # Upload everything (packages + database)
-                    if self.upload_packages():
+                    upload_success = self.upload_packages()
+                    
+                    if upload_success:
                         # Cleanup old packages
                         self.cleanup_old_packages()
                         
