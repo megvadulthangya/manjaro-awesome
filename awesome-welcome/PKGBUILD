@@ -1,0 +1,63 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+pkgname=awesome-welcome
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Welcome screen for Manjaro Awesome Respin"
+arch=('any')
+url="https://github.com/megvadulthangya/awesome-welcome"
+license=('MIT')
+depends=('python' 'gtk3' 'python-gobject' 'curl')
+makedepends=('git')
+source=("git+https://github.com/megvadulthangya/awesome-welcome.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${pkgname}"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "${srcdir}/${pkgname}"
+  
+  # Fix wrapper path in Python script
+  sed -i "s|/usr/local/bin/xl-wrapper.sh|/usr/lib/awesome-welcome/xl-wrapper.sh|" awesome-welcome
+  
+  # Fix repository URL in Python script
+  sed -i "s|https://github.com/megvadulthangya/manjaro-awesome-iso|https://github.com/megvadulthangya/awesome-welcome|" awesome-welcome
+  
+  # Fix Exec path in desktop file
+  sed -i "s|Exec=/usr/local/bin/awesome-welcome|Exec=/usr/bin/awesome-welcome|" awesome-welcome.desktop
+  
+  # Fix typo in APP_TITLE
+  sed -i 's/APP_TITLE = "Manjaro Awsome Respin Welcome"/APP_TITLE = "Manjaro Awesome Respin Welcome"/' awesome-welcome
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  
+  # Install Python executable
+  install -Dm755 awesome-welcome "${pkgdir}/usr/bin/awesome-welcome"
+  
+  # Install wrapper script
+  install -Dm755 xl-wrapper.sh "${pkgdir}/usr/lib/awesome-welcome/xl-wrapper.sh"
+  
+  # Install desktop file to applications directory
+  install -Dm644 awesome-welcome.desktop "${pkgdir}/usr/share/applications/awesome-welcome.desktop"
+  
+  # Install desktop file to skel autostart directory
+  install -Dm644 awesome-welcome.desktop "${pkgdir}/etc/skel/.config/autostart/awesome-welcome.desktop"
+  
+  # Install LICENSE file
+  if [ -f LICENSE ]; then
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  elif [ -f COPYING ]; then
+    install -Dm644 COPYING "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  else
+    echo "WARNING: No license file found in source repository"
+  fi
+  
+  # Install README.md
+  if [ -f README.md ]; then
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  fi
+}
