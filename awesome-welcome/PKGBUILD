@@ -1,6 +1,6 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=awesome-welcome
-pkgver=1.0.0
+pkgver=r2.c2f8b02
 pkgrel=1
 pkgdesc="Welcome screen for Manjaro Awesome Respin"
 arch=('any')
