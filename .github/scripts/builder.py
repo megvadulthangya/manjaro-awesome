@@ -49,6 +49,11 @@ class PackageBuilder:
         # Get the repository root
         self.repo_root = self._get_repo_root()
         
+        # GPG signing - MUST BE INITIALIZED FIRST
+        self.gpg_private_key = None
+        self.gpg_key_id = None
+        self.gpg_signing_enabled = False
+        
         # Load configuration
         self._load_config()
         
@@ -80,11 +85,6 @@ class PackageBuilder:
             "-o", "ConnectTimeout=30",
             "-o", "BatchMode=yes"
         ]
-        
-        # GPG signing
-        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
-        self.gpg_key_id = os.getenv('GPG_KEY_ID')
-        self.gpg_signing_enabled = bool(self.gpg_private_key and self.gpg_key_id)
         
         # Setup SSH config file for builder user (CRITICAL FIX)
         self._setup_ssh_config()
@@ -329,6 +329,16 @@ class PackageBuilder:
         self.ssh_key = os.getenv('VPS_SSH_KEY')
         self.repo_server_url = os.getenv('REPO_SERVER_URL', '')
         self.remote_dir = os.getenv('REMOTE_DIR', '/var/www/repo')
+        
+        # Initialize GPG signing with defensive checks
+        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
+        self.gpg_key_id = os.getenv('GPG_KEY_ID')
+        
+        # Enable signing only if BOTH secrets are provided
+        if self.gpg_private_key and self.gpg_key_id:
+            self.gpg_signing_enabled = True
+        else:
+            self.gpg_signing_enabled = False
         
         env_repo_name = os.getenv('REPO_NAME')
         if HAS_CONFIG_FILES:
