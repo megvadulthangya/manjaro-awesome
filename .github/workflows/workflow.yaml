@@ -19,6 +19,8 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
 
     steps:
       - name: Checkout Code with Full History
@@ -81,8 +83,8 @@ jobs:
             curl wget ca-certificates \
             openssh rsync \
             netcat iproute2 \
-            jq  # Added for JSON parsing in diagnostics
-            
+            jq gnupg  # Added gnupg for GPG signing
+          
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
@@ -377,6 +379,8 @@ jobs:
           export REMOTE_DIR="$REMOTE_DIR"
           export REPO_NAME="$REPO_NAME"
           export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
+          export GPG_PRIVATE_KEY="$GPG_PRIVATE_KEY"
+          export GPG_KEY_ID="$GPG_KEY_ID"
           
           # Run as builder user
           su builder -c "cd '$PWD' && python3 .github/scripts/builder.py 2>&1" | tee build_output.log

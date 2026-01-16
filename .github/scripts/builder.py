@@ -14,6 +14,7 @@ import hashlib
 import logging
 import socket
 import glob
+import base64
 from pathlib import Path
 from datetime import datetime
 
@@ -80,6 +81,11 @@ class PackageBuilder:
             "-o", "BatchMode=yes"
         ]
         
+        # GPG signing
+        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
+        self.gpg_key_id = os.getenv('GPG_KEY_ID')
+        self.gpg_signing_enabled = bool(self.gpg_private_key and self.gpg_key_id)
+        
         # Setup SSH config file for builder user (CRITICAL FIX)
         self._setup_ssh_config()
         
@@ -91,6 +97,151 @@ class PackageBuilder:
             "aur_failed": 0,
             "local_failed": 0,
         }
+    
+    def _setup_gpg_key(self):
+        """Import GPG private key if signing is enabled."""
+        if not self.gpg_signing_enabled:
+            logger.info("GPG signing skipped (secrets not provided)")
+            return False
+        
+        try:
+            logger.info("GPG signing enabled")
+            
+            # Create temporary directory for GPG operations
+            temp_dir = tempfile.mkdtemp(prefix="gpg_")
+            key_file = Path(temp_dir) / "private.key"
+            
+            # Decode base64 encoded key
+            try:
+                key_data = base64.b64decode(self.gpg_private_key)
+                key_file.write_bytes(key_data)
+                logger.info(f"GPG key written to temporary file: {key_file}")
+            except Exception as e:
+                logger.warning(f"Failed to decode GPG private key: {e}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return False
+            
+            # Import the key non-interactively
+            import_cmd = [
+                "gpg", "--batch", "--import", str(key_file)
+            ]
+            
+            result = subprocess.run(
+                import_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            # Clean up temporary file
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            if result.returncode == 0:
+                logger.info("GPG key imported successfully")
+                return True
+            else:
+                logger.warning(f"Failed to import GPG key: {result.stderr[:200]}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"GPG key import failed: {e}")
+            return False
+    
+    def _sign_file_with_gpg(self, file_path):
+        """Sign a file with GPG if signing is enabled."""
+        if not self.gpg_signing_enabled:
+            return False
+        
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                logger.warning(f"Cannot sign, file not found: {file_path}")
+                return False
+            
+            # Sign the file with detached signature
+            sig_file = file_path.with_suffix(file_path.suffix + ".sig")
+            
+            sign_cmd = [
+                "gpg",
+                "--batch",
+                "--yes",
+                "--detach-sign",
+                "--local-user", self.gpg_key_id,
+                "--output", str(sig_file),
+                str(file_path)
+            ]
+            
+            result = subprocess.run(
+                sign_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Signed: {file_path.name}")
+                return True
+            else:
+                logger.warning(f"Failed to sign {file_path.name}: {result.stderr[:200]}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"Error signing {file_path}: {e}")
+            return False
+    
+    def _sign_repository_artifacts(self):
+        """Sign repository database files and optionally packages."""
+        if not self.gpg_signing_enabled:
+            return
+        
+        print("\n" + "="*60)
+        print("GPG Signing Repository Artifacts")
+        print("="*60)
+        
+        # Import GPG key
+        if not self._setup_gpg_key():
+            logger.warning("GPG key import failed, skipping signing")
+            return
+        
+        # REQUIRED: Sign repository database files
+        required_files = [
+            self.output_dir / f"{self.repo_name}.db.tar.gz",
+            self.output_dir / f"{self.repo_name}.files.tar.gz"
+        ]
+        
+        signed_count = 0
+        for file_path in required_files:
+            if file_path.exists():
+                if self._sign_file_with_gpg(file_path):
+                    signed_count += 1
+                else:
+                    logger.warning(f"Failed to sign required file: {file_path.name}")
+            else:
+                logger.warning(f"Required file not found for signing: {file_path.name}")
+        
+        logger.info(f"Signed {signed_count}/{len(required_files)} required database files")
+        
+        # OPTIONAL: Sign package files (skip if fails, don't fail build)
+        print("\nOptional package signing...")
+        package_files = list(self.output_dir.glob("*.pkg.tar.zst"))
+        
+        if package_files:
+            logger.info(f"Found {len(package_files)} package files for optional signing")
+            
+            # Limit signing to avoid timeouts (optional)
+            max_packages_to_sign = 10
+            if len(package_files) > max_packages_to_sign:
+                logger.info(f"Limiting signing to {max_packages_to_sign} packages (optional signing)")
+                package_files = package_files[:max_packages_to_sign]
+            
+            package_signed = 0
+            for pkg_file in package_files:
+                if self._sign_file_with_gpg(pkg_file):
+                    package_signed += 1
+            
+            logger.info(f"Optionally signed {package_signed}/{len(package_files)} package files")
+        else:
+            logger.info("No package files found for optional signing")
     
     def _setup_ssh_config(self):
         """Setup SSH config file for builder user - EXACTLY as in the test script"""
@@ -201,6 +352,7 @@ class PackageBuilder:
         if self.repo_server_url:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
+        print(f"   GPG signing enabled: {self.gpg_signing_enabled}")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False):
         """Run command with comprehensive logging."""
@@ -1650,6 +1802,9 @@ class PackageBuilder:
                 
                 # Generate database with ALL locally available packages
                 if self._generate_full_database():
+                    # PHASE 3.5: GPG Signing (if enabled)
+                    self._sign_repository_artifacts()
+                    
                     # Upload regenerated database and packages
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
