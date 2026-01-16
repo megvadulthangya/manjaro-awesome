@@ -10,7 +10,7 @@ LOCAL_PACKAGES = [
     "lain-git",
     "awesome-rofi",
     "awesome-git",
-   # "awesome-welcome",
+    "awesome-welcome",
     "tilix-git",
     "nordic-backgrounds",
     "awesome-copycats-manjaro",
