@@ -52,15 +52,15 @@ class PackageBuilder:
         self._load_config()
         
         # Setup directories from config
-        self.output_dir = self.repo_root / getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else self.repo_root / "built_packages"
-        self.build_tracking_dir = self.repo_root / getattr(config, 'BUILD_TRACKING_DIR', '.build_tracking') if HAS_CONFIG_FILES else self.repo_root / ".build_tracking"
+        self.output_dir = self.repo_root / (getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else "built_packages")
+        self.build_tracking_dir = self.repo_root / (getattr(config, 'BUILD_TRACKING_DIR', '.build_tracking') if HAS_CONFIG_FILES else ".build_tracking")
         
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
         
         # Load configuration values from config.py
-        self.mirror_temp_dir = Path(getattr(config, 'MIRROR_TEMP_DIR', '/tmp/repo_mirror')) if HAS_CONFIG_FILES else Path("/tmp/repo_mirror")
-        self.sync_clone_dir = Path(getattr(config, 'SYNC_CLONE_DIR', '/tmp/manjaro-awesome-gitclone')) if HAS_CONFIG_FILES else Path("/tmp/manjaro-awesome-gitclone")
+        self.mirror_temp_dir = Path(getattr(config, 'MIRROR_TEMP_DIR', '/tmp/repo_mirror') if HAS_CONFIG_FILES else "/tmp/repo_mirror")
+        self.sync_clone_dir = Path(getattr(config, 'SYNC_CLONE_DIR', '/tmp/manjaro-awesome-gitclone') if HAS_CONFIG_FILES else "/tmp/manjaro-awesome-gitclone")
         self.aur_urls = getattr(config, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]) if HAS_CONFIG_FILES else ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]
         self.aur_build_dir = self.repo_root / (getattr(config, 'AUR_BUILD_DIR', 'build_aur') if HAS_CONFIG_FILES else "build_aur")
         self.ssh_options = getattr(config, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]) if HAS_CONFIG_FILES else ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]
@@ -1628,7 +1628,7 @@ class PackageBuilder:
             if remote_packages:
                 print("\n" + "="*60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                print("="*60")
+                print("="*60)
                 
                 if not self._mirror_remote_packages():
                     logger.error("❌ FAILED to mirror remote packages locally")
@@ -1675,7 +1675,7 @@ class PackageBuilder:
                         # STEP 4: ONLY NOW enable repository and sync pacman
                         print("\n" + "="*60)
                         print("PHASE 4: PACMAN SYNCHRONIZATION (CONSUMER)")
-                        print("="*60")
+                        print("="*60)
                         
                         self._apply_repository_decision("ENABLE")
                         self._sync_pacman_databases()
