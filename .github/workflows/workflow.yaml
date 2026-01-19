@@ -237,10 +237,6 @@ jobs:
           cd /
           rm -rf /tmp/yay-bin
           
-          # Configure yay to use --aur flag by default
-          echo "Configuring yay..."
-          sudo -u builder yay --aur --save
-          
           echo "✅ Build dependencies installed"
 
       - name: Hálózati diagnosztika
