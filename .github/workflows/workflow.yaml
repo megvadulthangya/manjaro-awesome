@@ -31,7 +31,6 @@ jobs:
       - name: Install Python for Checker
         run: |
           echo "=== Installing minimal Python for Checker ==="
-          # Update package database and install only python (no dependencies that might conflict)
           pacman -Sy --noconfirm python
           echo "✅ Python installed"
           python3 --version
