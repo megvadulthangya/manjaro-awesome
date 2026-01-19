@@ -17,10 +17,8 @@ jobs:
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
-      REPO_NAME: ${{ secrets.REPO_NAME || 'manjaro-awesome' }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
 
     steps:
       - name: Checkout Code with Full History
@@ -55,8 +53,6 @@ jobs:
       - name: Prepare Environment
         run: |
           echo "=== Starting Environment Preparation ==="
-          echo "Repository: $REPO_NAME"
-          echo "Server URL: $REPO_SERVER_URL"
           
           # Skip key signing issues
           echo "Setting up pacman without key signing..."
@@ -68,12 +64,6 @@ jobs:
           # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
           
-          # Temporarily remove our repository section if it exists
-          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
-            echo "Temporarily removing $REPO_NAME repository section..."
-            sed -i "/^\[$REPO_NAME\]/,/^\[/d" /etc/pacman.conf
-          fi
-          
           # Update system with minimal packages first
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
@@ -83,12 +73,12 @@ jobs:
             curl wget ca-certificates \
             openssh rsync \
             netcat iproute2 \
-            jq gnupg  # Added gnupg for GPG signing
-          
+            jq
+            
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
-          # Create builder user
+          # Create builder user (container invariant)
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           
@@ -111,7 +101,7 @@ jobs:
         run: |
           echo "=== Setting up SSH for VPS connection ==="
           
-          # Create SSH directory for builder user
+          # Create SSH directory for builder user (container invariant)
           mkdir -p /home/builder/.ssh
           chmod 700 /home/builder/.ssh
           
@@ -140,9 +130,9 @@ jobs:
           echo "Repository: $REPO_NAME"
           echo "Server URL: $REPO_SERVER_URL"
           
-          if [ -z "$REPO_NAME" ] || [ -z "$REPO_SERVER_URL" ]; then
-            echo "❌ ERROR: REPO_NAME or REPO_SERVER_URL is empty!"
-            exit 1
+          if [ -z "$REPO_SERVER_URL" ]; then
+            echo "⚠️ REPO_SERVER_URL is empty - repository will not be configured in pacman.conf"
+            exit 0
           fi
           
           # Check if repository already exists in pacman.conf
@@ -167,7 +157,7 @@ jobs:
           fi
           
           echo "=== Pacman.conf repository section ==="
-          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "❌ Repository not found in pacman.conf"
+          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "ℹ️ Repository not found in pacman.conf"
           
           echo ""
           echo "✅ Pacman repository configuration complete"
@@ -232,7 +222,7 @@ jobs:
             dbus polkit \
             systemd systemd-sysvcompat \
             arch-install-scripts \
-            ldc po4a dconf  # tilix-git specific dependencies
+            ldc po4a dconf
             
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
@@ -361,26 +351,18 @@ jobs:
           echo ""
           echo "=== Repository Status ==="
           # Check if repository exists but don't fail if it doesn't
-          if curl -s -I "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404"; then
-            echo "✅ Repository server is accessible"
+          if [ -n "$REPO_SERVER_URL" ]; then
+            if curl -s -I "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404"; then
+              echo "✅ Repository server is accessible"
+            else
+              echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
+            fi
           else
-            echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
+            echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
           fi
           
           echo ""
           echo "=== Running Builder Script ==="
-          
-          # Set environment for builder
-          export HOME=/home/builder
-          export VPS_USER="$VPS_USER"
-          export VPS_HOST="$VPS_HOST"
-          export VPS_SSH_KEY="$VPS_SSH_KEY"
-          export REPO_SERVER_URL="$REPO_SERVER_URL"
-          export REMOTE_DIR="$REMOTE_DIR"
-          export REPO_NAME="$REPO_NAME"
-          export CI_PUSH_SSH_KEY="$CI_PUSH_SSH_KEY"
-          export GPG_PRIVATE_KEY="$GPG_PRIVATE_KEY"
-          export GPG_KEY_ID="$GPG_KEY_ID"
           
           # Run as builder user
           su builder -c "cd '$PWD' && python3 .github/scripts/builder.py 2>&1" | tee build_output.log

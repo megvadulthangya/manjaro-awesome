@@ -3,12 +3,17 @@ Configuration file for Manjaro Package Builder
 """
 
 # Repository configuration
-REPO_DB_NAME = "manjaro-awesome"  # Default, can be overridden by env
-OUTPUT_DIR = "built_packages"
-BUILD_TRACKING_DIR = ".buildtracking"
+REPO_DB_NAME = "manjaro-awesome"  # Default repository name
+OUTPUT_DIR = "built_packages"     # Local output directory
+BUILD_TRACKING_DIR = ".buildtracking"  # Build tracking directory
 
 # SSH and Git configuration
 SSH_REPO_URL = "git@github.com:megvadulthangya/manjaro-awesome.git"
+SSH_OPTIONS = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "ConnectTimeout=30",
+    "-o", "BatchMode=yes"
+]
 
 # Build timeouts (seconds)
 MAKEPKG_TIMEOUT = {
@@ -31,3 +36,19 @@ REQUIRED_BUILD_TOOLS = [
     "make", "gcc", "pkg-config", "autoconf", "automake", 
     "libtool", "cmake", "meson", "ninja", "patch"
 ]
+
+# Temporary directories (runtime-required, /tmp is POSIX invariant)
+MIRROR_TEMP_DIR = "/tmp/repo_mirror"
+SYNC_CLONE_DIR = "/tmp/manjaro-awesome-gitclone"
+
+# AUR configuration
+AUR_URLS = [
+    "https://aur.archlinux.org/{pkg_name}.git",
+    "git://aur.archlinux.org/{pkg_name}.git"
+]
+
+# Build directory names
+AUR_BUILD_DIR = "build_aur"
+
+# GitHub repository for synchronization
+GITHUB_REPO = "megvadulthangya/manjaro-awesome.git"

@@ -14,7 +14,6 @@ import hashlib
 import logging
 import socket
 import glob
-import base64
 from pathlib import Path
 from datetime import datetime
 
@@ -49,20 +48,23 @@ class PackageBuilder:
         # Get the repository root
         self.repo_root = self._get_repo_root()
         
-        # GPG signing - MUST BE INITIALIZED FIRST
-        self.gpg_private_key = None
-        self.gpg_key_id = None
-        self.gpg_signing_enabled = False
-        
         # Load configuration
         self._load_config()
         
-        # Setup directories
+        # Setup directories from config
         self.output_dir = self.repo_root / getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else self.repo_root / "built_packages"
         self.build_tracking_dir = self.repo_root / getattr(config, 'BUILD_TRACKING_DIR', '.build_tracking') if HAS_CONFIG_FILES else self.repo_root / ".build_tracking"
         
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
+        
+        # Load configuration values from config.py
+        self.mirror_temp_dir = Path(getattr(config, 'MIRROR_TEMP_DIR', '/tmp/repo_mirror')) if HAS_CONFIG_FILES else Path("/tmp/repo_mirror")
+        self.sync_clone_dir = Path(getattr(config, 'SYNC_CLONE_DIR', '/tmp/manjaro-awesome-gitclone')) if HAS_CONFIG_FILES else Path("/tmp/manjaro-awesome-gitclone")
+        self.aur_urls = getattr(config, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]) if HAS_CONFIG_FILES else ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]
+        self.aur_build_dir = self.repo_root / (getattr(config, 'AUR_BUILD_DIR', 'build_aur') if HAS_CONFIG_FILES else "build_aur")
+        self.ssh_options = getattr(config, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]) if HAS_CONFIG_FILES else ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]
+        self.github_repo = os.getenv('GITHUB_REPO', getattr(config, 'GITHUB_REPO', 'megvadulthangya/manjaro-awesome.git') if HAS_CONFIG_FILES else 'megvadulthangya/manjaro-awesome.git')
         
         # State
         self.remote_files = []
@@ -72,21 +74,14 @@ class PackageBuilder:
         self.rebuilt_local_packages = []
         
         # Repository state
-        self.repo_has_packages_pacman = None  # From pacman -Sl
-        self.repo_has_packages_ssh = None     # From SSH find
-        self.repo_final_state = None          # Final decision
+        self.repo_has_packages_pacman = None
+        self.repo_has_packages_ssh = None
+        self.repo_final_state = None
         
         # PHASE 1 OBSERVER: hokibot data collection
-        self.hokibot_data = []  # List of dicts: {name, built_version, pkgrel, epoch}
+        self.hokibot_data = []
         
-        # SSH options - SIMPLIFIED like in test
-        self.ssh_options = [
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=30",
-            "-o", "BatchMode=yes"
-        ]
-        
-        # Setup SSH config file for builder user (CRITICAL FIX)
+        # Setup SSH config file for builder user (container invariant)
         self._setup_ssh_config()
         
         # Statistics
@@ -98,157 +93,12 @@ class PackageBuilder:
             "local_failed": 0,
         }
     
-    def _setup_gpg_key(self):
-        """Import GPG private key if signing is enabled."""
-        if not self.gpg_signing_enabled:
-            logger.info("GPG signing skipped (secrets not provided)")
-            return False
-        
-        try:
-            logger.info("GPG signing enabled")
-            
-            # Create temporary directory for GPG operations
-            temp_dir = tempfile.mkdtemp(prefix="gpg_")
-            key_file = Path(temp_dir) / "private.key"
-            
-            # Decode base64 encoded key
-            try:
-                key_data = base64.b64decode(self.gpg_private_key)
-                key_file.write_bytes(key_data)
-                logger.info(f"GPG key written to temporary file: {key_file}")
-            except Exception as e:
-                logger.warning(f"Failed to decode GPG private key: {e}")
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return False
-            
-            # Import the key non-interactively
-            import_cmd = [
-                "gpg", "--batch", "--import", str(key_file)
-            ]
-            
-            result = subprocess.run(
-                import_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            # Clean up temporary file
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            
-            if result.returncode == 0:
-                logger.info("GPG key imported successfully")
-                return True
-            else:
-                logger.warning(f"Failed to import GPG key: {result.stderr[:200]}")
-                return False
-                
-        except Exception as e:
-            logger.warning(f"GPG key import failed: {e}")
-            return False
-    
-    def _sign_file_with_gpg(self, file_path):
-        """Sign a file with GPG if signing is enabled."""
-        if not self.gpg_signing_enabled:
-            return False
-        
-        try:
-            file_path = Path(file_path)
-            if not file_path.exists():
-                logger.warning(f"Cannot sign, file not found: {file_path}")
-                return False
-            
-            # Sign the file with detached signature
-            sig_file = file_path.with_suffix(file_path.suffix + ".sig")
-            
-            sign_cmd = [
-                "gpg",
-                "--batch",
-                "--yes",
-                "--detach-sign",
-                "--local-user", self.gpg_key_id,
-                "--output", str(sig_file),
-                str(file_path)
-            ]
-            
-            result = subprocess.run(
-                sign_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                logger.info(f"Signed: {file_path.name}")
-                return True
-            else:
-                logger.warning(f"Failed to sign {file_path.name}: {result.stderr[:200]}")
-                return False
-                
-        except Exception as e:
-            logger.warning(f"Error signing {file_path}: {e}")
-            return False
-    
-    def _sign_repository_artifacts(self):
-        """Sign repository database files and optionally packages."""
-        if not self.gpg_signing_enabled:
-            return
-        
-        print("\n" + "="*60)
-        print("GPG Signing Repository Artifacts")
-        print("="*60)
-        
-        # Import GPG key
-        if not self._setup_gpg_key():
-            logger.warning("GPG key import failed, skipping signing")
-            return
-        
-        # REQUIRED: Sign repository database files
-        required_files = [
-            self.output_dir / f"{self.repo_name}.db.tar.gz",
-            self.output_dir / f"{self.repo_name}.files.tar.gz"
-        ]
-        
-        signed_count = 0
-        for file_path in required_files:
-            if file_path.exists():
-                if self._sign_file_with_gpg(file_path):
-                    signed_count += 1
-                else:
-                    logger.warning(f"Failed to sign required file: {file_path.name}")
-            else:
-                logger.warning(f"Required file not found for signing: {file_path.name}")
-        
-        logger.info(f"Signed {signed_count}/{len(required_files)} required database files")
-        
-        # OPTIONAL: Sign package files (skip if fails, don't fail build)
-        print("\nOptional package signing...")
-        package_files = list(self.output_dir.glob("*.pkg.tar.zst"))
-        
-        if package_files:
-            logger.info(f"Found {len(package_files)} package files for optional signing")
-            
-            # Limit signing to avoid timeouts (optional)
-            max_packages_to_sign = 10
-            if len(package_files) > max_packages_to_sign:
-                logger.info(f"Limiting signing to {max_packages_to_sign} packages (optional signing)")
-                package_files = package_files[:max_packages_to_sign]
-            
-            package_signed = 0
-            for pkg_file in package_files:
-                if self._sign_file_with_gpg(pkg_file):
-                    package_signed += 1
-            
-            logger.info(f"Optionally signed {package_signed}/{len(package_files)} package files")
-        else:
-            logger.info("No package files found for optional signing")
-    
     def _setup_ssh_config(self):
-        """Setup SSH config file for builder user - EXACTLY as in the test script"""
+        """Setup SSH config file for builder user - container invariant"""
         ssh_dir = Path("/home/builder/.ssh")
         ssh_dir.mkdir(exist_ok=True, mode=0o700)
         
-        # Write SSH config file - CRITICAL FIX
+        # Write SSH config file using environment variables
         config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
@@ -268,7 +118,6 @@ class PackageBuilder:
         # Ensure SSH key exists and has correct permissions
         ssh_key_path = ssh_dir / "id_ed25519"
         if not ssh_key_path.exists():
-            # Write the SSH key from environment
             ssh_key = os.getenv('VPS_SSH_KEY')
             if ssh_key:
                 with open(ssh_key_path, "w") as f:
@@ -313,7 +162,7 @@ class PackageBuilder:
         
         # Get script directory and go up to repo root
         script_path = Path(__file__).resolve()
-        repo_root = script_path.parent.parent.parent  # .github/scripts -> .github -> repo root
+        repo_root = script_path.parent.parent.parent
         if repo_root.exists():
             logger.info(f"Using repository root from script location: {repo_root}")
             return repo_root
@@ -324,35 +173,40 @@ class PackageBuilder:
     
     def _load_config(self):
         """Load configuration from environment and config files."""
+        # Required environment variables (secrets)
         self.vps_user = os.getenv('VPS_USER')
         self.vps_host = os.getenv('VPS_HOST')
         self.ssh_key = os.getenv('VPS_SSH_KEY')
+        
+        # Optional environment variables (overrides)
         self.repo_server_url = os.getenv('REPO_SERVER_URL', '')
-        self.remote_dir = os.getenv('REMOTE_DIR', '/var/www/repo')
+        self.remote_dir = os.getenv('REMOTE_DIR')
         
-        # Initialize GPG signing with defensive checks
-        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
-        self.gpg_key_id = os.getenv('GPG_KEY_ID')
-        
-        # Enable signing only if BOTH secrets are provided
-        if self.gpg_private_key and self.gpg_key_id:
-            self.gpg_signing_enabled = True
-        else:
-            self.gpg_signing_enabled = False
-        
+        # Repository name from environment or config
         env_repo_name = os.getenv('REPO_NAME')
         if HAS_CONFIG_FILES:
-            config_repo_name = getattr(config, 'REPO_DB_NAME', 'manjaro-awesome')
+            config_repo_name = getattr(config, 'REPO_DB_NAME', '')
             self.repo_name = env_repo_name if env_repo_name else config_repo_name
         else:
-            self.repo_name = env_repo_name if env_repo_name else 'manjaro-awesome'
+            self.repo_name = env_repo_name if env_repo_name else ''
         
-        required = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
-        missing = [var for var in required if not os.getenv(var)]
+        # Validate required configuration
+        required_env = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
+        missing_env = [var for var in required_env if not os.getenv(var)]
         
-        if missing:
-            logger.error(f"❌ Missing required environment variables: {missing}")
+        if missing_env:
+            logger.error(f"❌ Missing required environment variables: {missing_env}")
             logger.error("Please set these in your GitHub repository secrets")
+            sys.exit(1)
+        
+        if not self.remote_dir:
+            logger.error("❌ Missing required configuration: REMOTE_DIR")
+            logger.error("Set REMOTE_DIR environment variable")
+            sys.exit(1)
+        
+        if not self.repo_name:
+            logger.error("❌ Missing required configuration: REPO_NAME")
+            logger.error("Set REPO_NAME environment variable or configure REPO_DB_NAME in config.py")
             sys.exit(1)
         
         print(f"🔧 Configuration loaded:")
@@ -362,7 +216,6 @@ class PackageBuilder:
         if self.repo_server_url:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
-        print(f"   GPG signing enabled: {self.gpg_signing_enabled}")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False):
         """Run command with comprehensive logging."""
@@ -514,7 +367,7 @@ class PackageBuilder:
         print("="*60)
         
         # Create a temporary local repository directory
-        mirror_dir = Path("/tmp/repo_mirror")
+        mirror_dir = self.mirror_temp_dir
         if mirror_dir.exists():
             shutil.rmtree(mirror_dir, ignore_errors=True)
         mirror_dir.mkdir(parents=True, exist_ok=True)
@@ -1066,7 +919,7 @@ class PackageBuilder:
     
     def _build_aur_package(self, pkg_name):
         """Build AUR package."""
-        aur_dir = self.repo_root / "build_aur"
+        aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
         pkg_dir = aur_dir / pkg_name
@@ -1075,14 +928,10 @@ class PackageBuilder:
         
         print(f"Cloning {pkg_name} from AUR...")
         
-        # Try different AUR URLs
-        aur_urls = [
-            f"https://aur.archlinux.org/{pkg_name}.git",
-            f"git://aur.archlinux.org/{pkg_name}.git",
-        ]
-        
+        # Try different AUR URLs from config
         clone_success = False
-        for aur_url in aur_urls:
+        for aur_url_template in self.aur_urls:
+            aur_url = aur_url_template.format(pkg_name=pkg_name)
             logger.info(f"Trying AUR URL: {aur_url}")
             result = self.run_cmd(
                 f"git clone --depth 1 {aur_url} {pkg_dir}",
@@ -1413,7 +1262,7 @@ class PackageBuilder:
         print("🔄 PHASE 2: Isolated PKGBUILD Synchronization")
         print("="*60)
         
-        clone_dir = Path("/tmp/manjaro-awesome-gitclone")
+        clone_dir = self.sync_clone_dir
         
         try:
             if clone_dir.exists():
@@ -1426,8 +1275,8 @@ class PackageBuilder:
                 logger.warning("CI_PUSH_SSH_KEY not set in environment - skipping PKGBUILD sync")
                 return
             
-            # Use GITHUB_TOKEN for authentication instead of SSH key
-            repo_url = f"https://x-access-token:{github_ssh_key}@github.com/megvadulthangya/manjaro-awesome.git"
+            # Use GITHUB_TOKEN for authentication
+            repo_url = f"https://x-access-token:{github_ssh_key}@github.com/{self.github_repo}"
             
             print(f"📥 Cloning repository to {clone_dir}...")
             clone_result = subprocess.run(
@@ -1547,7 +1396,7 @@ class PackageBuilder:
             file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command with SSH config (no -e option, uses SSH config)
+        # Build RSYNC command with SSH config
         rsync_cmd = f"""
         rsync -avz \
           --progress \
@@ -1667,7 +1516,7 @@ class PackageBuilder:
         # Get list of files we uploaded
         uploaded_filenames = [os.path.basename(f) for f in uploaded_files]
         
-        # Check remote directory - FIXED: Use proper string formatting for shell variable
+        # Check remote directory
         remote_cmd = f"""
         echo "=== REMOTE DIRECTORY ==="
         ls -la "{self.remote_dir}/" 2>/dev/null | head -30
@@ -1779,7 +1628,7 @@ class PackageBuilder:
             if remote_packages:
                 print("\n" + "="*60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                print("="*60)
+                print("="*60")
                 
                 if not self._mirror_remote_packages():
                     logger.error("❌ FAILED to mirror remote packages locally")
@@ -1812,9 +1661,6 @@ class PackageBuilder:
                 
                 # Generate database with ALL locally available packages
                 if self._generate_full_database():
-                    # PHASE 3.5: GPG Signing (if enabled)
-                    self._sign_repository_artifacts()
-                    
                     # Upload regenerated database and packages
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
@@ -1829,7 +1675,7 @@ class PackageBuilder:
                         # STEP 4: ONLY NOW enable repository and sync pacman
                         print("\n" + "="*60)
                         print("PHASE 4: PACMAN SYNCHRONIZATION (CONSUMER)")
-                        print("="*60)
+                        print("="*60")
                         
                         self._apply_repository_decision("ENABLE")
                         self._sync_pacman_databases()
