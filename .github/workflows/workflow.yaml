@@ -19,6 +19,7 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      DEBUG: false  # Control debug mode for checker
 
     steps:
       - name: Checkout Code with Full History
@@ -26,6 +27,23 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Syntax and Environment Checker
+        run: |
+          echo "=== Running Syntax and Environment Checker ==="
+          
+          # Create scripts directory if it doesn't exist
+          mkdir -p .github/scripts
+          
+          # Run the checker
+          python3 .github/scripts/checker.py
+          
+          CHECKER_EXIT=$?
+          if [ $CHECKER_EXIT -ne 0 ]; then
+            echo "❌ Checker found errors. Build stopped."
+            exit $CHECKER_EXIT
+          fi
+          echo "✅ Checker passed. Continuing with build..."
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
@@ -58,7 +76,7 @@ jobs:
           echo "Setting up pacman without key signing..."
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
           
-          # UPDATE SYSTEM WITHOUT OUR REPOSITORY
+          # UPDATE SYSTEM WITHOUT OUR REPPOSITORY
           echo "Updating system (ignoring our repository for now)..."
           
           # Save current pacman.conf
