@@ -1,104 +1,84 @@
-# .github/scripts/checker.py
 #!/usr/bin/env python3
-"""Preflight checker for GitHub Actions workflow."""
 
 import os
 import sys
-import yaml
 import py_compile
-import subprocess
-from pathlib import Path
+import yaml
 
-REQUIRED_ENV_VARS = [
-    'VPS_USER',
-    'VPS_HOST', 
-    'VPS_SSH_KEY',
-    'REPO_SERVER_URL',
-    'REMOTE_DIR',
-    'REPO_NAME'
-]
+def check_python_file(file_path):
+    """Check Python file syntax using py_compile"""
+    try:
+        py_compile.compile(file_path, doraise=True)
+        print(f"[PASS] Python syntax: {file_path}")
+        return True
+    except py_compile.PyCompileError as e:
+        print(f"[FAIL] Python syntax: {file_path} - {e}")
+        return False
+    except FileNotFoundError:
+        print(f"[FAIL] Python syntax: {file_path} - File not found")
+        return False
 
-PYTHON_FILES = [
-    '.github/scripts/builder.py',
-    '.github/scripts/config.py', 
-    '.github/scripts/packages.py'
-]
+def check_yaml_file(file_path):
+    """Basic YAML syntax check"""
+    try:
+        with open(file_path, 'r') as f:
+            yaml.safe_load(f)
+        print(f"[PASS] YAML syntax: {file_path}")
+        return True
+    except yaml.YAMLError as e:
+        print(f"[FAIL] YAML syntax: {file_path} - {e}")
+        return False
+    except FileNotFoundError:
+        print(f"[FAIL] YAML syntax: {file_path} - File not found")
+        return False
 
-WORKFLOW_PATH = '.github/workflows/workflow.yaml'
-
-class PreflightChecker:
-    def __init__(self):
-        self.errors = []
-        self.warnings = []
-        self.debug = os.environ.get('DEBUG', '').lower() in ('1', 'true', 'yes')
-
-    def log(self, msg):
-        if self.debug:
-            print(f"[DEBUG] {msg}")
-
-    def check_python_files(self):
-        """Validate Python syntax using py_compile."""
-        self.log("Checking Python files...")
-        for py_file in PYTHON_FILES:
-            if not Path(py_file).exists():
-                self.errors.append(f"Python file not found: {py_file}")
-                continue
-            try:
-                py_compile.compile(py_file, doraise=True)
-                self.log(f"✓ {py_file} - Syntax OK")
-            except py_compile.PyCompileError as e:
-                self.errors.append(f"Python syntax error in {py_file}: {e}")
-
-    def check_yaml_syntax(self):
-        """Validate YAML syntax of workflow file."""
-        self.log(f"Checking YAML syntax for {WORKFLOW_PATH}...")
-        if not Path(WORKFLOW_PATH).exists():
-            self.errors.append(f"Workflow file not found: {WORKFLOW_PATH}")
-            return
-        try:
-            with open(WORKFLOW_PATH, 'r') as f:
-                yaml.safe_load(f)
-            self.log("✓ Workflow YAML syntax OK")
-        except yaml.YAMLError as e:
-            self.errors.append(f"YAML syntax error in {WORKFLOW_PATH}: {e}")
-
-    def check_env_vars(self):
-        """Check if required environment variables are set."""
-        self.log("Checking environment variables...")
-        for var in REQUIRED_ENV_VARS:
-            value = os.environ.get(var)
-            if value is None or str(value).strip() == '':
-                self.errors.append(f"Required env var not set: {var}")
-            else:
-                self.log(f"✓ {var} = [SET]")
-
-    def run(self):
-        """Execute all checks and print summary."""
-        print("🧪 Running preflight checks...")
-        
-        self.check_python_files()
-        self.check_yaml_syntax()
-        self.check_env_vars()
-        
-        print("\n" + "="*50)
-        print("PREFLIGHT CHECK SUMMARY")
-        print("="*50)
-        
-        if self.warnings:
-            print("\n⚠️  WARNINGS:")
-            for warning in self.warnings:
-                print(f"   • {warning}")
-        
-        if self.errors:
-            print("\n❌ ERRORS:")
-            for error in self.errors:
-                print(f"   • {error}")
-            print(f"\n❌ Preflight check FAILED with {len(self.errors)} error(s)")
-            return 1
+def check_env_vars(vars_list):
+    """Check that environment variables are not empty"""
+    all_passed = True
+    for var in vars_list:
+        value = os.getenv(var, '')
+        if value and value.strip():
+            print(f"[PASS] ENV variable: {var}")
         else:
-            print("\n✅ All preflight checks passed!")
-            return 0
+            print(f"[FAIL] ENV variable: {var} - Empty or not set")
+            all_passed = False
+    return all_passed
 
-if __name__ == "__main__":
-    checker = PreflightChecker()
-    sys.exit(checker.run())
+def main():
+    print("=== Running Preflight Checker ===")
+    
+    # Track overall status
+    all_checks_passed = True
+    
+    # Check Python files
+    python_files = [
+        '.github/scripts/builder.py',
+        '.github/scripts/config.py',
+        '.github/scripts/packages.py'
+    ]
+    
+    for py_file in python_files:
+        if not check_python_file(py_file):
+            all_checks_passed = False
+    
+    # Check workflow YAML
+    workflow_yaml = '.github/workflows/workflow.yaml'
+    if not check_yaml_file(workflow_yaml):
+        all_checks_passed = False
+    
+    # Check required environment variables
+    required_vars = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY', 'REPO_SERVER_URL']
+    if not check_env_vars(required_vars):
+        all_checks_passed = False
+    
+    print("=" * 30)
+    
+    if all_checks_passed:
+        print("✅ All preflight checks passed")
+        sys.exit(0)
+    else:
+        print("❌ One or more preflight checks failed")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

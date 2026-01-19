@@ -1,4 +1,3 @@
-# .github/workflows/workflow.yaml
 name: MPB - with diagnostic
 
 on:
@@ -22,17 +21,17 @@ jobs:
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Install Python
-        run: pacman -Sy --noconfirm python
-
-      - name: Run Checker
-        run: python3 .github/scripts/checker.py
-
       - name: Checkout Code with Full History
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Python
+        run: pacman -Sy --noconfirm python python-yaml
+
+      - name: Run Preflight Checker
+        run: python3 .github/scripts/checker.py
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
