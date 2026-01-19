@@ -46,13 +46,11 @@ jobs:
             echo "❌ checker.py not found in .github/scripts/"
             echo "Creating minimal checker script..."
             mkdir -p .github/scripts
-            cat > .github/scripts/checker.py << 'EOF'
-#!/usr/bin/env python3
-import os
-import sys
-print("Checker placeholder - actual script should be in repository")
-sys.exit(0)
-EOF
+            echo '#!/usr/bin/env python3' > .github/scripts/checker.py
+            echo 'import os' >> .github/scripts/checker.py
+            echo 'import sys' >> .github/scripts/checker.py
+            echo 'print("Checker placeholder - actual script should be in repository")' >> .github/scripts/checker.py
+            echo 'sys.exit(0)' >> .github/scripts/checker.py
             chmod +x .github/scripts/checker.py
           fi
           
