@@ -1,3 +1,4 @@
+# .github/workflows/workflow.yaml
 name: MPB - with diagnostic
 
 on:
@@ -21,10 +22,11 @@ jobs:
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Preflight Validation
-        run: |
-          echo "=== Starting Preflight Validation ==="
-          python3 .github/scripts/checker.py
+      - name: Install Python
+        run: pacman -Sy --noconfirm python
+
+      - name: Run Checker
+        run: python3 .github/scripts/checker.py
 
       - name: Checkout Code with Full History
         uses: actions/checkout@v4
