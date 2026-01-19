@@ -19,50 +19,18 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
-      DEBUG: false  # Control debug mode for checker
 
     steps:
+      - name: Preflight Validation
+        run: |
+          echo "=== Starting Preflight Validation ==="
+          python3 .github/scripts/checker.py
+
       - name: Checkout Code with Full History
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Python for Checker
-        run: |
-          echo "=== Installing minimal Python for Checker ==="
-          pacman -Sy --noconfirm python
-          echo "✅ Python installed"
-          python3 --version
-
-      - name: Run Syntax and Environment Checker
-        run: |
-          echo "=== Running Syntax and Environment Checker ==="
-          
-          # Check if checker.py exists
-          if [ -f ".github/scripts/checker.py" ]; then
-            echo "Found checker.py"
-          else
-            echo "❌ checker.py not found in .github/scripts/"
-            echo "Creating minimal checker script..."
-            mkdir -p .github/scripts
-            echo '#!/usr/bin/env python3' > .github/scripts/checker.py
-            echo 'import os' >> .github/scripts/checker.py
-            echo 'import sys' >> .github/scripts/checker.py
-            echo 'print("Checker placeholder - actual script should be in repository")' >> .github/scripts/checker.py
-            echo 'sys.exit(0)' >> .github/scripts/checker.py
-            chmod +x .github/scripts/checker.py
-          fi
-          
-          # Run the checker
-          python3 .github/scripts/checker.py
-          
-          CHECKER_EXIT=$?
-          if [ $CHECKER_EXIT -ne 0 ]; then
-            echo "❌ Checker found errors. Build stopped."
-            exit $CHECKER_EXIT
-          fi
-          echo "✅ Checker passed. Continuing with build..."
 
       - name: Fix PKGBUILD Epoch Issues
         run: |
