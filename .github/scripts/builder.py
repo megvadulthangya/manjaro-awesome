@@ -81,6 +81,11 @@ class PackageBuilder:
         # PHASE 1 OBSERVER: hokibot data collection
         self.hokibot_data = []
         
+        # GPG signing configuration
+        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
+        self.gpg_key_id = os.getenv('GPG_KEY_ID')
+        self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
+        
         # Setup SSH config file for builder user (container invariant)
         self._setup_ssh_config()
         
@@ -145,6 +150,148 @@ class PackageBuilder:
                 shutil.chown(item, "builder", "builder")
         except Exception as e:
             logger.warning(f"Could not change SSH dir ownership: {e}")
+    
+    def _import_gpg_key(self):
+        """Import GPG private key and set trust level."""
+        if not self.gpg_enabled:
+            logger.info("GPG Key not detected. Skipping repository signing.")
+            return False
+        
+        logger.info("GPG Key detected. Importing private key...")
+        
+        try:
+            # Create a temporary GPG home directory
+            temp_gpg_home = tempfile.mkdtemp(prefix="gpg_home_")
+            
+            # Set environment for GPG
+            env = os.environ.copy()
+            env['GNUPGHOME'] = temp_gpg_home
+            
+            # Import the private key
+            import_process = subprocess.run(
+                ['gpg', '--batch', '--import'],
+                input=self.gpg_private_key.encode(),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False
+            )
+            
+            if import_process.returncode != 0:
+                logger.error(f"Failed to import GPG key: {import_process.stderr}")
+                shutil.rmtree(temp_gpg_home, ignore_errors=True)
+                return False
+            
+            logger.info(f"✅ GPG key imported successfully (Key ID: {self.gpg_key_id})")
+            
+            # Set ultimate trust for the key (so GPG doesn't prompt)
+            # First get the fingerprint
+            list_process = subprocess.run(
+                ['gpg', '--list-keys', '--with-colons', self.gpg_key_id],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False
+            )
+            
+            if list_process.returncode == 0:
+                # Parse output to get fingerprint
+                for line in list_process.stdout.split('\n'):
+                    if line.startswith('fpr:'):
+                        parts = line.split(':')
+                        if len(parts) > 9:
+                            fingerprint = parts[9]
+                            # Set ultimate trust (6 = ultimate)
+                            trust_process = subprocess.run(
+                                ['gpg', '--import-ownertrust'],
+                                input=f"{fingerprint}:6:\n".encode(),
+                                capture_output=True,
+                                text=True,
+                                env=env,
+                                check=False
+                            )
+                            if trust_process.returncode == 0:
+                                logger.info(f"✅ Set ultimate trust for key fingerprint: {fingerprint[:16]}...")
+                            break
+            
+            # Store the GPG home directory for later use
+            self.gpg_home = temp_gpg_home
+            self.gpg_env = env
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error importing GPG key: {e}")
+            if 'temp_gpg_home' in locals():
+                shutil.rmtree(temp_gpg_home, ignore_errors=True)
+            return False
+    
+    def _cleanup_gpg(self):
+        """Clean up temporary GPG home directory."""
+        if hasattr(self, 'gpg_home'):
+            try:
+                shutil.rmtree(self.gpg_home, ignore_errors=True)
+                logger.debug("Cleaned up temporary GPG home directory")
+            except Exception as e:
+                logger.warning(f"Could not clean up GPG directory: {e}")
+    
+    def _sign_repository_files(self):
+        """Sign repository database files with GPG."""
+        if not self.gpg_enabled:
+            return False
+        
+        if not hasattr(self, 'gpg_home') or not hasattr(self, 'gpg_env'):
+            logger.error("GPG key not imported. Cannot sign repository files.")
+            return False
+        
+        try:
+            # Files to sign
+            files_to_sign = [
+                self.output_dir / f"{self.repo_name}.db",
+                self.output_dir / f"{self.repo_name}.files"
+            ]
+            
+            signed_count = 0
+            
+            for file_to_sign in files_to_sign:
+                if not file_to_sign.exists():
+                    logger.warning(f"Repository file not found for signing: {file_to_sign.name}")
+                    continue
+                
+                logger.info(f"Signing repository database: {file_to_sign.name}")
+                
+                # Create detached signature
+                sig_file = file_to_sign.with_suffix(file_to_sign.suffix + '.sig')
+                
+                sign_process = subprocess.run(
+                    [
+                        'gpg', '--detach-sign',
+                        '--default-key', self.gpg_key_id,
+                        '--output', str(sig_file),
+                        str(file_to_sign)
+                    ],
+                    capture_output=True,
+                    text=True,
+                    env=self.gpg_env,
+                    check=False
+                )
+                
+                if sign_process.returncode == 0:
+                    logger.info(f"✅ Created signature: {sig_file.name}")
+                    signed_count += 1
+                else:
+                    logger.error(f"Failed to sign {file_to_sign.name}: {sign_process.stderr}")
+            
+            if signed_count > 0:
+                logger.info(f"✅ Successfully signed {signed_count} repository file(s)")
+                return True
+            else:
+                logger.error("Failed to sign any repository files")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error signing repository files: {e}")
+            return False
     
     def _get_repo_root(self):
         """Get the repository root directory reliably."""
@@ -216,6 +363,7 @@ class PackageBuilder:
         if self.repo_server_url:
             print(f"   Repository URL: {self.repo_server_url}")
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
+        print(f"   GPG signing: {'ENABLED' if self.gpg_enabled else 'DISABLED'}")
     
     def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False):
         """Run command with comprehensive logging."""
@@ -1724,7 +1872,11 @@ class PackageBuilder:
             logger.warning("No files to upload")
             return False
         
-        logger.info(f"Uploading {len(all_files)} files...")
+        # Log upload start with GPG status
+        if self.gpg_enabled:
+            logger.info("Starting upload (including signatures)...")
+        else:
+            logger.info("Starting upload...")
         
         # Ensure remote directory exists first
         self._ensure_remote_directory()
@@ -1747,7 +1899,14 @@ class PackageBuilder:
         logger.info(f"Files to upload ({len(files_to_upload)}):")
         for f in files_to_upload:
             size_mb = os.path.getsize(f) / (1024 * 1024)
-            file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
+            file_type = "DATABASE"
+            if self.repo_name in os.path.basename(f):
+                if f.endswith('.sig'):
+                    file_type = "SIGNATURE"
+                else:
+                    file_type = "DATABASE"
+            else:
+                file_type = "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
         # Build RSYNC command WITHOUT --delete (we already did targeted cleanup)
@@ -2008,12 +2167,23 @@ class PackageBuilder:
                 
                 # Generate database with ALL locally available packages
                 if self._generate_full_database():
+                    # Import GPG key if available
+                    if self.gpg_enabled:
+                        if self._import_gpg_key():
+                            # Sign repository database files
+                            self._sign_repository_files()
+                        else:
+                            logger.warning("GPG key import failed. Repository will not be signed.")
+                    
                     # Upload regenerated database and packages
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database) WITHOUT --delete flag
+                    # Upload everything (packages + database + signatures) WITHOUT --delete flag
                     upload_success = self.upload_packages()
+                    
+                    # Clean up GPG temporary directory
+                    self._cleanup_gpg()
                     
                     if upload_success:
                         # Cleanup old packages (keep only last 3 versions)
@@ -2063,6 +2233,7 @@ class PackageBuilder:
             print(f"Local packages:  {self.stats['local_success']} (failed: {self.stats['local_failed']})")
             print(f"Total built:     {total_built}")
             print(f"Skipped:         {len(self.skipped_packages)}")
+            print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
             print("="*60)
             
             if self.built_packages:
@@ -2076,6 +2247,8 @@ class PackageBuilder:
             print(f"\n❌ Build failed: {e}")
             import traceback
             traceback.print_exc()
+            # Ensure GPG cleanup even on failure
+            self._cleanup_gpg()
             return 1
 
 if __name__ == "__main__":
