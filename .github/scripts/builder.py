@@ -917,6 +917,139 @@ class PackageBuilder:
             logger.warning(f"Could not extract metadata from {pkg_file_path}: {e}")
             return None
     
+    def _extract_package_name_from_filename(self, filename):
+        """Extract package name from package filename."""
+        try:
+            # Remove extension
+            base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base_name.split('-')
+            
+            # Find where the version starts (first part that contains a digit)
+            version_index = None
+            for i, part in enumerate(parts):
+                if any(c.isdigit() for c in part):
+                    version_index = i
+                    break
+            
+            if version_index is None:
+                return base_name
+            
+            return '-'.join(parts[:version_index])
+        except Exception as e:
+            logger.warning(f"Could not extract package name from {filename}: {e}")
+            return None
+    
+    def _prune_orphaned_packages(self):
+        """Remove packages that exist locally but are not in packages.py (SSOT)."""
+        print("\n" + "="*60)
+        print("PACKAGE PRUNING: Ensuring packages.py is Single Source of Truth")
+        print("="*60)
+        
+        # Load desired packages from packages.py
+        local_packages_list, aur_packages_list = self.get_package_lists()
+        desired_packages = set(local_packages_list + aur_packages_list)
+        
+        logger.info(f"📦 Desired packages from packages.py: {len(desired_packages)} packages")
+        
+        # Scan local build directory for existing package files
+        local_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        
+        if not local_files:
+            logger.info("ℹ️ No local package files found - nothing to prune")
+            return
+        
+        logger.info(f"📁 Found {len(local_files)} package files in local directory")
+        
+        # Identify orphaned packages (files present locally but NOT in packages.py)
+        orphaned_files = []
+        orphaned_packages = set()
+        
+        for pkg_file in local_files:
+            filename = pkg_file.name
+            pkg_name = self._extract_package_name_from_filename(filename)
+            
+            if pkg_name and pkg_name not in desired_packages:
+                orphaned_files.append(pkg_file)
+                orphaned_packages.add(pkg_name)
+        
+        if not orphaned_files:
+            logger.info("✅ No orphaned packages found - packages.py SSOT is consistent")
+            return
+        
+        logger.info(f"🔍 Found {len(orphaned_files)} orphaned files from {len(orphaned_packages)} packages")
+        logger.info(f"📦 Orphaned packages: {', '.join(sorted(orphaned_packages))}")
+        
+        # Check if database exists on server before attempting repo-remove
+        existing_db_files, _ = self._check_database_files()
+        
+        if existing_db_files:
+            logger.info("✅ Database exists on server - proceeding with repo-remove operations")
+            
+            # Execute removal for each orphaned package
+            for pkg_name in sorted(orphaned_packages):
+                print(f"\n🗑️  Removing orphaned package: {pkg_name}")
+                logger.info(f"Removing orphaned package: {pkg_name}")
+                
+                # Remove from repository database (repo-remove) FIRST
+                remote_db_base = f"{self.remote_dir}/{self.repo_name}.db"
+                remote_cmd = f"repo-remove {remote_db_base}.tar.gz {pkg_name} 2>/dev/null || repo-remove {remote_db_base} {pkg_name} 2>/dev/null"
+                
+                ssh_cmd = [
+                    "ssh",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "ConnectTimeout=30",
+                    f"{self.vps_user}@{self.vps_host}",
+                    remote_cmd
+                ]
+                
+                try:
+                    logger.info(f"Running repo-remove for {pkg_name}...")
+                    result = subprocess.run(
+                        ssh_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info(f"✅ Successfully removed {pkg_name} from repository database")
+                    else:
+                        logger.warning(f"⚠️ repo-remove for {pkg_name} returned non-zero: {result.returncode}")
+                        if result.stderr:
+                            logger.warning(f"repo-remove stderr: {result.stderr[:200]}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to run repo-remove for {pkg_name}: {e}")
+        else:
+            logger.info("ℹ️ No database files found on server - skipping repo-remove operations")
+        
+        # Delete physical package files (and signatures) SECOND
+        print(f"\n🗑️  Deleting {len(orphaned_files)} orphaned package files...")
+        
+        deleted_count = 0
+        for pkg_file in orphaned_files:
+            try:
+                # Delete the main package file
+                pkg_file.unlink()
+                logger.info(f"✅ Deleted: {pkg_file.name}")
+                
+                # Also delete signature file if it exists
+                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                if sig_file.exists():
+                    sig_file.unlink()
+                    logger.info(f"✅ Deleted signature: {sig_file.name}")
+                
+                deleted_count += 1
+            except Exception as e:
+                logger.error(f"❌ Failed to delete {pkg_file.name}: {e}")
+        
+        logger.info(f"✅ Package pruning complete: {deleted_count} files deleted")
+        
+        # Clean up orphaned files from remote_files list
+        for orphaned_file in orphaned_files:
+            filename = orphaned_file.name
+            if filename in self.remote_files:
+                self.remote_files.remove(filename)
+    
     def _build_aur_package(self, pkg_name):
         """Build AUR package."""
         aur_dir = self.aur_build_dir
@@ -1637,7 +1770,11 @@ class PackageBuilder:
             else:
                 logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
             
-            # STEP 2: Check existing database files
+            # STEP 2: Package Pruning - Ensure packages.py is SSOT
+            # This must happen BEFORE building new packages
+            self._prune_orphaned_packages()
+            
+            # STEP 3: Check existing database files
             existing_db_files, missing_db_files = self._check_database_files()
             
             # Fetch existing database if available
