@@ -16,7 +16,7 @@ LOCAL_PACKAGES = [
     "awesome-copycats-manjaro",
     "i3lock-fancy-git",
     "ttf-font-awesome-5",
-    "nvidia-driver-assistant",
+#    "nvidia-driver-assistant",
     "grayjay-bin"
 ]
 
