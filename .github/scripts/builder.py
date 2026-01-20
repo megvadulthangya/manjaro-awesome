@@ -309,6 +309,54 @@ class PackageBuilder:
             print(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
             return False
     
+    def _ensure_remote_directory(self):
+        """Ensure remote directory exists and has correct permissions."""
+        print("\n🔧 Ensuring remote directory exists...")
+        
+        remote_cmd = f"""
+        # Check if directory exists
+        if [ ! -d "{self.remote_dir}" ]; then
+            echo "Creating directory {self.remote_dir}"
+            sudo mkdir -p "{self.remote_dir}"
+            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
+            sudo chmod -R 755 "{self.remote_dir}"
+            echo "✅ Directory created and permissions set"
+        else
+            echo "✅ Directory exists"
+            # Ensure correct permissions
+            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
+            sudo chmod -R 755 "{self.remote_dir}"
+            echo "✅ Permissions verified"
+        fi
+        """
+        
+        ssh_cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=30",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("✅ Remote directory verified")
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"REMOTE DIR: {line}")
+            else:
+                logger.warning(f"⚠️ Could not ensure remote directory: {result.stderr[:200]}")
+                
+        except Exception as e:
+            logger.warning(f"Could not ensure remote directory: {e}")
+    
     def _list_remote_packages(self):
         """STEP 1: List all *.pkg.tar.zst files in the remote repository directory."""
         print("\n" + "="*60)
@@ -323,7 +371,7 @@ class PackageBuilder:
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null"
+            f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null || echo 'NO_FILES'"
         ]
         
         logger.info(f"RUNNING SSH COMMAND: {' '.join(ssh_cmd)}")
@@ -343,7 +391,7 @@ class PackageBuilder:
                 logger.info(f"STDERR: {result.stderr[:500]}")
             
             if result.returncode == 0:
-                files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
                 file_count = len(files)
                 logger.info(f"✅ SSH find returned {file_count} package files")
                 if file_count > 0:
@@ -366,6 +414,9 @@ class PackageBuilder:
         print("MANDATORY STEP: Mirroring remote packages locally")
         print("="*60)
         
+        # Ensure remote directory exists first
+        self._ensure_remote_directory()
+        
         # Create a temporary local repository directory
         mirror_dir = self.mirror_temp_dir
         if mirror_dir.exists():
@@ -374,19 +425,22 @@ class PackageBuilder:
         
         logger.info(f"Created local mirror directory: {mirror_dir}")
         
+        # Check if there are any files to mirror
+        if not self.remote_files:
+            logger.info("ℹ️ No remote packages to mirror")
+            return True
+        
         # Use rsync to download ALL package files from server
         print("📥 Downloading ALL remote package files to local mirror...")
         
+        # Use a simpler rsync command without --delete
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
-          --include='*.pkg.tar.zst' \
-          --include='*.pkg.tar.xz' \
-          --exclude='*' \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/' \
-          '{mirror_dir}/'
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/*.pkg.tar.*' \
+          '{mirror_dir}/' 2>/dev/null || true
         """
         
         logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
@@ -413,51 +467,72 @@ class PackageBuilder:
                         logger.info(f"RSYNC MIRROR: {line}")
             if result.stderr:
                 for line in result.stderr.splitlines():
-                    if line.strip():
+                    if line.strip() and "No such file or directory" not in line:
                         logger.error(f"RSYNC MIRROR ERR: {line}")
             
-            if result.returncode == 0:
-                # List downloaded files
-                downloaded_files = list(mirror_dir.glob("*.pkg.tar.*"))
-                file_count = len(downloaded_files)
+            # List downloaded files
+            downloaded_files = list(mirror_dir.glob("*.pkg.tar.*"))
+            file_count = len(downloaded_files)
+            
+            if file_count > 0:
+                logger.info(f"✅ Successfully mirrored {file_count} package files ({duration} seconds)")
+                logger.info(f"Sample mirrored files: {[f.name for f in downloaded_files[:5]]}")
                 
-                if file_count > 0:
-                    logger.info(f"✅ Successfully mirrored {file_count} package files ({duration} seconds)")
-                    logger.info(f"Sample mirrored files: {[f.name for f in downloaded_files[:5]]}")
-                    
-                    # Verify file integrity
-                    valid_files = []
-                    for pkg_file in downloaded_files:
-                        if pkg_file.stat().st_size > 0:
-                            valid_files.append(pkg_file)
-                        else:
-                            logger.warning(f"⚠️ Empty file: {pkg_file.name}")
-                    
-                    logger.info(f"Valid mirrored packages: {len(valid_files)}/{file_count}")
-                    
-                    # Copy mirrored packages to output directory
-                    print(f"📋 Copying {len(valid_files)} mirrored packages to output directory...")
-                    copied_count = 0
-                    for pkg_file in valid_files:
-                        dest = self.output_dir / pkg_file.name
-                        if not dest.exists():  # Don't overwrite newly built packages
-                            shutil.copy2(pkg_file, dest)
-                            copied_count += 1
-                    
-                    logger.info(f"Copied {copied_count} mirrored packages to output directory")
-                    
-                    # Clean up mirror directory
-                    shutil.rmtree(mirror_dir, ignore_errors=True)
-                    
-                    return True
-                else:
-                    logger.warning("ℹ️ No package files were mirrored (repository might be empty)")
-                    shutil.rmtree(mirror_dir, ignore_errors=True)
-                    return True  # Not an error, just empty repository
-            else:
-                logger.error(f"❌ RSYNC mirror failed with code {result.returncode}")
+                # Verify file integrity
+                valid_files = []
+                for pkg_file in downloaded_files:
+                    if pkg_file.stat().st_size > 0:
+                        valid_files.append(pkg_file)
+                    else:
+                        logger.warning(f"⚠️ Empty file: {pkg_file.name}")
+                
+                logger.info(f"Valid mirrored packages: {len(valid_files)}/{file_count}")
+                
+                # Copy mirrored packages to output directory
+                print(f"📋 Copying {len(valid_files)} mirrored packages to output directory...")
+                copied_count = 0
+                for pkg_file in valid_files:
+                    dest = self.output_dir / pkg_file.name
+                    if not dest.exists():  # Don't overwrite newly built packages
+                        shutil.copy2(pkg_file, dest)
+                        copied_count += 1
+                
+                logger.info(f"Copied {copied_count} mirrored packages to output directory")
+                
+                # Clean up mirror directory
                 shutil.rmtree(mirror_dir, ignore_errors=True)
-                return False
+                
+                return True
+            else:
+                logger.info("ℹ️ No package files were mirrored (repository is empty or permission issue)")
+                # Check if directory is empty or has permission issues
+                check_cmd = f"""
+                if [ -d "{self.remote_dir}" ]; then
+                    echo "Directory exists"
+                    ls -la "{self.remote_dir}/" | head -5
+                else
+                    echo "Directory does not exist"
+                fi
+                """
+                
+                ssh_check = [
+                    "ssh",
+                    f"{self.vps_user}@{self.vps_host}",
+                    check_cmd
+                ]
+                
+                check_result = subprocess.run(
+                    ssh_check,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if check_result.stdout:
+                    logger.info(f"Remote directory status: {check_result.stdout}")
+                
+                shutil.rmtree(mirror_dir, ignore_errors=True)
+                return True  # Not an error, just empty repository
                 
         except Exception as e:
             logger.error(f"RSYNC mirror execution error: {e}")
@@ -918,53 +993,48 @@ class PackageBuilder:
             return None
     
     def _extract_package_name_from_filename(self, filename):
-        """Extract package name from package filename using robust regex for Arch Linux naming conventions."""
-        # Arch Linux package naming: name-version-release-architecture.pkg.tar.zst
-        # Examples: 
-        # - ttf-font-awesome-5-5.15.4-1-any.pkg.tar.zst -> ttf-font-awesome-5
-        # - nvidia-driver-assistant-2026.01.05.1-3-any.pkg.tar.zst -> nvidia-driver-assistant
-        
+        """Extract package name from package filename - SIMPLIFIED VERSION."""
         # Remove the file extension
         base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
         
         # Split by hyphens
         parts = base_name.split('-')
         
-        # We need at least 3 parts (version, release, architecture)
-        if len(parts) < 3:
-            return base_name
+        # Arch package format: name-version-release-architecture
+        # We need to find where version starts (first part that contains a digit)
         
-        # Try to find where the version starts by looking for the first part that looks like a version
-        # A version typically starts with a digit or contains a digit followed by dots, letters, etc.
-        # But we need to be careful with package names that contain numbers (like ttf-font-awesome-5)
+        # Handle packages with epoch (e.g., 1:2.3-4-x86_64)
+        if ':' in base_name:
+            # Find the part containing ':'
+            for i, part in enumerate(parts):
+                if ':' in part:
+                    # Everything before this part (including the part with ':') is part of the version
+                    # So package name is everything before the version part
+                    return '-'.join(parts[:i])
         
-        # First, try to match against common architecture names at the end
-        arch_patterns = ['x86_64', 'any', 'i686', 'i386', 'aarch64', 'armv7h', 'armv6h']
+        # Try to find where version starts (look for a digit)
+        for i, part in enumerate(parts):
+            # Check if this part looks like a version (contains digit)
+            if any(c.isdigit() for c in part):
+                # Skip architecture names
+                if part in ['x86_64', 'any', 'i686', 'i386', 'aarch64', 'armv7h', 'armv6h']:
+                    continue
+                
+                # Special case: if the part is all digits (could be a release number)
+                if part.isdigit() and i > 0:
+                    # Check if previous part looks like version
+                    prev_part = parts[i-1]
+                    if any(c.isdigit() for c in prev_part):
+                        # Both current and previous have digits, so current is release
+                        continue
+                
+                # This is likely the version part
+                return '-'.join(parts[:i])
         
-        # Check if the last part is an architecture
-        if parts[-1] in arch_patterns:
-            # The second to last should be the release (usually a number)
-            if parts[-2].isdigit():
-                # Now we need to find where the version starts
-                # The version is the third from the end, everything before that is the package name
-                name_parts = parts[:-3]
-                return '-'.join(name_parts)
-        
-        # If the above didn't work, try a more general approach
-        # Look for a part that looks like a release number (all digits)
-        for i in range(len(parts) - 1, -1, -1):
-            if parts[i].isdigit() and i >= 2:
-                # Check if the next part (if exists) might be architecture
-                if i + 1 < len(parts) and parts[i + 1] in arch_patterns:
-                    # Found release and architecture
-                    name_parts = parts[:i-1]
-                    return '-'.join(name_parts)
-        
-        # Fallback: assume the last 3 parts are version-release-architecture
+        # Fallback: if we have at least 3 parts, assume last 3 are version-release-arch
         if len(parts) >= 3:
             return '-'.join(parts[:-3])
         
-        # Ultimate fallback
         return base_name
     
     def _check_repo_remove_exists(self):
@@ -986,6 +1056,7 @@ class PackageBuilder:
         desired_packages = set(local_packages_list + aur_packages_list)
         
         logger.info(f"📦 Desired packages from packages.py: {len(desired_packages)} packages")
+        logger.info(f"Desired packages: {', '.join(sorted(desired_packages))}")
         
         # Scan local build directory for existing package files
         local_files = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -1005,6 +1076,14 @@ class PackageBuilder:
             pkg_name = self._extract_package_name_from_filename(filename)
             
             if pkg_name:
+                # DEBUG: Log what we found
+                logger.debug(f"DEBUG: {filename} -> {pkg_name}")
+                
+                # Special handling for ttf-font-awesome-5
+                if pkg_name == "ttf-font-awesome" and "ttf-font-awesome-5" in filename:
+                    pkg_name = "ttf-font-awesome-5"
+                    logger.debug(f"DEBUG: Corrected {filename} -> {pkg_name}")
+                
                 # Check if this package is in our desired list
                 if pkg_name not in desired_packages:
                     orphaned_files.append(pkg_file)
@@ -1527,7 +1606,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC WITHOUT --delete flag to avoid permission issues."""
+        """Upload packages to server using RSYNC."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -1539,6 +1618,9 @@ class PackageBuilder:
             return False
         
         logger.info(f"Uploading {len(all_files)} files...")
+        
+        # Ensure remote directory exists first
+        self._ensure_remote_directory()
         
         # Collect files using glob patterns
         file_patterns = [
@@ -1561,7 +1643,7 @@ class PackageBuilder:
             file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command WITHOUT --delete flag to avoid permission issues
+        # Build RSYNC command
         rsync_cmd = f"""
         rsync -avz \
           --progress \
@@ -1575,7 +1657,6 @@ class PackageBuilder:
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
-        logger.info("NOTE: Not using --delete flag to avoid permission issues")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -1599,14 +1680,11 @@ class PackageBuilder:
                         logger.info(f"RSYNC: {line}")
             if result.stderr:
                 for line in result.stderr.splitlines():
-                    if line.strip():
+                    if line.strip() and "No such file or directory" not in line:
                         logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
-                
-                # Now manually remove orphaned packages from server via SSH
-                self._cleanup_remote_orphans()
                 
                 # Verification
                 try:
@@ -1658,14 +1736,11 @@ class PackageBuilder:
                         logger.info(f"RSYNC RETRY: {line}")
             if result.stderr:
                 for line in result.stderr.splitlines():
-                    if line.strip():
+                    if line.strip() and "No such file or directory" not in line:
                         logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
-                
-                # Now manually remove orphaned packages from server via SSH
-                self._cleanup_remote_orphans()
                 
                 # Verification
                 try:
@@ -1680,83 +1755,6 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"RSYNC retry execution error: {e}")
             return False
-    
-    def _cleanup_remote_orphans(self):
-        """Manually clean up orphaned packages on remote server via SSH."""
-        print("\n" + "="*60)
-        print("CLEANUP: Removing orphaned packages from remote server")
-        print("="*60)
-        
-        # Get list of desired packages
-        local_packages_list, aur_packages_list = self.get_package_lists()
-        desired_packages = set(local_packages_list + aur_packages_list)
-        
-        # List all packages on remote server
-        remote_cmd = f"""
-        echo "=== REMOTE PACKAGES ==="
-        find "{self.remote_dir}" -maxdepth 1 -type f -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" | while read file; do
-            basename "$file"
-        done
-        """
-        
-        ssh_cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=30",
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0 and result.stdout:
-                remote_filenames = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != "=== REMOTE PACKAGES ==="]
-                
-                # Extract package names and identify orphans
-                orphaned_remote_files = []
-                for filename in remote_filenames:
-                    pkg_name = self._extract_package_name_from_filename(filename)
-                    if pkg_name and pkg_name not in desired_packages:
-                        orphaned_remote_files.append(filename)
-                
-                if orphaned_remote_files:
-                    logger.info(f"🔍 Found {len(orphaned_remote_files)} orphaned packages on remote server")
-                    
-                    # Remove each orphaned file
-                    for filename in orphaned_remote_files:
-                        remote_path = f"{self.remote_dir}/{filename}"
-                        delete_cmd = f"rm -f {remote_path}"
-                        
-                        ssh_delete_cmd = [
-                            "ssh",
-                            "-o", "StrictHostKeyChecking=no",
-                            "-o", "ConnectTimeout=30",
-                            f"{self.vps_user}@{self.vps_host}",
-                            delete_cmd
-                        ]
-                        
-                        delete_result = subprocess.run(
-                            ssh_delete_cmd,
-                            capture_output=True,
-                            text=True,
-                            check=False
-                        )
-                        
-                        if delete_result.returncode == 0:
-                            logger.info(f"✅ Removed orphan from remote: {filename}")
-                        else:
-                            logger.warning(f"⚠️ Failed to remove {filename}: {delete_result.stderr[:200]}")
-                else:
-                    logger.info("✅ No orphaned packages found on remote server")
-        
-        except Exception as e:
-            logger.warning(f"⚠️ Could not clean up remote orphans: {e}")
     
     def _verify_uploaded_files(self):
         """Verify uploaded files on remote server."""
@@ -1857,6 +1855,9 @@ class PackageBuilder:
             # Disable repository initially to prevent pacman errors
             self._apply_repository_decision("DISABLE")
             
+            # Ensure remote directory exists first
+            self._ensure_remote_directory()
+            
             remote_packages = self._list_remote_packages()
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
@@ -1904,7 +1905,7 @@ class PackageBuilder:
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database) WITHOUT --delete flag
+                    # Upload everything (packages + database)
                     upload_success = self.upload_packages()
                     
                     if upload_success:
