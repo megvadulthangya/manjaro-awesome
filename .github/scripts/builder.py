@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 class PackageBuilder:
     def __init__(self):
+        # GPG signing configuration - INITIALIZE FIRST
+        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
+        self.gpg_key_id = os.getenv('GPG_KEY_ID')
+        self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
+        
         # Get the repository root
         self.repo_root = self._get_repo_root()
         
@@ -80,11 +85,6 @@ class PackageBuilder:
         
         # PHASE 1 OBSERVER: hokibot data collection
         self.hokibot_data = []
-        
-        # GPG signing configuration
-        self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
-        self.gpg_key_id = os.getenv('GPG_KEY_ID')
-        self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
         
         # Setup SSH config file for builder user (container invariant)
         self._setup_ssh_config()
@@ -2130,7 +2130,7 @@ class PackageBuilder:
             if remote_packages:
                 print("\n" + "="*60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                print("="*60)
+                print("="*60")
                 
                 if not self._mirror_remote_packages():
                     logger.error("❌ FAILED to mirror remote packages locally")
