@@ -507,9 +507,9 @@ class PackageBuilder:
     
     def _list_remote_packages(self):
         """STEP 1: List all *.pkg.tar.zst files in the remote repository directory."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("STEP 1: Listing remote repository packages (SSH find)")
-        print("="*60)
+        print("=" * 60)
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
@@ -558,9 +558,9 @@ class PackageBuilder:
     
     def _mirror_remote_packages(self):
         """CRITICAL STEP: Download ALL remote package files to local directory."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("MANDATORY STEP: Mirroring remote packages locally")
-        print("="*60)
+        print("=" * 60)
         
         # Ensure remote directory exists first
         self._ensure_remote_directory()
@@ -690,9 +690,9 @@ class PackageBuilder:
     
     def _check_database_files(self):
         """Check if repository database files exist on server."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("STEP 2: Checking existing database files on server")
-        print("="*60)
+        print("=" * 60)
         
         db_files = [
             f"{self.repo_name}.db",
@@ -797,9 +797,9 @@ class PackageBuilder:
     
     def _generate_full_database(self):
         """Generate repository database from ALL locally available packages."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("PHASE: Repository Database Generation")
-        print("="*60)
+        print("=" * 60)
         
         # Get all package files from local output directory
         all_packages = self._get_all_local_packages()
@@ -882,9 +882,9 @@ class PackageBuilder:
     
     def _sync_pacman_databases(self):
         """Sync pacman databases ONLY after repository database is guaranteed."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("FINAL STEP: Syncing pacman databases (sudo pacman -Sy --noconfirm)")
-        print("="*60)
+        print("=" * 60)
         
         cmd = "sudo pacman -Sy --noconfirm"
         result = self.run_cmd(cmd, log_cmd=True)
@@ -1210,9 +1210,9 @@ class PackageBuilder:
         if not orphaned_packages:
             return
         
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TARGETED REMOTE CLEANUP: Deleting orphaned packages from VPS")
-        print("="*60)
+        print("=" * 60)
         
         # First, ensure we have the latest list of remote files
         if not self.remote_files:
@@ -1305,9 +1305,9 @@ class PackageBuilder:
     
     def _prune_orphaned_packages(self):
         """Remove packages that exist locally but are not in packages.py (SSOT)."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("PACKAGE PRUNING: Ensuring packages.py is Single Source of Truth")
-        print("="*60)
+        print("=" * 60)
         
         # Load desired packages from packages.py
         local_packages_list, aur_packages_list = self.get_package_lists()
@@ -1641,9 +1641,9 @@ class PackageBuilder:
     
     def build_packages(self):
         """Build packages."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("Building packages")
-        print("="*60)
+        print("=" * 60)
         
         local_packages, aur_packages = self.get_package_lists()
         
@@ -1757,9 +1757,9 @@ class PackageBuilder:
             logger.info("No local packages were rebuilt - skipping PKGBUILD synchronization")
             return
         
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("🔄 PHASE 2: Isolated PKGBUILD Synchronization")
-        print("="*60)
+        print("=" * 60)
         
         clone_dir = self.sync_clone_dir
         
@@ -2100,9 +2100,9 @@ class PackageBuilder:
     
     def run(self):
         """Main execution with CORRECT Arch Linux repository ordering and LOCAL MIRRORING."""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("🚀 MANJARO PACKAGE BUILDER (CORRECT ARCH ORDERING + LOCAL MIRROR)")
-        print("="*60)
+        print("=" * 60)
         
         try:
             print("\n🔧 Initial setup...")
@@ -2114,9 +2114,9 @@ class PackageBuilder:
             print(f"Special dependencies loaded: {len(special_deps)}")
             
             # STEP 1: SSH/rsync - List all *.pkg.tar.zst files
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("PHASE 1: REPOSITORY FILESYSTEM STATE (SOURCE OF TRUTH)")
-            print("="*60)
+            print("=" * 60)
             
             # Disable repository initially to prevent pacman errors
             self._apply_repository_decision("DISABLE")
@@ -2128,9 +2128,9 @@ class PackageBuilder:
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
             if remote_packages:
-                print("\n" + "="*60)
+                print("\n" + "=" * 60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                print("="*60")
+                print("=" * 60)
                 
                 if not self._mirror_remote_packages():
                     logger.error("❌ FAILED to mirror remote packages locally")
@@ -2151,9 +2151,9 @@ class PackageBuilder:
                 self._fetch_existing_database(existing_db_files)
             
             # Build packages (repository is disabled during build)
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("PHASE 2: PACKAGE BUILDING")
-            print("="*60)
+            print("=" * 60)
             
             total_built = self.build_packages()
             
@@ -2161,9 +2161,9 @@ class PackageBuilder:
             local_packages = self._get_all_local_packages()
             
             if local_packages or remote_packages:
-                print("\n" + "="*60)
+                print("\n" + "=" * 60)
                 print("PHASE 3: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
-                print("="*60)
+                print("=" * 60)
                 
                 # Generate database with ALL locally available packages
                 if self._generate_full_database():
@@ -2190,9 +2190,9 @@ class PackageBuilder:
                         self.cleanup_old_packages()
                         
                         # STEP 4: ONLY NOW enable repository and sync pacman
-                        print("\n" + "="*60)
+                        print("\n" + "=" * 60)
                         print("PHASE 4: PACMAN SYNCHRONIZATION (CONSUMER)")
-                        print("="*60)
+                        print("=" * 60)
                         
                         self._apply_repository_decision("ENABLE")
                         self._sync_pacman_databases()
@@ -2225,16 +2225,16 @@ class PackageBuilder:
             
             elapsed = time.time() - self.stats["start_time"]
             
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("📊 BUILD SUMMARY")
-            print("="*60)
+            print("=" * 60)
             print(f"Duration: {elapsed:.1f}s")
             print(f"AUR packages:    {self.stats['aur_success']} (failed: {self.stats['aur_failed']})")
             print(f"Local packages:  {self.stats['local_success']} (failed: {self.stats['local_failed']})")
             print(f"Total built:     {total_built}")
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
-            print("="*60)
+            print("=" * 60)
             
             if self.built_packages:
                 print("\n📦 Built packages:")
