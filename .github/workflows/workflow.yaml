@@ -372,8 +372,9 @@ jobs:
             else
               echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
             fi
-          else:
+          else
             echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
+          fi
           
           echo ""
           echo "=== GPG Environment Check ==="
@@ -425,7 +426,7 @@ jobs:
             done
             
             echo "✅ Artifact filenames sanitized"
-          else:
+          else
             echo "⚠️ No built packages found to sanitize"
           fi
 
