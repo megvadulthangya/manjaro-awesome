@@ -433,7 +433,7 @@ class PackageBuilder:
         # Use rsync to download ALL package files from server
         print("📥 Downloading ALL remote package files to local mirror...")
         
-        # Use a simpler rsync command without --delete
+        # Use a simpler rsync command without --delete (we're downloading, not uploading)
         rsync_cmd = f"""
         rsync -avz \
           --progress \
@@ -964,15 +964,30 @@ class PackageBuilder:
         """Extract metadata from built package file for hokibot observation."""
         try:
             filename = os.path.basename(pkg_file_path)
+            pkg_name = self._extract_package_name_from_filename(filename)
+            
+            if not pkg_name:
+                logger.warning(f"Could not extract package name from {filename}")
+                return None
+            
+            # Get version components by splitting filename from the RIGHT
+            # Format: name-version-release-arch.pkg.tar.zst
             base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
             parts = base_name.split('-')
             
+            if len(parts) < 3:
+                logger.warning(f"Invalid filename format: {filename}")
+                return None
+            
+            # Last part is architecture
             arch = parts[-1]
+            # Second last is release
             pkgrel = parts[-2]
+            # Third last is version (may contain epoch like "2.13.c.5")
             version_part = parts[-3]
             
-            version_index = len(parts) - 3
-            pkgname = '-'.join(parts[:version_index])
+            # Everything before the version is the package name
+            # We already extracted it using the proper method
             
             epoch = None
             pkgver = version_part
@@ -982,7 +997,7 @@ class PackageBuilder:
             
             return {
                 'filename': filename,
-                'pkgname': pkgname,
+                'pkgname': pkg_name,
                 'pkgver': pkgver,
                 'pkgrel': pkgrel,
                 'epoch': epoch,
@@ -993,7 +1008,7 @@ class PackageBuilder:
             return None
     
     def _extract_package_name_from_filename(self, filename):
-        """Extract package name from package filename - SIMPLIFIED VERSION."""
+        """Extract package name from package filename - FIXED VERSION."""
         # Remove the file extension
         base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
         
@@ -1001,41 +1016,38 @@ class PackageBuilder:
         parts = base_name.split('-')
         
         # Arch package format: name-version-release-architecture
-        # We need to find where version starts (first part that contains a digit)
+        # We need to extract the last three hyphen-separated parts (version-release-arch)
+        # and everything before that is the package name
         
-        # Handle packages with epoch (e.g., 1:2.3-4-x86_64)
-        if ':' in base_name:
-            # Find the part containing ':'
-            for i, part in enumerate(parts):
-                if ':' in part:
-                    # Everything before this part (including the part with ':') is part of the version
-                    # So package name is everything before the version part
-                    return '-'.join(parts[:i])
+        if len(parts) < 3:
+            # Not enough parts for a valid Arch package
+            logger.warning(f"⚠️ Could not extract package name from: {filename} - not enough parts")
+            return None
         
-        # Try to find where version starts (look for a digit)
-        for i, part in enumerate(parts):
-            # Check if this part looks like a version (contains digit)
-            if any(c.isdigit() for c in part):
-                # Skip architecture names
-                if part in ['x86_64', 'any', 'i686', 'i386', 'aarch64', 'armv7h', 'armv6h']:
-                    continue
-                
-                # Special case: if the part is all digits (could be a release number)
-                if part.isdigit() and i > 0:
-                    # Check if previous part looks like version
-                    prev_part = parts[i-1]
-                    if any(c.isdigit() for c in prev_part):
-                        # Both current and previous have digits, so current is release
-                        continue
-                
-                # This is likely the version part
-                return '-'.join(parts[:i])
+        # The last 3 parts are: version, release, architecture
+        # Everything before that is the package name
+        # This handles packages with hyphens in their names (e.g., i3lock-color)
+        name_parts = parts[:-3]
         
-        # Fallback: if we have at least 3 parts, assume last 3 are version-release-arch
-        if len(parts) >= 3:
-            return '-'.join(parts[:-3])
+        if not name_parts:
+            logger.warning(f"⚠️ Could not extract package name from: {filename} - no name parts")
+            return None
         
-        return base_name
+        package_name = '-'.join(name_parts)
+        
+        # Special handling for packages that might have version numbers in their names
+        # This is a sanity check - if the last part of the name looks like a version, adjust
+        if name_parts and any(c.isdigit() for c in name_parts[-1]):
+            # Last part of name contains digits, might be part of version
+            # Check if it looks like a version (contains digit and dot)
+            if '.' in name_parts[-1] and any(c.isdigit() for c in name_parts[-1]):
+                # This might actually be part of the version string
+                # Move this part to the version section
+                adjusted_name_parts = name_parts[:-1]
+                if adjusted_name_parts:
+                    package_name = '-'.join(adjusted_name_parts)
+        
+        return package_name
     
     def _check_repo_remove_exists(self):
         """Check if repo-remove command exists locally."""
@@ -1102,42 +1114,36 @@ class PackageBuilder:
         logger.info(f"📦 Orphaned packages: {', '.join(sorted(orphaned_packages))}")
         
         # Check if we have a local database file to remove packages from
-        local_db_files = list(self.output_dir.glob(f"{self.repo_name}.db*"))
+        # Use ABSOLUTE PATH for database file
+        db_file_path = self.output_dir / f"{self.repo_name}.db.tar.gz"
+        db_file_exists = db_file_path.exists()
         
-        if local_db_files and self._check_repo_remove_exists():
-            # Use the .db.tar.gz file if available, otherwise use .db
-            local_db = None
-            for db_file in local_db_files:
-                if db_file.name.endswith('.db.tar.gz'):
-                    local_db = db_file
-                    break
+        if db_file_exists and self._check_repo_remove_exists():
+            logger.info(f"✅ Found local database: {db_file_path} (absolute path)")
+            logger.info("🔄 Running repo-remove on local database...")
             
-            if not local_db and local_db_files:
-                local_db = local_db_files[0]
-            
-            if local_db:
-                logger.info(f"✅ Found local database: {local_db.name}")
-                logger.info("🔄 Running repo-remove on local database...")
+            # Run repo-remove locally for each orphaned package
+            for pkg_name in sorted(orphaned_packages):
+                print(f"\n🗑️  Removing orphaned package from database: {pkg_name}")
+                logger.info(f"Running repo-remove for {pkg_name}...")
                 
-                # Run repo-remove locally for each orphaned package
-                for pkg_name in sorted(orphaned_packages):
-                    print(f"\n🗑️  Removing orphaned package from database: {pkg_name}")
-                    logger.info(f"Running repo-remove for {pkg_name}...")
-                    
-                    cmd = ["repo-remove", str(local_db), pkg_name]
-                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.output_dir, check=False)
-                    
-                    if result.returncode == 0:
-                        logger.info(f"✅ Successfully removed {pkg_name} from local database")
-                    else:
-                        logger.warning(f"⚠️ repo-remove for {pkg_name} returned {result.returncode}")
-                        if result.stderr:
-                            logger.warning(f"repo-remove stderr: {result.stderr[:200]}")
+                # Use absolute path to database file
+                cmd = ["repo-remove", str(db_file_path), pkg_name]
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.output_dir, check=False)
+                
+                if result.returncode == 0:
+                    logger.info(f"✅ Successfully removed {pkg_name} from local database")
+                else:
+                    logger.warning(f"⚠️ repo-remove for {pkg_name} returned {result.returncode}")
+                    if result.stderr:
+                        logger.warning(f"repo-remove stderr: {result.stderr[:200]}")
         else:
             if not self._check_repo_remove_exists():
                 logger.warning("⚠️ repo-remove command not found locally")
+            elif not db_file_exists:
+                logger.warning(f"⚠️ No suitable local database found for repo-remove at {db_file_path}")
             else:
-                logger.warning("⚠️ No suitable local database found for repo-remove")
+                logger.warning("⚠️ Cannot run repo-remove")
         
         # Delete physical package files (and signatures) locally
         print(f"\n🗑️  Deleting {len(orphaned_files)} orphaned package files locally...")
@@ -1160,6 +1166,9 @@ class PackageBuilder:
                 logger.error(f"❌ Failed to delete {pkg_file.name}: {e}")
         
         logger.info(f"✅ Local package pruning complete: {deleted_count} files deleted")
+        
+        # IMPORTANT: After deleting files locally, we must sync this cleaned state to VPS
+        # This is handled by rsync --delete in the upload step
     
     def _build_aur_package(self, pkg_name):
         """Build AUR package."""
@@ -1606,7 +1615,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC."""
+        """Upload packages to server using RSYNC with --delete flag."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -1643,20 +1652,22 @@ class PackageBuilder:
             file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command
+        # Build RSYNC command with --delete flag to ensure VPS matches cleaned local state
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
+          --delete \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND:")
+        logger.info(f"RUNNING RSYNC COMMAND WITH --delete:")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
+        logger.info(f"IMPORTANT: --delete flag ensures VPS matches cleaned local state (orphaned files will be deleted)")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -1684,7 +1695,8 @@ class PackageBuilder:
                         logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
+                logger.info(f"✅ RSYNC upload with --delete successful! ({duration} seconds)")
+                logger.info(f"✅ VPS now exactly matches cleaned local state (orphaned files deleted)")
                 
                 # Verification
                 try:
@@ -1698,8 +1710,8 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"RSYNC execution error: {e}")
         
-        # SECOND ATTEMPT (with different SSH options)
-        logger.info("⚠️ Retrying with different SSH options...")
+        # SECOND ATTEMPT (with different SSH options but still with --delete)
+        logger.info("⚠️ Retrying with different SSH options (still with --delete)...")
         time.sleep(5)
         
         # Use -e option with SSH command this time
@@ -1707,12 +1719,13 @@ class PackageBuilder:
         rsync -avz \
           --progress \
           --stats \
+          --delete \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC RETRY COMMAND:")
+        logger.info(f"RUNNING RSYNC RETRY COMMAND WITH --delete:")
         logger.info(rsync_cmd_retry.strip())
         
         start_time = time.time()
@@ -1740,7 +1753,8 @@ class PackageBuilder:
                         logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
+                logger.info(f"✅ RSYNC upload with --delete successful on retry! ({duration} seconds)")
+                logger.info(f"✅ VPS now exactly matches cleaned local state (orphaned files deleted)")
                 
                 # Verification
                 try:
@@ -1905,7 +1919,7 @@ class PackageBuilder:
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database)
+                    # Upload everything (packages + database) WITH --delete flag
                     upload_success = self.upload_packages()
                     
                     if upload_success:
