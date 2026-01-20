@@ -19,6 +19,8 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
     steps:
       - name: Checkout Code with Full History
@@ -79,7 +81,8 @@ jobs:
             curl wget ca-certificates \
             openssh rsync \
             netcat iproute2 \
-            jq
+            jq \
+            gnupg
             
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
@@ -224,7 +227,7 @@ jobs:
             autoconf automake libtool pkg-config \
             patch make gcc binutils \
             file which tar gzip bzip2 xz zstd \
-            unzip p7zip gnupg \
+            unzip p7zip \
             dbus polkit \
             systemd systemd-sysvcompat \
             arch-install-scripts \
@@ -333,6 +336,16 @@ jobs:
           echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
 
       - name: Run Builder
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+          CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "=== Starting Builder ==="
           
@@ -359,8 +372,19 @@ jobs:
             else
               echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
             fi
-          else
+          else:
             echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
+          
+          echo ""
+          echo "=== GPG Environment Check ==="
+          if [ -n "$GPG_KEY_ID" ] && [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "✅ GPG environment variables are set"
+            echo "Key ID present: YES"
+            echo "Private key present: YES"
+          else
+            echo "⚠️ GPG environment variables are NOT set"
+            echo "Key ID present: $([ -n "$GPG_KEY_ID" ] && echo "YES" || echo "NO")"
+            echo "Private key present: $([ -n "$GPG_PRIVATE_KEY" ] && echo "YES" || echo "NO")"
           fi
           
           echo ""
@@ -401,7 +425,7 @@ jobs:
             done
             
             echo "✅ Artifact filenames sanitized"
-          else
+          else:
             echo "⚠️ No built packages found to sanitize"
           fi
 

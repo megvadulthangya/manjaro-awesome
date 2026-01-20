@@ -50,6 +50,9 @@ class PackageBuilder:
         self.gpg_key_id = os.getenv('GPG_KEY_ID')
         self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
         
+        # Log GPG environment status
+        logger.info(f"GPG Environment Check: ID found: {'YES' if self.gpg_key_id else 'NO'}, Key found: {'YES' if self.gpg_private_key else 'NO'}")
+        
         # Get the repository root
         self.repo_root = self._get_repo_root()
         
@@ -158,6 +161,14 @@ class PackageBuilder:
             return False
         
         logger.info("GPG Key detected. Importing private key...")
+        
+        # Validate private key format before attempting import
+        if not self.gpg_private_key or '-----BEGIN PGP PRIVATE KEY BLOCK-----' not in self.gpg_private_key:
+            logger.error("❌ CRITICAL: Invalid GPG private key format. Missing '-----BEGIN PGP PRIVATE KEY BLOCK-----' header.")
+            logger.error("The GPG_PRIVATE_KEY secret must contain a valid PGP private key block.")
+            logger.error("Disabling GPG signing for this build.")
+            self.gpg_enabled = False
+            return False
         
         try:
             # Create a temporary GPG home directory
