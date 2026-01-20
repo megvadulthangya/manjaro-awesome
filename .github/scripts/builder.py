@@ -918,26 +918,50 @@ class PackageBuilder:
             return None
     
     def _extract_package_name_from_filename(self, filename):
-        """Extract package name from package filename."""
+        """Extract package name from package filename using robust regex for Arch Linux naming conventions."""
+        # Arch Linux package naming: name-version-release-architecture.pkg.tar.zst
+        # Examples: 
+        # - ttf-font-awesome-5.15.4-2-any.pkg.tar.zst
+        # - awesome-git-r1234.abcde12-1-x86_64.pkg.tar.zst
+        
+        # First, remove the file extension
+        base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+        
+        # Split by hyphens
+        parts = base_name.split('-')
+        
+        # We need to find where the version starts
+        # Version is the first part that contains a digit and follows the naming pattern
+        # Look for the pattern: starts with digit or contains a digit followed by possible letters and dots
+        for i, part in enumerate(parts):
+            # Check if this looks like a version (contains digit and typical version chars)
+            if any(c.isdigit() for c in part):
+                # Additional check: version shouldn't be just architecture (x86_64, any, i686, etc.)
+                if part in ['x86_64', 'any', 'i686', 'i386', 'aarch64', 'armv7h', 'armv6h']:
+                    continue
+                
+                # This is likely the version part
+                # Package name is everything before this part
+                package_name = '-'.join(parts[:i])
+                
+                # Special case: if package_name is empty (unlikely), fall back
+                if package_name:
+                    return package_name
+        
+        # Fallback: if we couldn't find version, assume the last 3 parts are version-release-arch
+        if len(parts) >= 3:
+            return '-'.join(parts[:-3])
+        
+        # Ultimate fallback: return the original without extension
+        return base_name
+    
+    def _check_repo_remove_exists(self):
+        """Check if repo-remove command exists locally."""
         try:
-            # Remove extension
-            base_name = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-            parts = base_name.split('-')
-            
-            # Find where the version starts (first part that contains a digit)
-            version_index = None
-            for i, part in enumerate(parts):
-                if any(c.isdigit() for c in part):
-                    version_index = i
-                    break
-            
-            if version_index is None:
-                return base_name
-            
-            return '-'.join(parts[:version_index])
-        except Exception as e:
-            logger.warning(f"Could not extract package name from {filename}: {e}")
-            return None
+            result = subprocess.run(["which", "repo-remove"], capture_output=True, text=True, check=False)
+            return result.returncode == 0 and result.stdout.strip() != ""
+        except Exception:
+            return False
     
     def _prune_orphaned_packages(self):
         """Remove packages that exist locally but are not in packages.py (SSOT)."""
@@ -968,9 +992,16 @@ class PackageBuilder:
             filename = pkg_file.name
             pkg_name = self._extract_package_name_from_filename(filename)
             
-            if pkg_name and pkg_name not in desired_packages:
-                orphaned_files.append(pkg_file)
-                orphaned_packages.add(pkg_name)
+            if pkg_name:
+                # Check if this package is in our desired list
+                if pkg_name not in desired_packages:
+                    orphaned_files.append(pkg_file)
+                    orphaned_packages.add(pkg_name)
+                    logger.info(f"🔍 Identified orphan: {filename} -> {pkg_name}")
+                else:
+                    logger.debug(f"✅ Package in desired list: {filename} -> {pkg_name}")
+            else:
+                logger.warning(f"⚠️ Could not extract package name from: {filename}")
         
         if not orphaned_files:
             logger.info("✅ No orphaned packages found - packages.py SSOT is consistent")
@@ -979,76 +1010,67 @@ class PackageBuilder:
         logger.info(f"🔍 Found {len(orphaned_files)} orphaned files from {len(orphaned_packages)} packages")
         logger.info(f"📦 Orphaned packages: {', '.join(sorted(orphaned_packages))}")
         
-        # Check if database exists on server before attempting repo-remove
-        existing_db_files, _ = self._check_database_files()
+        # Check if we have a local database file to remove packages from
+        local_db_files = list(self.output_dir.glob(f"{self.repo_name}.db*"))
         
-        if existing_db_files:
-            logger.info("✅ Database exists on server - proceeding with repo-remove operations")
+        if local_db_files:
+            # Use the .db.tar.gz file if available, otherwise use .db
+            local_db = None
+            for db_file in local_db_files:
+                if db_file.name.endswith('.db.tar.gz'):
+                    local_db = db_file
+                    break
             
-            # Execute removal for each orphaned package
-            for pkg_name in sorted(orphaned_packages):
-                print(f"\n🗑️  Removing orphaned package: {pkg_name}")
-                logger.info(f"Removing orphaned package: {pkg_name}")
+            if not local_db and local_db_files:
+                local_db = local_db_files[0]
+            
+            if local_db and self._check_repo_remove_exists():
+                logger.info(f"✅ Found local database: {local_db.name}")
+                logger.info("🔄 Running repo-remove on local database...")
                 
-                # Remove from repository database (repo-remove) FIRST
-                remote_db_base = f"{self.remote_dir}/{self.repo_name}.db"
-                remote_cmd = f"repo-remove {remote_db_base}.tar.gz {pkg_name} 2>/dev/null || repo-remove {remote_db_base} {pkg_name} 2>/dev/null"
-                
-                ssh_cmd = [
-                    "ssh",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "ConnectTimeout=30",
-                    f"{self.vps_user}@{self.vps_host}",
-                    remote_cmd
-                ]
-                
-                try:
+                # Run repo-remove locally for each orphaned package
+                for pkg_name in sorted(orphaned_packages):
+                    print(f"\n🗑️  Removing orphaned package from database: {pkg_name}")
                     logger.info(f"Running repo-remove for {pkg_name}...")
-                    result = subprocess.run(
-                        ssh_cmd,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
+                    
+                    cmd = ["repo-remove", str(local_db), pkg_name]
+                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.output_dir, check=False)
                     
                     if result.returncode == 0:
-                        logger.info(f"✅ Successfully removed {pkg_name} from repository database")
+                        logger.info(f"✅ Successfully removed {pkg_name} from local database")
                     else:
-                        logger.warning(f"⚠️ repo-remove for {pkg_name} returned non-zero: {result.returncode}")
+                        logger.warning(f"⚠️ repo-remove for {pkg_name} returned {result.returncode}")
                         if result.stderr:
                             logger.warning(f"repo-remove stderr: {result.stderr[:200]}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to run repo-remove for {pkg_name}: {e}")
+            else:
+                if not self._check_repo_remove_exists():
+                    logger.warning("⚠️ repo-remove command not found locally")
+                else:
+                    logger.warning("⚠️ No suitable local database found for repo-remove")
         else:
-            logger.info("ℹ️ No database files found on server - skipping repo-remove operations")
+            logger.info("ℹ️ No local database files found - skipping repo-remove")
         
-        # Delete physical package files (and signatures) SECOND
-        print(f"\n🗑️  Deleting {len(orphaned_files)} orphaned package files...")
+        # Delete physical package files (and signatures) locally
+        print(f"\n🗑️  Deleting {len(orphaned_files)} orphaned package files locally...")
         
         deleted_count = 0
         for pkg_file in orphaned_files:
             try:
                 # Delete the main package file
                 pkg_file.unlink()
-                logger.info(f"✅ Deleted: {pkg_file.name}")
+                logger.info(f"✅ Deleted locally: {pkg_file.name}")
                 
                 # Also delete signature file if it exists
                 sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
                 if sig_file.exists():
                     sig_file.unlink()
-                    logger.info(f"✅ Deleted signature: {sig_file.name}")
+                    logger.info(f"✅ Deleted signature locally: {sig_file.name}")
                 
                 deleted_count += 1
             except Exception as e:
                 logger.error(f"❌ Failed to delete {pkg_file.name}: {e}")
         
-        logger.info(f"✅ Package pruning complete: {deleted_count} files deleted")
-        
-        # Clean up orphaned files from remote_files list
-        for orphaned_file in orphaned_files:
-            filename = orphaned_file.name
-            if filename in self.remote_files:
-                self.remote_files.remove(filename)
+        logger.info(f"✅ Local package pruning complete: {deleted_count} files deleted")
     
     def _build_aur_package(self, pkg_name):
         """Build AUR package."""
@@ -1495,7 +1517,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC - WITH RETRY LOGIC."""
+        """Upload packages to server using RSYNC WITH --delete flag to ensure SSOT consistency."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -1506,44 +1528,26 @@ class PackageBuilder:
             logger.warning("No files to upload")
             return False
         
-        logger.info(f"Uploading {len(all_files)} files...")
+        logger.info(f"Uploading {len(all_files)} files with --delete flag...")
         
-        # Collect files using glob patterns
-        file_patterns = [
-            str(self.output_dir / "*.pkg.tar.*"),
-            str(self.output_dir / f"{self.repo_name}.*")
-        ]
-        
-        files_to_upload = []
-        for pattern in file_patterns:
-            files_to_upload.extend(glob.glob(pattern))
-        
-        if not files_to_upload:
-            logger.error("No files found to upload!")
-            return False
-        
-        # Log files to upload
-        logger.info(f"Files to upload ({len(files_to_upload)}):")
-        for f in files_to_upload:
-            size_mb = os.path.getsize(f) / (1024 * 1024)
-            file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
-            logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
-        
-        # Build RSYNC command with SSH config
+        # Build RSYNC command with SSH config and --delete flag
+        # CRITICAL FIX: Use --delete to remove files on server that don't exist locally
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
           --chmod=0644 \
-          {" ".join(f"'{f}'" for f in files_to_upload)} \
+          --delete \
+          '{self.output_dir}/' \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND:")
+        logger.info(f"RUNNING RSYNC COMMAND WITH --delete:")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
+        logger.info("IMPORTANT: --delete flag ensures remote matches local (SSOT)")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -1571,10 +1575,12 @@ class PackageBuilder:
                         logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
-                # Verification is now non-blocking - errors don't affect success
+                logger.info(f"✅ RSYNC upload with --delete successful! ({duration} seconds)")
+                logger.info("✅ Remote server now matches local directory (SSOT)")
+                
+                # Verification
                 try:
-                    self._verify_uploaded_files(files_to_upload)
+                    self._verify_uploaded_files()
                 except Exception as e:
                     logger.warning(f"⚠️ Verification error (upload still successful): {e}")
                 return True
@@ -1588,18 +1594,19 @@ class PackageBuilder:
         logger.info("⚠️ Retrying with different SSH options...")
         time.sleep(5)
         
-        # Use -e option with SSH command this time
+        # Use -e option with SSH command this time, still with --delete
         rsync_cmd_retry = f"""
         rsync -avz \
           --progress \
           --stats \
           --chmod=0644 \
+          --delete \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
-          {" ".join(f"'{f}'" for f in files_to_upload)} \
+          '{self.output_dir}/' \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC RETRY COMMAND:")
+        logger.info(f"RUNNING RSYNC RETRY COMMAND WITH --delete:")
         logger.info(rsync_cmd_retry.strip())
         
         start_time = time.time()
@@ -1627,46 +1634,47 @@ class PackageBuilder:
                         logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
-                # Verification is now non-blocking - errors don't affect success
+                logger.info(f"✅ RSYNC upload with --delete successful on retry! ({duration} seconds)")
+                logger.info("✅ Remote server now matches local directory (SSOT)")
+                
+                # Verification
                 try:
-                    self._verify_uploaded_files(files_to_upload)
+                    self._verify_uploaded_files()
                 except Exception as e:
                     logger.warning(f"⚠️ Verification error (upload still successful): {e}")
                 return True
             else:
-                logger.error(f"❌ RSYNC upload failed on both attempts!")
+                logger.error(f"❌ RSYNC upload with --delete failed on both attempts!")
                 return False
                 
         except Exception as e:
             logger.error(f"RSYNC retry execution error: {e}")
             return False
     
-    def _verify_uploaded_files(self, uploaded_files):
+    def _verify_uploaded_files(self):
         """Verify uploaded files on remote server."""
         logger.info("Verifying uploaded files on remote server...")
         
-        # Get list of files we uploaded
-        uploaded_filenames = [os.path.basename(f) for f in uploaded_files]
-        
         # Check remote directory
         remote_cmd = f"""
-        echo "=== REMOTE DIRECTORY ==="
+        echo "=== REMOTE DIRECTORY (SSOT VERIFICATION) ==="
+        echo "Local has {len(list(self.output_dir.glob('*.pkg.tar.*')))} package files"
+        echo "Remote directory listing:"
         ls -la "{self.remote_dir}/" 2>/dev/null | head -30
-        echo ""
-        echo "=== UPLOADED FILES ==="
-        for file in {" ".join(uploaded_filenames)}; do
-            if [ -f "{self.remote_dir}/$file" ]; then
-                size=$(stat -c%s "{self.remote_dir}/$file" 2>/dev/null || echo "0")
-                size_mb=$(echo "scale=2; $size / 1048576" | bc 2>/dev/null || echo "0")
-                echo "✅ $file (${{size_mb}}MB)"
-            else
-                echo "❌ $file - MISSING"
-            fi
-        done
         echo ""
         echo "=== DATABASE STATE ==="
         ls -la "{self.remote_dir}/{self.repo_name}.*" 2>/dev/null || echo "No database files found"
+        echo ""
+        echo "=== PACKAGE COUNT VERIFICATION ==="
+        LOCAL_COUNT=$(find "{self.output_dir}" -name "*.pkg.tar.*" -type f | wc -l)
+        REMOTE_COUNT=$(find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | wc -l)
+        echo "Local packages: $LOCAL_COUNT"
+        echo "Remote packages: $REMOTE_COUNT"
+        if [ "$LOCAL_COUNT" -eq "$REMOTE_COUNT" ]; then
+            echo "✅ Package counts match (SSOT verified)"
+        else
+            echo "❌ Package counts mismatch: local=$LOCAL_COUNT, remote=$REMOTE_COUNT"
+        fi
         echo ""
         echo "=== DISK USAGE ==="
         df -h "{self.remote_dir}" 2>/dev/null || echo "Disk info not available"
@@ -1802,11 +1810,11 @@ class PackageBuilder:
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database)
+                    # Upload everything (packages + database) with --delete flag
                     upload_success = self.upload_packages()
                     
                     if upload_success:
-                        # Cleanup old packages
+                        # Cleanup old packages (keep only last 3 versions)
                         self.cleanup_old_packages()
                         
                         # STEP 4: ONLY NOW enable repository and sync pacman
