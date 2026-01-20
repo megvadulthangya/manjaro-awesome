@@ -1057,6 +1057,104 @@ class PackageBuilder:
         except Exception:
             return False
     
+    def _delete_remote_orphaned_files(self, orphaned_packages):
+        """TARGETED REMOTE CLEANUP: Delete orphaned package files from Remote VPS via SSH."""
+        if not orphaned_packages:
+            return
+        
+        print("\n" + "="*60)
+        print("TARGETED REMOTE CLEANUP: Deleting orphaned packages from VPS")
+        print("="*60)
+        
+        # First, ensure we have the latest list of remote files
+        if not self.remote_files:
+            logger.info("ℹ️ No remote files to check for deletion")
+            return
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        for pkg_name in orphaned_packages:
+            logger.info(f"🔍 Looking for orphaned package on VPS: {pkg_name}")
+            
+            # Find all files for this package on the remote
+            # Match by package name prefix (e.g., "nvidia-driver-assistant-")
+            matching_files = []
+            for remote_file in self.remote_files:
+                if remote_file.startswith(f"{pkg_name}-"):
+                    matching_files.append(remote_file)
+            
+            if not matching_files:
+                logger.info(f"ℹ️ No remote files found for {pkg_name} (may have been already deleted)")
+                continue
+            
+            logger.info(f"📦 Found {len(matching_files)} remote file(s) for {pkg_name}: {matching_files}")
+            
+            # Delete each matching file and its signature
+            for remote_file in matching_files:
+                try:
+                    # Delete main package file
+                    remote_path = f"{self.remote_dir}/{remote_file}"
+                    delete_cmd = f"rm -f '{remote_path}'"
+                    
+                    ssh_cmd = [
+                        "ssh",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "ConnectTimeout=30",
+                        f"{self.vps_user}@{self.vps_host}",
+                        delete_cmd
+                    ]
+                    
+                    logger.info(f"SSH: Deleting remote file {remote_file}")
+                    result = subprocess.run(
+                        ssh_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info(f"✅ Successfully deleted remote file: {remote_file}")
+                        deleted_count += 1
+                    else:
+                        logger.warning(f"⚠️ Could not delete remote file {remote_file}: {result.stderr[:200]}")
+                        failed_count += 1
+                    
+                    # Also delete signature file if it exists
+                    sig_file = f"{remote_file}.sig"
+                    sig_path = f"{self.remote_dir}/{sig_file}"
+                    sig_delete_cmd = f"rm -f '{sig_path}' 2>/dev/null || true"
+                    
+                    ssh_sig_cmd = [
+                        "ssh",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "ConnectTimeout=30",
+                        f"{self.vps_user}@{self.vps_host}",
+                        sig_delete_cmd
+                    ]
+                    
+                    result_sig = subprocess.run(
+                        ssh_sig_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    
+                    if result_sig.returncode == 0:
+                        logger.info(f"✅ Deleted signature file (if existed): {sig_file}")
+                    # Don't count signature deletion failures - file may not exist
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error deleting remote file {remote_file}: {e}")
+                    failed_count += 1
+        
+        logger.info(f"✅ Remote cleanup complete: {deleted_count} files deleted, {failed_count} failures")
+        
+        # IMPORTANT: Update the remote_files list to reflect deletions
+        # This ensures subsequent operations don't reference deleted files
+        self.remote_files = [f for f in self.remote_files 
+                            if not any(f.startswith(f"{pkg}-") for pkg in orphaned_packages)]
+    
     def _prune_orphaned_packages(self):
         """Remove packages that exist locally but are not in packages.py (SSOT)."""
         print("\n" + "="*60)
@@ -1145,6 +1243,9 @@ class PackageBuilder:
             else:
                 logger.warning("⚠️ Cannot run repo-remove")
         
+        # TARGETED REMOTE CLEANUP: Delete orphaned files from Remote VPS via SSH
+        self._delete_remote_orphaned_files(orphaned_packages)
+        
         # Delete physical package files (and signatures) locally
         print(f"\n🗑️  Deleting {len(orphaned_files)} orphaned package files locally...")
         
@@ -1166,9 +1267,6 @@ class PackageBuilder:
                 logger.error(f"❌ Failed to delete {pkg_file.name}: {e}")
         
         logger.info(f"✅ Local package pruning complete: {deleted_count} files deleted")
-        
-        # IMPORTANT: After deleting files locally, we must sync this cleaned state to VPS
-        # This is handled by rsync --delete in the upload step
     
     def _build_aur_package(self, pkg_name):
         """Build AUR package."""
@@ -1615,7 +1713,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC with --delete flag."""
+        """Upload packages to server using RSYNC WITHOUT --delete flag (TARGETED CLEANUP USED INSTEAD)."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -1652,22 +1750,21 @@ class PackageBuilder:
             file_type = "DATABASE" if self.repo_name in os.path.basename(f) else "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command with --delete flag to ensure VPS matches cleaned local state
+        # Build RSYNC command WITHOUT --delete (we already did targeted cleanup)
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
-          --delete \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND WITH --delete:")
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (targeted cleanup already performed):")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
-        logger.info(f"IMPORTANT: --delete flag ensures VPS matches cleaned local state (orphaned files will be deleted)")
+        logger.info(f"IMPORTANT: Using targeted SSH cleanup instead of rsync --delete for safety")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -1695,8 +1792,8 @@ class PackageBuilder:
                         logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload with --delete successful! ({duration} seconds)")
-                logger.info(f"✅ VPS now exactly matches cleaned local state (orphaned files deleted)")
+                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
+                logger.info(f"✅ Orphaned files already deleted via targeted SSH cleanup")
                 
                 # Verification
                 try:
@@ -1710,8 +1807,8 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"RSYNC execution error: {e}")
         
-        # SECOND ATTEMPT (with different SSH options but still with --delete)
-        logger.info("⚠️ Retrying with different SSH options (still with --delete)...")
+        # SECOND ATTEMPT (with different SSH options)
+        logger.info("⚠️ Retrying with different SSH options...")
         time.sleep(5)
         
         # Use -e option with SSH command this time
@@ -1719,13 +1816,12 @@ class PackageBuilder:
         rsync -avz \
           --progress \
           --stats \
-          --delete \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC RETRY COMMAND WITH --delete:")
+        logger.info(f"RUNNING RSYNC RETRY COMMAND WITHOUT --delete:")
         logger.info(rsync_cmd_retry.strip())
         
         start_time = time.time()
@@ -1753,8 +1849,8 @@ class PackageBuilder:
                         logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload with --delete successful on retry! ({duration} seconds)")
-                logger.info(f"✅ VPS now exactly matches cleaned local state (orphaned files deleted)")
+                logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
+                logger.info(f"✅ Orphaned files already deleted via targeted SSH cleanup")
                 
                 # Verification
                 try:
@@ -1774,13 +1870,10 @@ class PackageBuilder:
         """Verify uploaded files on remote server."""
         logger.info("Verifying uploaded files on remote server...")
         
-        # Check remote directory
+        # Check remote directory with explicit search for orphaned packages
         remote_cmd = f"""
-        echo "=== REMOTE DIRECTORY ==="
-        ls -la "{self.remote_dir}/" 2>/dev/null | head -30
-        echo ""
-        echo "=== DATABASE STATE ==="
-        ls -la "{self.remote_dir}/{self.repo_name}.*" 2>/dev/null || echo "No database files found"
+        echo "=== REMOTE DIRECTORY (full) ==="
+        ls -la "{self.remote_dir}/" 2>/dev/null
         echo ""
         echo "=== PACKAGE COUNT ==="
         find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | wc -l
@@ -1919,7 +2012,7 @@ class PackageBuilder:
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database) WITH --delete flag
+                    # Upload everything (packages + database) WITHOUT --delete flag
                     upload_success = self.upload_packages()
                     
                     if upload_success:
