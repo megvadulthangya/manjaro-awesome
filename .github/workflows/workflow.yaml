@@ -1,9 +1,15 @@
-name: MPB - with diagnostic
+name: MPB - Refactored with SRCINFO Versioning and Zero-Residue Policy
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 4 * * *'  # Daily at 4 AM UTC
+  push:
+    paths:
+      - 'packages.py'
+      - 'config.py'
+      - '.github/workflows/**'
+      - '**/PKGBUILD'
 
 jobs:
   build-and-deploy:
@@ -12,15 +18,21 @@ jobs:
       image: archlinux:base-devel
 
     env:
+      # REQUIRED SECRETS (GitHub Secrets)
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
-      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      
+      # OPTIONAL SECRETS
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      
+      # GITHUB INTERNAL
+      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPO: ${{ github.repository }}.git
 
     steps:
       - name: Checkout Code with Full History
@@ -29,8 +41,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Python
-        run: pacman -Sy --noconfirm python python-yaml
+      - name: Install Python and Dependencies
+        run: |
+          echo "=== Installing Python and Core Dependencies ==="
+          pacman -Sy --noconfirm python python-yaml python-setuptools
+          echo "✅ Python installed"
 
       - name: Run Preflight Checker
         run: python3 .github/scripts/checker.py
@@ -62,8 +77,8 @@ jobs:
         run: |
           echo "=== Starting Environment Preparation ==="
           
-          # Skip key signing issues
-          echo "Setting up pacman without key signing..."
+          # Skip key signing issues for system updates
+          echo "Setting up pacman without key signing for updates..."
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
           
           # UPDATE SYSTEM WITHOUT OUR REPOSITORY
@@ -76,7 +91,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             git base-devel sudo \
             python python-pip \
-            python-requests python-gitpython python-yaml python-setuptools \
+            python-requests python-gitpython python-yaml \
             pacman-contrib \
             curl wget ca-certificates \
             openssh rsync \
@@ -84,6 +99,12 @@ jobs:
             jq \
             gnupg
             
+          # Install vercmp for proper version comparison
+          if ! command -v vercmp &> /dev/null; then
+            echo "Installing pacman-contrib for vercmp..."
+            pacman -S --noconfirm pacman-contrib
+          fi
+          
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
@@ -99,10 +120,14 @@ jobs:
           chown -R builder:builder "$(pwd)/build_aur"
           mkdir -p "$(pwd)/built_packages"
           chown -R builder:builder "$(pwd)/built_packages"
+          mkdir -p "/tmp/repo_mirror"
+          chown -R builder:builder "/tmp/repo_mirror"
           
-          # Optimize makepkg
+          # Optimize makepkg for faster builds
+          echo "Optimizing makepkg configuration..."
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          sed -i "s/^BUILDENV=.*/BUILDENV=(!distcc color !ccache check !sign)/" /etc/makepkg.conf
           
           echo "✅ Environment preparation complete"
 
@@ -129,6 +154,19 @@ jobs:
           # Also add to known_hosts
           ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || true
           
+          # Create SSH config for reliable connections
+          cat > /home/builder/.ssh/config << EOF
+Host $VPS_HOST
+  HostName $VPS_HOST
+  User $VPS_USER
+  IdentityFile ~/.ssh/id_ed25519
+  StrictHostKeyChecking no
+  ConnectTimeout 30
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+EOF
+          
+          chmod 600 /home/builder/.ssh/config
           chown -R builder:builder /home/builder/.ssh
           
           echo "✅ SSH setup for VPS complete"
@@ -158,8 +196,8 @@ jobs:
             echo "# Custom repository: $REPO_NAME" >> "$TEMP_FILE"
             echo "# Repository will be dynamically enabled/disabled by builder.py" >> "$TEMP_FILE"
             echo "[$REPO_NAME]" >> "$TEMP_FILE"
-            echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
             echo "SigLevel = Optional TrustAll" >> "$TEMP_FILE"
+            echo "Server = $REPO_SERVER_URL" >> "$TEMP_FILE"
             
             cat "$TEMP_FILE" >> /etc/pacman.conf
             rm -f "$TEMP_FILE"
@@ -246,96 +284,106 @@ jobs:
           cd /
           rm -rf /tmp/yay-bin
           
+          # Test yay installation
+          if sudo -u builder yay --version; then
+            echo "✅ yay installed successfully"
+          else
+            echo "❌ yay installation failed"
+          fi
+          
           echo "✅ Build dependencies installed"
 
-      - name: Hálózati diagnosztika
+      - name: Network Diagnostics
         run: |
-          echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
+          echo "=== NETWORK DIAGNOSTICS ==="
           
-          echo "1. Aktuális IP címek és információk:"
-          echo "   - Publikus IP (fail2ban-hoz):"
-          PUBLIC_IP1=$(curl -s https://api.ipify.org)
-          PUBLIC_IP2=$(curl -s https://checkip.amazonaws.com | tr -d '\n')
+          echo "1. Current IP addresses and info:"
+          echo "   - Public IP (for fail2ban):"
+          PUBLIC_IP1=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "Not available")
+          PUBLIC_IP2=$(curl -s --connect-timeout 5 https://checkip.amazonaws.com | tr -d '\n' || echo "Not available")
           echo "     IP 1: $PUBLIC_IP1"
           echo "     IP 2: $PUBLIC_IP2"
           
           echo ""
-          echo "   - Részletes IP információk:"
-          curl -s https://ipinfo.io/json | jq -r '"     IP: " + .ip, "     Város: " + .city, "     Régió: " + .region, "     Ország: " + .country, "     Szolgáltató: " + .org' || echo "     Nem sikerült lekérni az IP infókat"
+          echo "   - Detailed IP information:"
+          curl -s --connect-timeout 5 https://ipinfo.io/json 2>/dev/null | jq -r '"     IP: " + .ip, "     City: " + .city, "     Region: " + .region, "     Country: " + .country, "     Provider: " + .org' 2>/dev/null || echo "     Could not fetch IP info"
           
           echo ""
-          echo "2. Kimenő interface információk:"
-          ip route show default 2>/dev/null | head -1 || echo "     Alapértelmezett route nem található"
+          echo "2. Outgoing interface info:"
+          ip route show default 2>/dev/null | head -1 || echo "     Default route not found"
           echo ""
-          echo "   - Aktuális IP címek (összes interface):"
-          ip addr show 2>/dev/null | grep 'inet ' | awk '{print "     " $2 " on " $NF}' || echo "     Nem sikerült lekérni az interface-eket"
+          echo "   - Current IP addresses (all interfaces):"
+          ip addr show 2>/dev/null | grep 'inet ' | awk '{print "     " $2 " on " $NF}' 2>/dev/null || echo "     Could not fetch interfaces"
           
           echo ""
-          echo "3. DNS konfiguráció:"
-          cat /etc/resolv.conf 2>/dev/null | grep -v '^#' | grep -v '^$' | while read line; do echo "   $line"; done || echo "   Nem sikerült lekérni a DNS konfigurációt"
+          echo "3. DNS configuration:"
+          cat /etc/resolv.conf 2>/dev/null | grep -v '^#' | grep -v '^$' | while read line; do echo "   $line"; done 2>/dev/null || echo "   Could not fetch DNS configuration"
           
           echo ""
-          echo "4. GitHub Actions specifikus információk:"
+          echo "4. GitHub Actions specific information:"
           echo "     GITHUB_ACTIONS: $GITHUB_ACTIONS"
           echo "     GITHUB_RUN_ID: $GITHUB_RUN_ID"
           echo "     RUNNER_OS: $RUNNER_OS"
           
           echo ""
-          echo "5. Letöltő eszközök:"
-          command -v curl && curl --version | head -1 || echo "     curl nem található"
-          command -v wget && wget --version | head -1 || echo "     wget nem található"
-          command -v rsync && rsync --version | head -1 || echo "     rsync nem található"
+          echo "5. Download tools:"
+          command -v curl && curl --version | head -1 2>/dev/null || echo "     curl not found"
+          command -v wget && wget --version | head -1 2>/dev/null || echo "     wget not found"
+          command -v rsync && rsync --version | head -1 2>/dev/null || echo "     rsync not found"
           
           echo ""
-          echo "6. Elérhetőség tesztek:"
+          echo "6. Availability tests:"
           echo "   - GitHub:"
-          timeout 5 curl -s -I https://github.com 2>/dev/null | head -1 || echo "     Nem elérhető"
+          timeout 5 curl -s -I https://github.com 2>/dev/null | head -1 2>/dev/null || echo "     Not available"
           echo "   - AUR:"
-          timeout 5 curl -s -I https://aur.archlinux.org 2>/dev/null | head -1 || echo "     Nem elérhető"
-          echo "   - Cél VPS ($VPS_HOST):"
-          timeout 5 ping -c 2 "$VPS_HOST" 2>/dev/null | grep "bytes from" || echo "     Ping nem elérhető"
+          timeout 5 curl -s -I https://aur.archlinux.org 2>/dev/null | head -1 2>/dev/null || echo "     Not available"
+          echo "   - Target VPS ($VPS_HOST):"
+          timeout 5 ping -c 2 "$VPS_HOST" 2>/dev/null | grep "bytes from" 2>/dev/null || echo "     Ping not available"
           
           echo ""
-          echo "7. Hálózati kapcsolatok (aktuális):"
-          ss -tunp 2>/dev/null | grep ESTAB | head -5 | while read line; do echo "   $line"; done || echo "   Nem sikerült lekérni a kapcsolatokat"
+          echo "7. Network connections (current):"
+          ss -tunp 2>/dev/null | grep ESTAB | head -5 | while read line; do echo "   $line"; done 2>/dev/null || echo "   Could not fetch connections"
           
           echo ""
-          echo "8. IP cím lista fail2ban-hoz:"
-          echo "   🔍 FAIL2BAN WHITELIST PARANCSOK:"
-          echo "   sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
-          echo "   # vagy más jail neve:"
-          echo "   sudo fail2ban-client set apache-auth addignoreip $PUBLIC_IP1"
-          echo "   # Vagy iptables:"
-          echo "   sudo iptables -A INPUT -s $PUBLIC_IP1 -j ACCEPT"
+          echo "8. IP address list for fail2ban:"
+          echo "   🔍 FAIL2BAN WHITELIST COMMANDS:"
+          if [ "$PUBLIC_IP1" != "Not available" ]; then
+            echo "   sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+            echo "   # Or for other jail names:"
+            echo "   sudo fail2ban-client set apache-auth addignoreip $PUBLIC_IP1"
+            echo "   # Or iptables:"
+            echo "   sudo iptables -A INPUT -s $PUBLIC_IP1 -j ACCEPT"
+          fi
           
           echo ""
-          echo "9. VPS teszt kapcsolat:"
+          echo "9. VPS test connection:"
           SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
-          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo VPS_KAPCSOLAT_OK'" 2>/dev/null; then
-            echo "   ✅ VPS SSH kapcsolat működik"
+          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo VPS_CONNECTION_OK'" 2>/dev/null; then
+            echo "   ✅ VPS SSH connection working"
           else
-            echo "   ❌ VPS SSH kapcsolat NEM működik"
-            echo "   Ellenőrizd a fail2ban logokat:"
+            echo "   ❌ VPS SSH connection NOT working"
+            echo "   Check fail2ban logs:"
             echo "   sudo tail -f /var/log/fail2ban.log"
           fi
           
           echo ""
-          echo "10. Csomag ellenőrzések száma (közelítő):"
-          echo "    Ez a szám okozhat fail2ban problémát, ha túl sok kérést indít:"
+          echo "10. Package check count (approximate):"
           if [ -d "." ]; then
-            PKG_COUNT=$(find . -name "PKGBUILD" -type f | wc -l)
-            echo "    PKGBUILD fájlok száma: $PKG_COUNT"
-            echo "    ~ Ellenőrzések száma: $((PKG_COUNT * 2)) (build előtti és utáni ellenőrzések)"
+            PKG_COUNT=$(find . -name "PKGBUILD" -type f 2>/dev/null | wc -l)
+            echo "    PKGBUILD file count: $PKG_COUNT"
+            echo "    ~ Check count: $((PKG_COUNT * 2)) (pre and post build checks)"
           fi
           
           echo ""
-          echo "=== DIAGNOSZTIKA VÉGE ==="
+          echo "=== DIAGNOSTICS END ==="
           echo ""
-          echo "⚠️  JEGYZET: Ha fail2ban blokkol, próbáld ki ezt a VPS-en:"
-          echo "    sudo fail2ban-client unban $PUBLIC_IP1"
-          echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+          echo "⚠️  NOTE: If fail2ban blocks, try this on VPS:"
+          if [ "$PUBLIC_IP1" != "Not available" ]; then
+            echo "    sudo fail2ban-client unban $PUBLIC_IP1"
+            echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+          fi
 
-      - name: Run Builder
+      - name: Run Builder with SRCINFO Versioning
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -346,12 +394,15 @@ jobs:
           CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GITHUB_REPO: ${{ github.repository }}.git
         run: |
-          echo "=== Starting Builder ==="
+          echo "=== Starting Builder with SRCINFO Versioning ==="
           
+          # Make builder script executable
           chmod +x .github/scripts/builder.py
           
           echo "Current directory: $(pwd)"
+          echo "Repository: $GITHUB_REPO"
           
           # Test SSH connection one more time with identical options to builder.py
           echo "=== Final SSH Test ==="
@@ -367,7 +418,7 @@ jobs:
           echo "=== Repository Status ==="
           # Check if repository exists but don't fail if it doesn't
           if [ -n "$REPO_SERVER_URL" ]; then
-            if curl -s -I "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404"; then
+            if curl -s -I --connect-timeout 10 "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404\|403"; then
               echo "✅ Repository server is accessible"
             else
               echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
@@ -389,6 +440,14 @@ jobs:
           fi
           
           echo ""
+          echo "=== SRCINFO Versioning Check ==="
+          if command -v makepkg &> /dev/null; then
+            echo "✅ makepkg available for SRCINFO parsing"
+          else
+            echo "❌ makepkg not found - SRCINFO parsing will fail"
+          fi
+          
+          echo ""
           echo "=== Running Builder Script ==="
           
           # Run as builder user
@@ -399,8 +458,13 @@ jobs:
           echo "=== Build finished with exit code: $BUILD_STATUS ==="
           
           if [ -f "builder.log" ]; then
-            echo "=== Last 20 lines of builder.log ==="
-            tail -20 builder.log
+            echo "=== Last 50 lines of builder.log ==="
+            tail -50 builder.log
+          fi
+          
+          # Check for specific error patterns
+          if grep -i "error\|failed\|exception" build_output.log | tail -20; then
+            echo "=== Errors detected in build output ==="
           fi
           
           exit $BUILD_STATUS
@@ -434,9 +498,60 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-results-$(date +%s)
+          name: build-results-$(date +%Y%m%d-%H%M%S)
           path: |
             builder.log
             build_output.log
             artifact_packages/
           retention-days: 7
+          if-no-files-found: warn
+
+      - name: Cleanup Temporary Directories
+        if: always()
+        run: |
+          echo "=== Cleaning temporary directories ==="
+          
+          # Cleanup builder temporary directories
+          rm -rf /tmp/repo_mirror* /tmp/manjaro-awesome-gitclone* 2>/dev/null || true
+          rm -rf /tmp/gpg_home_* 2>/dev/null || true
+          rm -rf /tmp/*.pkg.tar.* 2>/dev/null || true
+          
+          # Cleanup builder home directories
+          rm -rf /home/builder/.cache /home/builder/.local 2>/dev/null || true
+          
+          # Cleanup workspace temporary files
+          find . -name "*.pkg.tar.*" -type f -delete 2>/dev/null || true
+          find . -name ".SRCINFO" -type f -delete 2>/dev/null || true
+          find /tmp -name "yay-*" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "✅ Temporary directories cleaned"
+
+      - name: Summary Report
+        if: always()
+        run: |
+          echo "=== BUILD SUMMARY ==="
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Trigger: ${{ github.event_name }}"
+          echo "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          
+          if [ -f "build_output.log" ]; then
+            echo ""
+            echo "=== Build Statistics ==="
+            grep -E "BUILD SUMMARY|Duration:|AUR packages:|Local packages:|Total built:|Skipped:|GPG signing:" build_output.log | tail -10 || echo "No summary found"
+          fi
+          
+          if [ -d "artifact_packages" ]; then
+            PKG_COUNT=$(ls -1 artifact_packages/ 2>/dev/null | wc -l)
+            echo ""
+            echo "Artifacts created: $PKG_COUNT packages"
+          fi
+          
+          echo ""
+          echo "=== NEXT STEPS ==="
+          echo "1. Check artifacts for built packages"
+          echo "2. Review builder.log for detailed logs"
+          echo "3. Verify repository on VPS: ${{ secrets.REPO_SERVER_URL }}"
+          echo "4. Test installation: sudo pacman -Syu && sudo pacman -S <package>"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Production Version with Repository Lifecycle Management
+Manjaro Package Builder - Refactored with Precision Versioning and Zero-Residue Policy
 """
 
 import os
@@ -16,6 +16,7 @@ import socket
 import glob
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 # Add the script directory to sys.path for imports
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -43,12 +44,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class PackageBuilder:
     def __init__(self):
         # Run pre-flight environment validation
         self._validate_env()
         
-        # GPG signing configuration - INITIALIZE FIRST
+        # GPG signing configuration
         self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
         self.gpg_key_id = os.getenv('GPG_KEY_ID')
         self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
@@ -103,9 +105,9 @@ class PackageBuilder:
             "aur_failed": 0,
             "local_failed": 0,
         }
-    
-    def _validate_env(self):
-        """Pre-flight environment validation - check for required variables."""
+
+    def _validate_env(self) -> None:
+        """Comprehensive pre-flight environment validation - check for all required variables."""
         print("\n" + "=" * 60)
         print("PRE-FLIGHT ENVIRONMENT VALIDATION")
         print("=" * 60)
@@ -115,30 +117,51 @@ class PackageBuilder:
             'VPS_HOST',
             'VPS_USER',
             'VPS_SSH_KEY',
+            'REMOTE_DIR',
         ]
         
+        optional_but_recommended = [
+            'REPO_SERVER_URL',
+            'GPG_KEY_ID',
+            'GPG_PRIVATE_KEY',
+        ]
+        
+        # Check required variables
+        missing_vars = []
         for var in required_vars:
             value = os.getenv(var)
             if not value or value.strip() == '':
+                missing_vars.append(var)
                 logger.error(f"[ERROR] Variable {var} is empty! Ensure it is set in GitHub Secrets.")
-                sys.exit(1)
+        
+        if missing_vars:
+            sys.exit(1)
+        
+        # Check optional variables and warn if missing
+        for var in optional_but_recommended:
+            value = os.getenv(var)
+            if not value or value.strip() == '':
+                logger.warning(f"⚠️ Optional variable {var} is empty")
         
         # Log validation success (with secret masking)
         logger.info("✅ Environment validation passed:")
-        for var in required_vars:
+        for var in required_vars + optional_but_recommended:
             value = os.getenv(var)
             if value:
                 masked = "***" + value[-4:] if len(value) > 4 else "***"
                 logger.info(f"   {var}: {masked}")
         
-        # Check optional variables but don't fail
-        optional_vars = ['REPO_SERVER_URL', 'REMOTE_DIR']
-        for var in optional_vars:
-            value = os.getenv(var)
-            if not value or value.strip() == '':
-                logger.warning(f"⚠️ Optional variable {var} is empty")
+        # Validate REPO_NAME for pacman.conf
+        repo_name = os.getenv('REPO_NAME')
+        if repo_name:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', repo_name):
+                logger.error(f"[ERROR] Invalid REPO_NAME '{repo_name}'. Must contain only letters, numbers, hyphens, and underscores.")
+                sys.exit(1)
+            if len(repo_name) > 50:
+                logger.error(f"[ERROR] REPO_NAME '{repo_name}' is too long (max 50 characters).")
+                sys.exit(1)
     
-    def _setup_ssh_config(self):
+    def _setup_ssh_config(self) -> None:
         """Setup SSH config file for builder user - container invariant"""
         ssh_dir = Path("/home/builder/.ssh")
         ssh_dir.mkdir(exist_ok=True, mode=0o700)
@@ -169,20 +192,6 @@ class PackageBuilder:
                     f.write(ssh_key)
                 ssh_key_path.chmod(0o600)
         
-        # Generate known_hosts if needed
-        known_hosts = ssh_dir / "known_hosts"
-        if not known_hosts.exists():
-            try:
-                subprocess.run(
-                    ["ssh-keyscan", "-H", self.vps_host],
-                    capture_output=True,
-                    text=True,
-                    stdout=open(known_hosts, "w"),
-                    stderr=subprocess.DEVNULL
-                )
-            except Exception:
-                pass
-        
         # Set ownership to builder
         try:
             shutil.chown(ssh_dir, "builder", "builder")
@@ -190,7 +199,217 @@ class PackageBuilder:
                 shutil.chown(item, "builder", "builder")
         except Exception as e:
             logger.warning(f"Could not change SSH dir ownership: {e}")
-    
+
+    def _extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
+        """Extract pkgver, pkgrel, and epoch from .SRCINFO or makepkg --printsrcinfo output."""
+        srcinfo_path = pkg_dir / ".SRCINFO"
+        
+        # First try to read existing .SRCINFO
+        if srcinfo_path.exists():
+            try:
+                with open(srcinfo_path, 'r') as f:
+                    srcinfo_content = f.read()
+                return self._parse_srcinfo_content(srcinfo_content)
+            except Exception as e:
+                logger.warning(f"Failed to parse existing .SRCINFO: {e}")
+        
+        # Generate .SRCINFO using makepkg --printsrcinfo
+        try:
+            result = subprocess.run(
+                ['makepkg', '--printsrcinfo'],
+                cwd=pkg_dir,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                # Also write to .SRCINFO for future use
+                with open(srcinfo_path, 'w') as f:
+                    f.write(result.stdout)
+                return self._parse_srcinfo_content(result.stdout)
+            else:
+                logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
+                raise RuntimeError(f"Failed to generate .SRCINFO: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Error running makepkg --printsrcinfo: {e}")
+            raise
+
+    def _parse_srcinfo_content(self, srcinfo_content: str) -> Tuple[str, str, Optional[str]]:
+        """Parse SRCINFO content to extract version information."""
+        pkgver = None
+        pkgrel = None
+        epoch = None
+        
+        lines = srcinfo_content.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Handle key-value pairs
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if key == 'pkgver':
+                    pkgver = value
+                elif key == 'pkgrel':
+                    pkgrel = value
+                elif key == 'epoch':
+                    epoch = value
+        
+        if not pkgver or not pkgrel:
+            raise ValueError("Could not extract pkgver and pkgrel from .SRCINFO")
+        
+        return pkgver, pkgrel, epoch
+
+    def _get_full_version_string(self, pkgver: str, pkgrel: str, epoch: Optional[str]) -> str:
+        """Construct full version string from components."""
+        if epoch and epoch != '0':
+            return f"{epoch}:{pkgver}-{pkgrel}"
+        return f"{pkgver}-{pkgrel}"
+
+    def _server_cleanup(self) -> None:
+        """Chemotox Server Cleanup: Remove orphaned package files from VPS.
+        
+        Compares all .pkg.tar.zst files on server with entries in the database
+        and deletes any file not found in the database.
+        """
+        print("\n" + "=" * 60)
+        print("CHEMOTOX SERVER CLEANUP: Zero-Residue Policy")
+        print("=" * 60)
+        
+        # Get database file path
+        db_file = self.output_dir / f"{self.repo_name}.db"
+        if not db_file.exists():
+            logger.error(f"Database file not found: {db_file}")
+            return
+        
+        # Extract package names from database
+        try:
+            result = subprocess.run(
+                ['tar', '-tzf', str(db_file)],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode != 0:
+                # Try uncompressed database
+                if db_file.with_suffix('').exists():
+                    db_file = db_file.with_suffix('')
+                    logger.info(f"Trying uncompressed database: {db_file}")
+                else:
+                    logger.error("Cannot read database file")
+                    return
+            
+            # Parse database entries
+            db_entries = []
+            for line in result.stdout.split('\n'):
+                if line.endswith('/desc'):
+                    # Extract package name from path (format: pkgname-version/desc)
+                    pkg_path = line[:-5]  # Remove '/desc'
+                    if '/' in pkg_path:
+                        pkg_dir = pkg_path.split('/')[-1]
+                        # Extract base package name (without version)
+                        # Format: pkgname-version-release
+                        if '-' in pkg_dir:
+                            parts = pkg_dir.split('-')
+                            # Reconstruct package name (everything except last two parts: version-release)
+                            if len(parts) >= 3:
+                                pkg_name = '-'.join(parts[:-2])
+                                db_entries.append(pkg_name)
+            
+            logger.info(f"Database contains {len(db_entries)} package entries")
+            logger.debug(f"Database packages: {db_entries[:10]}...")
+            
+        except Exception as e:
+            logger.error(f"Failed to parse database: {e}")
+            return
+        
+        # Get all package files from server
+        remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.*' 2>/dev/null"
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode != 0 or not result.stdout.strip():
+                logger.info("No package files found on server")
+                return
+            
+            server_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
+            logger.info(f"Found {len(server_files)} package files on server")
+            
+            # Identify orphaned files
+            orphaned_files = []
+            for server_file in server_files:
+                filename = Path(server_file).name
+                pkg_name = self._extract_package_name_from_filename(filename)
+                
+                if pkg_name and pkg_name not in db_entries:
+                    orphaned_files.append(server_file)
+                    logger.info(f"🚨 Orphaned file: {filename} -> {pkg_name}")
+            
+            if not orphaned_files:
+                logger.info("✅ No orphaned files found")
+                return
+            
+            # Delete orphaned files
+            logger.info(f"🚨 Deleting {len(orphaned_files)} orphaned files...")
+            deleted_count = 0
+            
+            for orphaned_file in orphaned_files:
+                # Delete main package file
+                delete_cmd = f"rm -f '{orphaned_file}'"
+                ssh_delete = [
+                    "ssh",
+                    f"{self.vps_user}@{self.vps_host}",
+                    delete_cmd
+                ]
+                
+                result = subprocess.run(
+                    ssh_delete,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0:
+                    logger.info(f"✅ Deleted: {Path(orphaned_file).name}")
+                    deleted_count += 1
+                    
+                    # Also delete signature if exists
+                    sig_file = f"{orphaned_file}.sig"
+                    sig_delete_cmd = f"rm -f '{sig_file}' 2>/dev/null || true"
+                    ssh_sig_delete = [
+                        "ssh",
+                        f"{self.vps_user}@{self.vps_host}",
+                        sig_delete_cmd
+                    ]
+                    subprocess.run(ssh_sig_delete, check=False)
+                else:
+                    logger.warning(f"⚠️ Failed to delete {orphaned_file}: {result.stderr[:200]}")
+            
+            logger.info(f"✅ Chemotox cleanup complete: {deleted_count}/{len(orphaned_files)} files removed")
+            
+        except Exception as e:
+            logger.error(f"Server cleanup failed: {e}")
+
     def _import_gpg_key(self):
         """Import GPG private key and set trust level."""
         if not self.gpg_enabled:
@@ -392,20 +611,6 @@ class PackageBuilder:
         
         # Repository name from environment (validated in _validate_env)
         self.repo_name = os.getenv('REPO_NAME')
-        
-        # Validate required configuration
-        required_env = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
-        missing_env = [var for var in required_env if not os.getenv(var)]
-        
-        if missing_env:
-            logger.error(f"❌ Missing required environment variables: {missing_env}")
-            logger.error("Please set these in your GitHub repository secrets")
-            sys.exit(1)
-        
-        if not self.remote_dir:
-            logger.error("❌ Missing required configuration: REMOTE_DIR")
-            logger.error("Set REMOTE_DIR environment variable")
-            sys.exit(1)
         
         print(f"🔧 Configuration loaded:")
         print(f"   SSH: {self.vps_user}@{self.vps_host}")
@@ -969,7 +1174,7 @@ class PackageBuilder:
         return True
     
     def _apply_repository_decision(self, decision):
-        """Apply repository enable/disable decision with proper SigLevel."""
+        """Apply repository enable/disable decision with proper SigLevel and ensure no empty headers."""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -984,27 +1189,50 @@ class PackageBuilder:
             lines = content.split('\n')
             new_lines = []
             in_our_section = False
+            section_has_content = False
             
             for line in lines:
+                # Check if we're entering our section
                 if line.strip() == repo_section or line.strip() == f"#{repo_section}":
                     if decision == "DISABLE":
                         new_lines.append(f"#{repo_section}")
                     else:
-                        new_lines.append(line)
+                        new_lines.append(repo_section)
                     in_our_section = True
+                    section_has_content = False
                 elif in_our_section:
+                    # Check if we're leaving our section
                     if line.strip().startswith('[') or line.strip() == '':
+                        # We're leaving the section, add content if needed
+                        if not section_has_content and decision == "ENABLE":
+                            # Add required content to empty section
+                            new_lines.append("SigLevel = Required DatabaseOptional")
+                            if self.repo_server_url:
+                                new_lines.append(f"Server = {self.repo_server_url}")
+                            else:
+                                new_lines.append("# Server = [URL not configured]")
+                            new_lines.append("")
                         in_our_section = False
                         new_lines.append(line)
                     else:
+                        # We're still in our section
                         if decision == "DISABLE":
                             new_lines.append(f"#{line}")
                         else:
                             # Update SigLevel when enabling
                             if line.strip().startswith('SigLevel'):
                                 new_lines.append("SigLevel = Required DatabaseOptional")
+                                section_has_content = True
+                            elif line.strip().startswith('Server'):
+                                if self.repo_server_url:
+                                    new_lines.append(f"Server = {self.repo_server_url}")
+                                    section_has_content = True
+                                else:
+                                    new_lines.append("# Server = [URL not configured]")
                             else:
                                 new_lines.append(line)
+                                if line.strip() and not line.strip().startswith('#'):
+                                    section_has_content = True
                 else:
                     new_lines.append(line)
             
@@ -1015,9 +1243,22 @@ class PackageBuilder:
                 new_lines.append("SigLevel = Required DatabaseOptional")
                 if self.repo_server_url:
                     new_lines.append(f"Server = {self.repo_server_url}")
+                else:
+                    new_lines.append("# Server = [URL not configured]")
                 new_lines.append('')
             
-            content = '\n'.join(new_lines)
+            # Remove any empty [] headers that might have been created
+            final_content = '\n'.join(new_lines)
+            # Remove lines that are just empty brackets
+            final_lines = []
+            for i, line in enumerate(final_content.split('\n')):
+                if line.strip() == '[]':
+                    continue
+                final_lines.append(line)
+            
+            content = '\n'.join(final_lines)
+            
+            # Write back to pacman.conf
             subprocess.run(['sudo', 'tee', str(pacman_conf)], input=content.encode(), check=True)
             
             action = "enabled" if decision == "ENABLE" else "disabled"
@@ -1199,7 +1440,7 @@ class PackageBuilder:
         return False
     
     def get_remote_version(self, pkg_name):
-        """Get the version of a package from remote server."""
+        """Get the version of a package from remote server using SRCINFO-based extraction."""
         if not self.remote_files:
             return None
         
@@ -1736,7 +1977,7 @@ class PackageBuilder:
         logger.info(f"✅ Local package pruning complete: {deleted_count} files deleted")
     
     def _build_aur_package(self, pkg_name):
-        """Build AUR package with proper version comparison."""
+        """Build AUR package with SRCINFO-based version comparison."""
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -1777,18 +2018,10 @@ class PackageBuilder:
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version info from FRESH PKGBUILD using strict regex
-        content = pkgbuild.read_text()
-        pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        epoch_match = re.search(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        
-        if pkgver_match and pkgrel_match:
-            pkgver = pkgver_match.group(1)
-            pkgrel = pkgrel_match.group(1)
-            epoch = epoch_match.group(1) if epoch_match else None
-            
-            version = f"{epoch + ':' if epoch else ''}{pkgver}-{pkgrel}"
+        # Extract version info from SRCINFO (not regex)
+        try:
+            pkgver, pkgrel, epoch = self._extract_version_from_srcinfo(pkg_dir)
+            version = self._get_full_version_string(pkgver, pkgrel, epoch)
             
             # Get remote version for comparison
             remote_version = self.get_remote_version(pkg_name)
@@ -1804,9 +2037,10 @@ class PackageBuilder:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
-        else:
+                
+        except Exception as e:
+            logger.error(f"Failed to extract version for {pkg_name}: {e}")
             version = "unknown"
-            logger.warning(f"Could not extract version for {pkg_name}")
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
@@ -1862,7 +2096,7 @@ class PackageBuilder:
             return False
     
     def _build_local_package(self, pkg_name):
-        """Build local package with proper version comparison."""
+        """Build local package with SRCINFO-based version comparison."""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -1873,18 +2107,10 @@ class PackageBuilder:
             logger.error(f"No PKGBUILD found for {pkg_name}")
             return False
         
-        # Read FRESH PKGBUILD (no caching) with strict regex
-        content = pkgbuild.read_text()
-        pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        epoch_match = re.search(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        
-        if pkgver_match and pkgrel_match:
-            pkgver = pkgver_match.group(1)
-            pkgrel = pkgrel_match.group(1)
-            epoch = epoch_match.group(1) if epoch_match else None
-            
-            version = f"{epoch + ':' if epoch else ''}{pkgver}-{pkgrel}"
+        # Extract version info from SRCINFO (not regex)
+        try:
+            pkgver, pkgrel, epoch = self._extract_version_from_srcinfo(pkg_dir)
+            version = self._get_full_version_string(pkgver, pkgrel, epoch)
             
             # Get remote version for comparison
             remote_version = self.get_remote_version(pkg_name)
@@ -1899,9 +2125,10 @@ class PackageBuilder:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
-        else:
+                
+        except Exception as e:
+            logger.error(f"Failed to extract version for {pkg_name}: {e}")
             version = "unknown"
-            logger.warning(f"Could not extract version for {pkg_name}")
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
@@ -2204,7 +2431,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC WITHOUT --delete flag (TARGETED CLEANUP USED INSTEAD)."""
+        """Upload packages to server using RSYNC WITHOUT --delete flag (Chemotox cleanup used instead)."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -2252,7 +2479,7 @@ class PackageBuilder:
                 file_type = "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command WITHOUT --delete (we already did targeted cleanup)
+        # Build RSYNC command WITHOUT --delete (Chemotox cleanup handles orphans)
         rsync_cmd = f"""
         rsync -avz \
           --progress \
@@ -2262,11 +2489,11 @@ class PackageBuilder:
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (targeted cleanup already performed):")
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (Chemotox cleanup handles orphans):")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
-        logger.info(f"IMPORTANT: Using targeted SSH cleanup instead of rsync --delete for safety")
+        logger.info(f"IMPORTANT: Using Chemotox SSH cleanup for zero-residue policy")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -2295,7 +2522,9 @@ class PackageBuilder:
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
-                logger.info(f"✅ Orphaned files already deleted via targeted SSH cleanup")
+                
+                # Run Chemotox cleanup after successful upload
+                self._server_cleanup()
                 
                 # Verification
                 try:
@@ -2352,7 +2581,9 @@ class PackageBuilder:
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
-                logger.info(f"✅ Orphaned files already deleted via targeted SSH cleanup")
+                
+                # Run Chemotox cleanup after successful upload
+                self._server_cleanup()
                 
                 # Verification
                 try:
@@ -2442,9 +2673,9 @@ class PackageBuilder:
         logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
-        """Main execution with CORRECT Arch Linux repository ordering and LOCAL MIRRORING."""
+        """Main execution with SRCINFO versioning and Zero-Residue policy."""
         print("\n" + "=" * 60)
-        print("🚀 MANJARO PACKAGE BUILDER (CORRECT ARCH ORDERING + LOCAL MIRROR)")
+        print("🚀 MANJARO PACKAGE BUILDER (SRCINFO VERSIONING + ZERO-RESIDUE)")
         print("=" * 60)
         
         try:
@@ -2495,7 +2726,7 @@ class PackageBuilder:
             
             # Build packages (repository is disabled during build)
             print("\n" + "=" * 60)
-            print("PHASE 2: PACKAGE BUILDING")
+            print("PHASE 2: PACKAGE BUILDING (SRCINFO VERSIONING)")
             print("=" * 60)
             
             total_built = self.build_packages()
@@ -2522,7 +2753,7 @@ class PackageBuilder:
                     if not self.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
                     
-                    # Upload everything (packages + database + signatures) WITHOUT --delete flag
+                    # Upload everything (packages + database + signatures)
                     upload_success = self.upload_packages()
                     
                     # Clean up GPG temporary directory
@@ -2577,6 +2808,8 @@ class PackageBuilder:
             print(f"Total built:     {total_built}")
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
+            print(f"SRCINFO parsing: ✅ Implemented")
+            print(f"Zero-Residue:    ✅ Chemotox cleanup active")
             print("=" * 60)
             
             if self.built_packages:
@@ -2593,6 +2826,7 @@ class PackageBuilder:
             # Ensure GPG cleanup even on failure
             self._cleanup_gpg()
             return 1
+
 
 if __name__ == "__main__":
     sys.exit(PackageBuilder().run())
