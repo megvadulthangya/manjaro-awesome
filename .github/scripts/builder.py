@@ -1434,6 +1434,16 @@ class PackageBuilder:
                 if os.path.exists(f):
                     os.remove(f)
             
+            # CRITICAL DEBUG: List all package files in directory
+            logger.info("🔍 DEBUG: Listing all .pkg.tar.zst files in output directory:")
+            list_result = subprocess.run(
+                "ls -lh *.pkg.tar.zst 2>/dev/null || echo 'No .pkg.tar.zst files found'",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            logger.info(f"Files found:\n{list_result.stdout}")
+            
             # Verify each package file exists locally before database generation
             missing_packages = []
             valid_packages = []
@@ -1461,11 +1471,21 @@ class PackageBuilder:
             
             logger.info(f"✅ All {len(valid_packages)} package files verified locally")
             
-            # Generate database with repo-add
-            cmd = ["repo-add", db_file] + valid_packages
+            # Generate database with repo-add using shell=True for wildcard expansion
+            # This ensures repo-add can find all packages
+            cmd = f"repo-add {db_file} *.pkg.tar.zst"
             
-            logger.info(f"Running repo-add with {len(valid_packages)} packages...")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            logger.info(f"Running repo-add with shell=True to include ALL packages...")
+            logger.info(f"Command: {cmd}")
+            logger.info(f"Current directory: {os.getcwd()}")
+            
+            result = subprocess.run(
+                cmd,
+                shell=True,  # CRITICAL: Use shell=True for wildcard expansion
+                capture_output=True,
+                text=True,
+                check=False
+            )
             
             if result.returncode == 0:
                 logger.info("✅ Database created successfully")
@@ -1476,23 +1496,40 @@ class PackageBuilder:
                     size_mb = db_path.stat().st_size / (1024 * 1024)
                     logger.info(f"Database size: {size_mb:.2f} MB")
                     
-                    # List packages in database for verification
+                    # CRITICAL: Verify database entries BEFORE upload
+                    logger.info("🔍 Verifying database entries before upload...")
                     list_cmd = ["tar", "-tzf", db_file]
                     list_result = subprocess.run(list_cmd, capture_output=True, text=True, check=False)
                     if list_result.returncode == 0:
                         db_entries = [line for line in list_result.stdout.split('\n') if line.endswith('/desc')]
-                        logger.info(f"Database contains {len(db_entries)} package entries")
+                        logger.info(f"✅ Database contains {len(db_entries)} package entries")
+                        if len(db_entries) == 0:
+                            logger.error("❌❌❌ DATABASE IS EMPTY! This is the root cause of the issue.")
+                            logger.error("Package files exist but repo-add didn't add them to database.")
+                            logger.error("Possible causes:")
+                            logger.error("1. repo-add permissions issue")
+                            logger.error("2. Package files are corrupted")
+                            logger.error("3. Database file already exists and is locked")
+                            return False
+                        else:
+                            logger.info(f"Sample database entries: {db_entries[:5]}")
+                    else:
+                        logger.warning(f"Could not list database contents: {list_result.stderr}")
                 
                 return True
             else:
-                logger.error(f"repo-add failed: {result.stderr}")
+                logger.error(f"repo-add failed with exit code {result.returncode}:")
+                if result.stdout:
+                    logger.error(f"STDOUT: {result.stdout[:500]}")
+                if result.stderr:
+                    logger.error(f"STDERR: {result.stderr[:500]}")
                 return False
                 
         finally:
             os.chdir(old_cwd)
     
     def _sync_pacman_databases(self):
-        """FIXED: Simplified pacman database sync with proper SigLevel handling."""
+        """FIXED: Simplified pacman database sync with proper SigLevel handling and DEBUG COMMAND."""
         print("\n" + "=" * 60)
         print("FINAL STEP: Syncing pacman databases")
         print("=" * 60)
@@ -1511,6 +1548,24 @@ class PackageBuilder:
         
         if result.returncode == 0:
             logger.info("✅ Pacman databases synced successfully")
+            
+            # CRITICAL DEBUG STEP: List packages in our custom repo
+            debug_cmd = f"sudo pacman -Sl {self.repo_name}"
+            logger.info(f"🔍 DEBUG: Running command to see what packages pacman sees in our repo:")
+            logger.info(f"Command: {debug_cmd}")
+            
+            debug_result = self.run_cmd(debug_cmd, log_cmd=True, timeout=30, check=False)
+            
+            if debug_result.returncode == 0:
+                if debug_result.stdout.strip():
+                    logger.info(f"Packages in {self.repo_name} according to pacman:")
+                    for line in debug_result.stdout.splitlines():
+                        logger.info(f"  {line}")
+                else:
+                    logger.warning(f"⚠️ pacman -Sl {self.repo_name} returned no output (repo might be empty)")
+            else:
+                logger.warning(f"⚠️ pacman -Sl failed: {debug_result.stderr[:200]}")
+            
             return True
         else:
             logger.error("❌ Pacman sync failed")
