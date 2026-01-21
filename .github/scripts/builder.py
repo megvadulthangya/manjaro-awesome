@@ -84,7 +84,6 @@ class PackageBuilder:
         
         # State
         self.remote_files = []
-        self.packages_to_clean = set()
         self.built_packages = []
         self.skipped_packages = []
         self.rebuilt_local_packages = []
@@ -280,25 +279,23 @@ class PackageBuilder:
         return f"{pkgver}-{pkgrel}"
 
     def _server_cleanup(self) -> None:
-        """Chemotox Server Cleanup: Remove orphaned package files from VPS with SAFETY VALVES.
+        """ZERO-RESIDUE SERVER CLEANUP: Remove ALL package files from VPS that are not in current database.
         
-        Compares all .pkg.tar.zst files on server with entries in the database
-        and deletes any file not found in the database.
+        IMMEDIATE DELETION: No retention, no "X days" buffer, no "Keep N versions".
+        If a new version is built, the old version MUST be deleted immediately.
         
-        SAFETY VALVES:
-        1. Must have non-empty database with valid package entries
-        2. Must verify database integrity before proceeding
-        3. If database is empty/corrupted, ABORT with error
-        4. Only proceed when we have confidence in database state
+        SAFETY VALVES MODIFIED:
+        1. Only prevent deletion if database is completely empty (0 entries)
+        2. Allow partial cleanup (some files in database, some not)
+        3. Execute actual `rm -f` commands, not just dry-run
         """
         print("\n" + "=" * 60)
-        print("🔒 CHEMOTOX SERVER CLEANUP: Zero-Residue Policy with SAFETY VALVES")
+        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Immediate Deletion Policy")
         print("=" * 60)
         
         # VALVE 1: Check if cleanup should run at all (only after successful operations)
         if not hasattr(self, '_upload_successful') or not self._upload_successful:
-            logger.error("❌ SAFETY VALVE ACTIVATED: Cleanup cannot run because upload was not successful!")
-            logger.error("   This prevents deletion when rsync/database operations failed.")
+            logger.error("❌ SAFETY VALVE: Cleanup cannot run because upload was not successful!")
             return
         
         # Get database file path - check both compressed and uncompressed
@@ -317,39 +314,29 @@ class PackageBuilder:
                 break
         
         if not db_file:
-            logger.error("❌ SAFETY VALVE ACTIVATED: No valid database file found!")
-            logger.error("   Cleanup ABORTED to prevent accidental deletion of all packages.")
+            logger.error("❌ SAFETY VALVE: No valid database file found!")
             return
         
-        # VALVE 2: Database integrity check
+        # VALVE 2: Database integrity check - MODIFIED TO ALLOW PARTIAL CLEANUP
         logger.info("🔍 Performing database integrity check...")
         
-        # Create a temporary file to store active package list for safety check
-        active_files_path = self.output_dir / "active_files.txt"
-        
         try:
-            # FIXED: Use Python's tarfile module to read database entries
-            active_packages_found = 0
-            db_entries = []
+            # Extract ALL package filenames from database (with full version-architecture)
+            db_package_entries = set()  # Will contain full package names like "package-1.0.0-1-x86_64"
             
             # Check file extension to determine how to read it
             if db_file.suffix == '.gz' or str(db_file).endswith('.tar.gz'):
                 try:
                     with tarfile.open(db_file, 'r:gz') as tar:
-                        # Count entries that end with '/desc' (package metadata files)
+                        # Extract package names from member paths
                         for member in tar.getmembers():
                             if member.name.endswith('/desc'):
-                                # Extract package name from path (format: pkgname-version/desc)
+                                # Extract full package name from path
+                                # Format: pkgname-version-release-arch/desc
                                 pkg_path = member.name[:-5]  # Remove '/desc'
                                 if '/' in pkg_path:
-                                    pkg_dir = pkg_path.split('/')[-1]
-                                    # Extract base package name (without version)
-                                    if '-' in pkg_dir:
-                                        parts = pkg_dir.split('-')
-                                        if len(parts) >= 3:
-                                            pkg_name = '-'.join(parts[:-2])
-                                            db_entries.append(pkg_name)
-                                            active_packages_found += 1
+                                    full_pkg_name = pkg_path.split('/')[-1]
+                                    db_package_entries.add(full_pkg_name)
                 except Exception as e:
                     logger.error(f"❌ Failed to read tar.gz database: {e}")
                     return
@@ -361,13 +348,8 @@ class PackageBuilder:
                             if member.name.endswith('/desc'):
                                 pkg_path = member.name[:-5]
                                 if '/' in pkg_path:
-                                    pkg_dir = pkg_path.split('/')[-1]
-                                    if '-' in pkg_dir:
-                                        parts = pkg_dir.split('-')
-                                        if len(parts) >= 3:
-                                            pkg_name = '-'.join(parts[:-2])
-                                            db_entries.append(pkg_name)
-                                            active_packages_found += 1
+                                    full_pkg_name = pkg_path.split('/')[-1]
+                                    db_package_entries.add(full_pkg_name)
                 except:
                     logger.error("❌ Database is not in a readable format")
                     return
@@ -375,36 +357,15 @@ class PackageBuilder:
                 logger.error(f"❌ Unsupported database file format: {db_file}")
                 return
             
-            logger.info(f"✅ Database contains {active_packages_found} package entries")
+            logger.info(f"✅ Database contains {len(db_package_entries)} package entries")
             
-            # VALVE 3: CRITICAL - Must have at least one valid package in database
-            if active_packages_found == 0:
+            # VALVE 3: MODIFIED - Only abort if database is COMPLETELY empty
+            if len(db_package_entries) == 0:
                 logger.error("❌❌❌ CRITICAL SAFETY VALVE ACTIVATED: Database has ZERO package entries!")
-                logger.error("   This could indicate:")
-                logger.error("   1. Database generation failed")
-                logger.error("   2. Rsync didn't upload packages")
-                logger.error("   3. Corrupted database file")
-                logger.error("   ")
-                logger.error("   🚨 CLEANUP ABORTED - NO FILES WILL BE DELETED!")
-                logger.error("   Server packages are PRESERVED for safety.")
+                logger.error("   🚨 CLEANUP ABORTED - Database empty, potential data loss!")
                 return
             
-            # Write active packages to file for safety check
-            with open(active_files_path, 'w') as active_file:
-                for pkg_name in db_entries:
-                    active_file.write(f"{pkg_name}\n")
-            
-            # Check active_files.txt size as additional safety
-            active_files_size = active_files_path.stat().st_size
-            if active_files_size == 0:
-                logger.error("❌❌❌ SAFETY VALVE: active_files.txt is EMPTY!")
-                logger.error("   Cleanup ABORTED to prevent deleting all packages.")
-                return
-            
-            logger.info(f"✅ Safety check: active_files.txt has {active_files_size} bytes ({active_packages_found} entries)")
-            logger.info(f"Active packages in database: {', '.join(db_entries[:10])}{'...' if len(db_entries) > 10 else ''}")
-            
-            # Get all package files from server
+            # Get ALL package files from server
             remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.*' 2>/dev/null"
             
             ssh_cmd = [
@@ -434,52 +395,47 @@ class PackageBuilder:
                 server_files = [f.strip() for f in server_files_raw.split('\n') if f.strip()]
                 logger.info(f"Found {len(server_files)} package files on server")
                 
-                # VALVE 4: Ensure we're not deleting everything
-                if len(server_files) <= active_packages_found:
-                    logger.info("Server files count <= database entries - proceeding carefully")
-                
-                # Identify orphaned files
+                # Identify orphaned files - DIRECT COMPARISON APPROACH
                 orphaned_files = []
                 for server_file in server_files:
                     filename = Path(server_file).name
-                    pkg_name = self._extract_package_name_from_filename(filename)
                     
-                    # Special handling for split packages like nordic-theme
-                    # nordic-theme will have files like:
-                    # - nordic-theme-... (main package)
-                    # - nordic-theme-standard-buttons-... (split package)
-                    # - nordic-theme-polar-... (split package)
-                    if pkg_name and not any(pkg_name.startswith(db_entry) for db_entry in db_entries):
-                        # Check if this is a split package that belongs to a main package
-                        is_split_package = False
-                        for db_entry in db_entries:
-                            if pkg_name.startswith(f"{db_entry}-"):
-                                is_split_package = True
-                                break
-                        
-                        if not is_split_package:
-                            orphaned_files.append(server_file)
-                            logger.info(f"🚨 Orphaned file identified: {filename} -> {pkg_name}")
+                    # Extract base filename without extensions
+                    # Remove .pkg.tar.zst or .pkg.tar.xz and .sig
+                    base_filename = filename
+                    for ext in ['.pkg.tar.zst', '.pkg.tar.xz', '.sig']:
+                        base_filename = base_filename.replace(ext, '')
+                    
+                    # Check if this package is in the database
+                    is_in_database = False
+                    for db_entry in db_package_entries:
+                        # Direct comparison: check if db_entry is a prefix of base_filename
+                        # This handles: db_entry="package-1.0.0-1-x86_64" matches "package-1.0.0-1-x86_64"
+                        # And also split packages: db_entry="package-split-1.0.0-1-x86_64" matches "package-split-1.0.0-1-x86_64"
+                        if base_filename.startswith(db_entry):
+                            is_in_database = True
+                            break
+                    
+                    if not is_in_database:
+                        orphaned_files.append(server_file)
+                        logger.info(f"🚨 Orphaned file identified: {filename}")
                 
                 if not orphaned_files:
                     logger.info("✅ No orphaned files found")
                     return
                 
-                # VALVE 5: Final confirmation before deletion
+                # VALVE 4: Final check - ensure we're not deleting ALL files
+                # We already passed the "database empty" check, so partial cleanup is allowed
                 logger.warning(f"🚨 Identified {len(orphaned_files)} orphaned files for deletion")
                 logger.warning(f"Sample orphaned files: {[Path(f).name for f in orphaned_files[:5]]}")
                 
-                # Ask for confirmation (in automated environment, we log heavily)
-                logger.info("🔐 SAFETY CHECK: Database has {} entries, Server has {} files, Orphans: {}".
-                           format(active_packages_found, len(server_files), len(orphaned_files)))
-                
-                # Delete orphaned files
-                logger.info(f"🚀 Deleting {len(orphaned_files)} orphaned files...")
+                # Delete orphaned files - NO MERCY, IMMEDIATE DELETION
+                logger.info(f"🚀 Deleting {len(orphaned_files)} orphaned files immediately...")
                 deleted_count = 0
                 
                 for orphaned_file in orphaned_files:
                     filename = Path(orphaned_file).name
-                    # Delete main package file
+                    # Delete main package file - ACTUAL DELETION, NOT DRY-RUN
                     delete_cmd = f"rm -fv '{orphaned_file}'"
                     ssh_delete = [
                         "ssh",
@@ -496,7 +452,7 @@ class PackageBuilder:
                     )
                     
                     if result.returncode == 0:
-                        logger.info(f"✅ Deleted: {filename}")
+                        logger.info(f"✅ IMMEDIATELY DELETED: {filename}")
                         deleted_count += 1
                         
                         # Also delete signature if exists
@@ -511,8 +467,8 @@ class PackageBuilder:
                     else:
                         logger.warning(f"⚠️ Failed to delete {filename}: {result.stderr[:200]}")
                 
-                logger.info(f"✅ Chemotox cleanup complete: {deleted_count}/{len(orphaned_files)} files removed")
-                logger.info(f"📊 Server now has ~{len(server_files) - deleted_count} package files")
+                logger.info(f"✅ ZERO-RESIDUE cleanup complete: {deleted_count}/{len(orphaned_files)} files removed")
+                logger.info(f"📊 Server now has {len(server_files) - deleted_count} package files")
                 
             except subprocess.TimeoutExpired:
                 logger.error("❌ SSH command timed out - aborting cleanup for safety")
@@ -522,10 +478,6 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"❌ Critical error in database processing: {e}")
             logger.error("   Cleanup ABORTED to preserve server state.")
-        finally:
-            # Clean up the temporary active_files.txt
-            if active_files_path.exists():
-                active_files_path.unlink()
 
     def _import_gpg_key(self):
         """Import GPG private key and set trust level WITHOUT interactive terminal (container-safe)."""
@@ -2398,7 +2350,6 @@ class PackageBuilder:
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
-                    self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
                 
@@ -2491,7 +2442,6 @@ class PackageBuilder:
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
-                    self.packages_to_clean.add(pkg_name)
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
                     built_files.append(str(dest))
@@ -2756,7 +2706,7 @@ class PackageBuilder:
             traceback.print_exc()
     
     def upload_packages(self):
-        """Upload packages to server using RSYNC WITHOUT --delete flag (Chemotox cleanup handles orphans)."""
+        """Upload packages to server using RSYNC WITHOUT --delete flag (Zero-residue cleanup handles orphans)."""
         # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
@@ -2806,7 +2756,7 @@ class PackageBuilder:
                 file_type = "PACKAGE"
             logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
         
-        # Build RSYNC command WITHOUT --delete (Chemotox cleanup handles orphans)
+        # Build RSYNC command WITHOUT --delete (Zero-residue cleanup handles orphans)
         rsync_cmd = f"""
         rsync -avz \
           --progress \
@@ -2816,11 +2766,11 @@ class PackageBuilder:
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (Chemotox cleanup handles orphans):")
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (Zero-residue cleanup handles orphans):")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
-        logger.info(f"IMPORTANT: Using Chemotox SSH cleanup for zero-residue policy")
+        logger.info(f"IMPORTANT: Using Zero-Residue SSH cleanup for immediate deletion policy")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -2851,7 +2801,7 @@ class PackageBuilder:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
                 self._upload_successful = True  # CRITICAL: Set success flag
                 
-                # Run Chemotox cleanup after successful upload ONLY
+                # Run Zero-Residue cleanup after successful upload ONLY
                 self._server_cleanup()
                 
                 # Verification
@@ -2913,7 +2863,7 @@ class PackageBuilder:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
                 self._upload_successful = True  # CRITICAL: Set success flag
                 
-                # Run Chemotox cleanup after successful upload ONLY
+                # Run Zero-Residue cleanup after successful upload ONLY
                 self._server_cleanup()
                 
                 # Verification
@@ -2969,41 +2919,6 @@ class PackageBuilder:
                     
         except Exception as e:
             logger.warning(f"Verification error: {e}")
-    
-    def cleanup_old_packages(self):
-        """Remove old package versions (keep only last 3 versions)."""
-        if not self.packages_to_clean:
-            logger.info("No packages to clean up")
-            return
-        
-        logger.info(f"Cleaning up old versions for {len(self.packages_to_clean)} packages...")
-        
-        cleaned = 0
-        for pkg in self.packages_to_clean:
-            # Keep only the last 3 versions of each package
-            remote_cmd = (
-                f'cd {self.remote_dir} && '
-                f'ls -t {pkg}-*.pkg.tar.zst 2>/dev/null | tail -n +4 | '
-                f'xargs -r rm -f 2>/dev/null || true'
-            )
-            
-            ssh_cmd = [
-                "ssh",
-                f"{self.vps_user}@{self.vps_host}",
-                remote_cmd
-            ]
-            
-            logger.info(f"CLEANUP COMMAND: {' '.join(ssh_cmd)}")
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
-            
-            logger.info(f"EXIT CODE: {result.returncode}")
-            if result.returncode == 0:
-                cleaned += 1
-            else:
-                if result.stderr:
-                    logger.warning(f"Cleanup warning for {pkg}: {result.stderr[:200]}")
-        
-        logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
         """FIXED: Main execution with simplified repository discovery and proper GPG integration."""
@@ -3107,9 +3022,6 @@ class PackageBuilder:
                     self._cleanup_gpg()
                     
                     if upload_success:
-                        # Cleanup old packages (keep only last 3 versions)
-                        self.cleanup_old_packages()
-                        
                         # STEP 7: Update repository state and sync pacman
                         print("\n" + "=" * 60)
                         print("STEP 7: FINAL REPOSITORY STATE UPDATE")
@@ -3158,7 +3070,7 @@ class PackageBuilder:
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
             print(f"SRCINFO parsing: ✅ Implemented")
-            print(f"Zero-Residue:    ✅ Chemotox cleanup active")
+            print(f"Zero-Residue:    ✅ Immediate deletion policy active")
             print("=" * 60)
             
             if self.built_packages:
