@@ -54,7 +54,7 @@ AUR_PACKAGES = [
 
 # Optionally, you can also define package groups or categories
 PACKAGE_CATEGORIES = {
-    "desktop": ["awesome-git", "awesome-freedesktop-git", "lain-git", "awesome-rofi"],
+    "desktop": ["awesome-freedesktop-git", "lain-git", "awesome-rofi"],
     "themes": ["nordic-theme", "nordic-darker-theme", "nordic-bluish-accent-theme"],
     "fonts": ["tamzen-font", "ttf-font-awesome-5"],
     "tools": ["libinput-gestures", "betterlockscreen", "simplescreenrecorder"],

@@ -534,7 +534,7 @@ class PackageBuilder:
                 active_files_path.unlink()
 
     def _import_gpg_key(self):
-        """Import GPG private key and set trust level WITH PACMAN-KEY LOCAL SIGNING (with sudo)."""
+        """Import GPG private key and set trust level WITHOUT master secret key (container-safe)."""
         if not self.gpg_enabled:
             logger.info("GPG Key not detected. Skipping repository signing.")
             return False
@@ -618,7 +618,7 @@ class PackageBuilder:
                                 logger.info(f"✅ Set ultimate trust for key fingerprint: {fingerprint[:16]}...")
                             break
             
-            # CRITICAL FIX: Export public key and add to pacman-key with local signing (using sudo)
+            # CRITICAL FIX: Export public key and add to pacman-key WITHOUT lsign-key
             if fingerprint:
                 try:
                     # Export public key to a temporary file
@@ -647,30 +647,36 @@ class PackageBuilder:
                     else:
                         logger.info("✅ Key added to pacman-key")
                     
-                    # Locally sign the key (disables interactive prompt) WITH SUDO
-                    logger.info(f"Locally signing GPG key: {fingerprint[:16]}...")
-                    lsign_process = subprocess.run(
-                        ['sudo', 'pacman-key', '--lsign-key', fingerprint],
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
+                    # FIX 1: Instead of lsign-key (which requires master secret key),
+                    # set ultimate trust directly in the pacman keyring using gpg
+                    logger.info(f"Setting ultimate trust in pacman keyring for fingerprint: {fingerprint}...")
                     
-                    if lsign_process.returncode != 0:
-                        logger.error(f"Failed to locally sign key: {lsign_process.stderr}")
-                        # Try alternative: sign with key ID instead of fingerprint
-                        lsign_process = subprocess.run(
-                            ['sudo', 'pacman-key', '--lsign-key', self.gpg_key_id],
+                    # Use gpg to set ultimate trust without needing master secret key
+                    trust_gpg_cmd = [
+                        'sudo', 'gpg',
+                        '--homedir', '/etc/pacman.d/gnupg',
+                        '--no-permission-warning',
+                        '--command-fd', '0',
+                        '--edit-key', fingerprint,
+                        'trust'
+                    ]
+                    
+                    try:
+                        # Send "5" (ultimate trust) and "y" (yes) to the command
+                        trust_process = subprocess.run(
+                            trust_gpg_cmd,
+                            input="5\ny\n",
                             capture_output=True,
                             text=True,
                             check=False
                         )
-                        if lsign_process.returncode == 0:
-                            logger.info(f"✅ Key locally signed using key ID: {self.gpg_key_id}")
+                        
+                        if trust_process.returncode == 0:
+                            logger.info(f"✅ Set ultimate trust for key in pacman keyring")
                         else:
-                            logger.error(f"Also failed with key ID: {lsign_process.stderr}")
-                    else:
-                        logger.info("✅ Key locally signed with fingerprint")
+                            logger.error(f"Failed to set trust: {trust_process.stderr}")
+                    except Exception as e:
+                        logger.error(f"Error setting trust with gpg: {e}")
                     
                     # Clean up temporary public key file
                     os.unlink(pub_key_path)
@@ -1367,18 +1373,18 @@ class PackageBuilder:
         if result.returncode != 0:
             logger.error("❌ Failed to sync pacman databases")
             # Check if it's a GPG key issue
-            if "Import PGP key" in result.stdout or "key is unknown" in result.stderr:
+            if "Import PGP key" in result.stdout or "key is unknown" in result.stderr or "unknown trust" in result.stderr:
                 logger.error("GPG key trust issue detected!")
                 logger.error("The key was imported but pacman-key doesn't trust it.")
-                logger.error("Temporary workaround: Disabling repository signature check...")
+                logger.error("FIX 2: Temporarily setting SigLevel to Optional TrustAll for sync...")
                 
-                # Emergency fix: Temporarily set SigLevel to Never for the sync
+                # FIX 2: Emergency fix: Temporarily set SigLevel to Optional TrustAll for the sync
                 pacman_conf = Path("/etc/pacman.conf")
                 if pacman_conf.exists():
                     with open(pacman_conf, 'r') as f:
                         content = f.read()
                     
-                    # Find our repository section and temporarily disable signature checking
+                    # Find our repository section and temporarily change signature checking
                     repo_section = f"[{self.repo_name}]"
                     if repo_section in content:
                         lines = content.split('\n')
@@ -1393,8 +1399,8 @@ class PackageBuilder:
                                 in_section = False
                                 new_lines.append(line)
                             elif in_section and line.strip().startswith('SigLevel'):
-                                # Change to Never for this sync only
-                                new_lines.append("SigLevel = Never")
+                                # FIX: Change to Optional TrustAll for this sync only
+                                new_lines.append("SigLevel = Optional TrustAll")
                             else:
                                 new_lines.append(line)
                         
@@ -1408,10 +1414,12 @@ class PackageBuilder:
                         result = self.run_cmd(cmd, log_cmd=True, timeout=300)
                         
                         if result.returncode == 0:
-                            logger.info("✅ Pacman databases synced (with temporary SigLevel=Never)")
-                            # Restore original SigLevel
+                            logger.info("✅ Pacman databases synced (with temporary SigLevel=Optional TrustAll)")
+                            # Restore original Required DatabaseOptional SigLevel
                             self._apply_repository_decision("ENABLE")
                             return True
+                        else:
+                            logger.error("❌ Even temporary SigLevel fix failed!")
             
             return False
         
@@ -1752,7 +1760,7 @@ class PackageBuilder:
             if dep_clean and dep_clean.strip() and not any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
                 # Ensure the dependency name is valid (contains alphanumeric chars)
                 if re.search(r'[a-zA-Z0-9]', dep_clean):
-                    # Check if this is a known phantom package
+                    # FIX 3: Hard-filter out phantom package 'lgi'
                     if dep_clean == 'lgi':
                         phantom_packages.add('lgi')
                         logger.warning(f"⚠️ Found phantom package 'lgi' - will be replaced with 'lua-lgi'")
@@ -1762,7 +1770,7 @@ class PackageBuilder:
         # Remove any duplicate entries
         clean_deps = list(dict.fromkeys(clean_deps))
         
-        # FIX: If we removed 'lgi', ensure 'lua-lgi' is present
+        # FIX 3: If we removed 'lgi', ensure 'lua-lgi' is present
         if 'lgi' in phantom_packages and 'lua-lgi' not in clean_deps:
             logger.info("Adding 'lua-lgi' to replace phantom package 'lgi'")
             clean_deps.append('lua-lgi')
