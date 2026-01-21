@@ -965,6 +965,106 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"Failed to apply repository decision: {e}")
     
+    def _clean_workspace(self, pkg_dir):
+        """Clean workspace before building to avoid contamination."""
+        logger.info(f"🧹 Cleaning workspace for {pkg_dir.name}...")
+        
+        # Clean src/ directory if exists
+        src_dir = pkg_dir / "src"
+        if src_dir.exists():
+            try:
+                shutil.rmtree(src_dir, ignore_errors=True)
+                logger.info(f"  Cleaned src/ directory")
+            except Exception as e:
+                logger.warning(f"  Could not clean src/: {e}")
+        
+        # Clean pkg/ directory if exists
+        pkg_build_dir = pkg_dir / "pkg"
+        if pkg_build_dir.exists():
+            try:
+                shutil.rmtree(pkg_build_dir, ignore_errors=True)
+                logger.info(f"  Cleaned pkg/ directory")
+            except Exception as e:
+                logger.warning(f"  Could not clean pkg/: {e}")
+        
+        # Clean any leftover .tar.* files
+        for leftover in pkg_dir.glob("*.pkg.tar.*"):
+            try:
+                leftover.unlink()
+                logger.info(f"  Removed leftover package: {leftover.name}")
+            except Exception as e:
+                logger.warning(f"  Could not remove {leftover}: {e}")
+    
+    def _compare_versions(self, remote_version, pkgver, pkgrel, epoch):
+        """Compare versions and return True if we should build."""
+        # If no remote version exists, we must build
+        if not remote_version:
+            logger.info(f"[DEBUG] Comparing Package: Remote(NONE) vs New({pkgver}-{pkgrel}) -> BUILD TRIGGERED (no remote)")
+            return True
+        
+        # Parse remote version
+        # Remote version format: "epoch:pkgver-pkgrel" or "pkgver-pkgrel"
+        remote_epoch = None
+        remote_pkgver = None
+        remote_pkgrel = None
+        
+        # Check if remote has epoch
+        if ':' in remote_version:
+            remote_epoch_str, rest = remote_version.split(':', 1)
+            remote_epoch = remote_epoch_str
+            if '-' in rest:
+                remote_pkgver, remote_pkgrel = rest.split('-', 1)
+            else:
+                remote_pkgver = rest
+                remote_pkgrel = "1"  # Default
+        else:
+            if '-' in remote_version:
+                remote_pkgver, remote_pkgrel = remote_version.split('-', 1)
+            else:
+                remote_pkgver = remote_version
+                remote_pkgrel = "1"  # Default
+        
+        # If epochs differ, build
+        if (epoch is not None and remote_epoch is None) or (epoch is None and remote_epoch is not None):
+            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch mismatch)")
+            return True
+        
+        # If both have epochs, compare them
+        if epoch and remote_epoch:
+            try:
+                epoch_int = int(epoch)
+                remote_epoch_int = int(remote_epoch)
+                if epoch_int != remote_epoch_int:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch}:{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch {remote_epoch_int} != {epoch_int})")
+                    return True
+            except ValueError:
+                # If epochs aren't integers, compare as strings
+                if epoch != remote_epoch:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch}:{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch string mismatch)")
+                    return True
+        
+        # Compare pkgver
+        if remote_pkgver != pkgver:
+            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgver {remote_pkgver} != {pkgver})")
+            return True
+        
+        # Compare pkgrel
+        try:
+            remote_pkgrel_int = int(remote_pkgrel)
+            pkgrel_int = int(pkgrel)
+            if pkgrel_int != remote_pkgrel_int:
+                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel {remote_pkgrel_int} != {pkgrel_int})")
+                return True
+        except ValueError:
+            # If pkgrel isn't integer, compare as strings
+            if pkgrel != remote_pkgrel:
+                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel string mismatch)")
+                return True
+        
+        # Versions are identical
+        logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (versions identical)")
+        return False
+    
     def package_exists(self, pkg_name, version=None):
         """Check if package exists on server."""
         if not self.remote_files:
@@ -984,11 +1084,34 @@ class PackageBuilder:
         if not self.remote_files:
             return None
         
-        pattern = f"^{re.escape(pkg_name)}-([0-9].*?)-"
+        # Look for any file with this package name
         for filename in self.remote_files:
-            match = re.match(pattern, filename)
-            if match:
-                return match.group(1)
+            if filename.startswith(f"{pkg_name}-"):
+                # Extract version from filename
+                # Format: name-version-release-arch.pkg.tar.zst
+                base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+                parts = base.split('-')
+                
+                # We need at least 3 parts after the name: version-release-arch
+                # Find where the package name ends
+                # Try to match from the end
+                for i in range(len(parts) - 2, 0, -1):
+                    # Check if parts[:i] could be the package name
+                    possible_name = '-'.join(parts[:i])
+                    if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
+                        # The remaining parts should be: version-release-arch
+                        if len(parts) >= i + 3:
+                            version_part = parts[i]
+                            release_part = parts[i+1]
+                            # Check if version_part contains epoch (has colon replaced with hyphen)
+                            if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
+                                # Might have epoch: format is epoch-version-release
+                                epoch_part = parts[i]
+                                version_part = parts[i+1]
+                                release_part = parts[i+2]
+                                return f"{epoch_part}:{version_part}-{release_part}"
+                            else:
+                                return f"{version_part}-{release_part}"
         
         return None
     
@@ -1441,7 +1564,7 @@ class PackageBuilder:
         logger.info(f"✅ Local package pruning complete: {deleted_count} files deleted")
     
     def _build_aur_package(self, pkg_name):
-        """Build AUR package."""
+        """Build AUR package with proper version comparison."""
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -1451,7 +1574,7 @@ class PackageBuilder:
         
         print(f"Cloning {pkg_name} from AUR...")
         
-        # Try different AUR URLs from config
+        # Try different AUR URLs from config (ALWAYS FRESH CLONE)
         clone_success = False
         for aur_url_template in self.aur_urls:
             aur_url = aur_url_template.format(pkg_name=pkg_name)
@@ -1482,21 +1605,29 @@ class PackageBuilder:
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version info
+        # Extract version info from FRESH PKGBUILD
         content = pkgbuild.read_text()
         pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         
         if pkgver_match and pkgrel_match:
-            version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
+            pkgver = pkgver_match.group(1)
+            pkgrel = pkgrel_match.group(1)
+            epoch = epoch_match.group(1) if epoch_match else None
             
-            if self.package_exists(pkg_name):
-                logger.info(f"✅ {pkg_name} already exists on server - skipping")
+            version = f"{epoch + ':' if epoch else ''}{pkgver}-{pkgrel}"
+            
+            # Get remote version for comparison
+            remote_version = self.get_remote_version(pkg_name)
+            
+            # DECISION LOGIC: Only skip if versions are identical
+            if remote_version and not self._compare_versions(remote_version, pkgver, pkgrel, epoch):
+                logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            remote_version = self.get_remote_version(pkg_name)
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
             else:
@@ -1507,6 +1638,9 @@ class PackageBuilder:
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
+            
+            # Clean workspace before building
+            self._clean_workspace(pkg_dir)
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
@@ -1555,7 +1689,7 @@ class PackageBuilder:
             return False
     
     def _build_local_package(self, pkg_name):
-        """Build local package."""
+        """Build local package with proper version comparison."""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -1566,20 +1700,28 @@ class PackageBuilder:
             logger.error(f"No PKGBUILD found for {pkg_name}")
             return False
         
+        # Read FRESH PKGBUILD (no caching)
         content = pkgbuild.read_text()
         pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         
         if pkgver_match and pkgrel_match:
-            version = f"{pkgver_match.group(1)}-{pkgrel_match.group(1)}"
+            pkgver = pkgver_match.group(1)
+            pkgrel = pkgrel_match.group(1)
+            epoch = epoch_match.group(1) if epoch_match else None
             
-            if self.package_exists(pkg_name):
-                logger.info(f"✅ {pkg_name} already exists on server - skipping")
+            version = f"{epoch + ':' if epoch else ''}{pkgver}-{pkgrel}"
+            
+            # Get remote version for comparison
+            remote_version = self.get_remote_version(pkg_name)
+            
+            # DECISION LOGIC: Only skip if versions are identical
+            if remote_version and not self._compare_versions(remote_version, pkgver, pkgrel, epoch):
+                logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 return False
             
-            remote_version = self.get_remote_version(pkg_name)
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
             else:
@@ -1590,6 +1732,9 @@ class PackageBuilder:
         
         try:
             logger.info(f"Building {pkg_name} ({version})...")
+            
+            # Clean workspace before building
+            self._clean_workspace(pkg_dir)
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
