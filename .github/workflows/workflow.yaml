@@ -384,6 +384,47 @@ jobs:
             echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
           fi
 
+      - name: Initialize GPG and Pacman Keyring
+        run: |
+          echo "=== Initializing GPG and Pacman Keyring ==="
+          
+          # Initialize pacman keyring FIRST
+          echo "Initializing pacman keyring..."
+          sudo pacman-key --init
+          
+          # Import GPG key if provided
+          if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_KEY_ID" ]; then
+            echo "Setting up GPG key for repository signing..."
+            
+            # Create temporary directory for GPG
+            TEMP_GNUPG=$(mktemp -d)
+            export GNUPGHOME="$TEMP_GNUPG"
+            
+            # Import private key
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            
+            # Get fingerprint
+            FINGERPRINT=$(gpg --list-keys --with-colons "$GPG_KEY_ID" | grep '^fpr:' | cut -d: -f10 | head -1)
+            
+            if [ -n "$FINGERPRINT" ]; then
+              echo "Setting ultimate trust for key: $FINGERPRINT"
+              echo "$FINGERPRINT:6:" | gpg --import-ownertrust
+              
+              # Export public key and add to pacman keyring
+              gpg --export --armor "$FINGERPRINT" | sudo pacman-key --add -
+              sudo pacman-key --lsign-key "$FINGERPRINT"
+              echo "✅ GPG key added to pacman-key"
+            fi
+            
+            # Clean up
+            unset GNUPGHOME
+            rm -rf "$TEMP_GNUPG"
+          else
+            echo "ℹ️ No GPG key provided, repository will not be signed"
+          fi
+          
+          echo "✅ GPG and pacman-key initialization complete"
+
       - name: Run Builder with SRCINFO Versioning
         env:
           VPS_USER: ${{ secrets.VPS_USER }}

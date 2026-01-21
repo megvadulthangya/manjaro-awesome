@@ -976,6 +976,146 @@ class PackageBuilder:
         except Exception as e:
             logger.warning(f"Could not ensure remote directory: {e}")
     
+    def _check_repository_exists_on_vps(self):
+        """FIXED: Check if repository exists on VPS via SSH (simpler logic)."""
+        print("\n🔍 Checking if repository exists on VPS...")
+        
+        # Check for any package files on VPS
+        remote_cmd = f"""
+        # Check for package files
+        if find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | head -1 >/dev/null; then
+            echo "REPO_EXISTS_WITH_PACKAGES"
+        # Check for database files
+        elif [ -f "{self.remote_dir}/{self.repo_name}.db.tar.gz" ] || [ -f "{self.remote_dir}/{self.repo_name}.db" ]; then
+            echo "REPO_EXISTS_WITH_DB"
+        else
+            echo "REPO_NOT_FOUND"
+        fi
+        """
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                if "REPO_EXISTS_WITH_PACKAGES" in result.stdout:
+                    logger.info("✅ Repository exists on VPS (has package files)")
+                    return True, True  # exists, has packages
+                elif "REPO_EXISTS_WITH_DB" in result.stdout:
+                    logger.info("✅ Repository exists on VPS (has database)")
+                    return True, False  # exists, no packages
+                else:
+                    logger.info("ℹ️ Repository does not exist on VPS (first run)")
+                    return False, False  # doesn't exist
+            else:
+                logger.warning(f"⚠️ Could not check repository existence: {result.stderr[:200]}")
+                return False, False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("❌ SSH timeout checking repository existence")
+            return False, False
+        except Exception as e:
+            logger.error(f"❌ Error checking repository: {e}")
+            return False, False
+    
+    def _apply_repository_state(self, exists, has_packages):
+        """FIXED: Apply repository state with proper SigLevel based on discovery."""
+        pacman_conf = Path("/etc/pacman.conf")
+        
+        if not pacman_conf.exists():
+            logger.warning("pacman.conf not found")
+            return
+        
+        try:
+            with open(pacman_conf, 'r') as f:
+                content = f.read()
+            
+            repo_section = f"[{self.repo_name}]"
+            lines = content.split('\n')
+            new_lines = []
+            
+            # Check if our section exists
+            section_exists = False
+            for line in lines:
+                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
+                    section_exists = True
+                    break
+            
+            # Remove old section if it exists
+            in_section = False
+            for line in lines:
+                # Check if we're entering our section
+                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
+                    in_section = True
+                    continue
+                elif in_section and (line.strip().startswith('[') or line.strip() == ''):
+                    # We're leaving our section
+                    in_section = False
+                
+                if not in_section:
+                    new_lines.append(line)
+            
+            # Add new section if repository exists on VPS
+            if exists:
+                new_lines.append('')
+                new_lines.append(f"# Custom repository: {self.repo_name}")
+                new_lines.append(f"# Automatically enabled - found on VPS")
+                new_lines.append(repo_section)
+                if has_packages:
+                    # Repository has packages, enable with Optional TrustAll for build
+                    new_lines.append("SigLevel = Optional TrustAll")
+                    logger.info("✅ Enabling repository with SigLevel = Optional TrustAll (build mode)")
+                else:
+                    # Repository exists but empty (database only)
+                    new_lines.append("# SigLevel = Optional TrustAll")
+                    new_lines.append("# Repository exists but has no packages yet")
+                    logger.info("⚠️ Repository section added but commented (no packages yet)")
+                
+                if self.repo_server_url:
+                    new_lines.append(f"Server = {self.repo_server_url}")
+                else:
+                    new_lines.append("# Server = [URL not configured in secrets]")
+                new_lines.append('')
+            else:
+                # Repository doesn't exist on VPS, add commented section
+                new_lines.append('')
+                new_lines.append(f"# Custom repository: {self.repo_name}")
+                new_lines.append(f"# Disabled - not found on VPS (first run?)")
+                new_lines.append(f"#{repo_section}")
+                new_lines.append("#SigLevel = Optional TrustAll")
+                if self.repo_server_url:
+                    new_lines.append(f"#Server = {self.repo_server_url}")
+                else:
+                    new_lines.append("# Server = [URL not configured in secrets]")
+                new_lines.append('')
+                logger.info("ℹ️ Repository not found on VPS - keeping disabled")
+            
+            # Write back to pacman.conf
+            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
+                temp_file.write('\n'.join(new_lines))
+                temp_path = temp_file.name
+            
+            # Copy to pacman.conf
+            subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
+            subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
+            os.unlink(temp_path)
+            
+            logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to apply repository state: {e}")
+    
     def _list_remote_packages(self):
         """STEP 1: List all *.pkg.tar.zst files in the remote repository directory."""
         print("\n" + "=" * 60)
@@ -1352,230 +1492,31 @@ class PackageBuilder:
             os.chdir(old_cwd)
     
     def _sync_pacman_databases(self):
-        """AGGRESSIVE SYNC: Force pacman database sync with temporary SigLevel override."""
+        """FIXED: Simplified pacman database sync with proper SigLevel handling."""
         print("\n" + "=" * 60)
-        print("FINAL STEP: Syncing pacman databases (AGGRESSIVE MODE)")
+        print("FINAL STEP: Syncing pacman databases")
         print("=" * 60)
         
-        # FIX 1: Aggressive Sync Fallback - Temporarily set SigLevel to Optional TrustAll
-        # BEFORE running pacman -Sy, to prevent "unknown trust" errors
-        logger.info("🛡️ AGGRESSIVE MODE: Temporarily setting SigLevel to Optional TrustAll...")
+        # First, ensure repository is enabled with proper SigLevel
+        exists, has_packages = self._check_repository_exists_on_vps()
+        self._apply_repository_state(exists, has_packages)
         
-        pacman_conf = Path("/etc/pacman.conf")
-        if not pacman_conf.exists():
-            logger.error("❌ pacman.conf not found!")
+        if not exists:
+            logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
         
-        try:
-            # Read current pacman.conf
-            with open(pacman_conf, 'r') as f:
-                content = f.read()
-            
-            # Find our repository section
-            repo_section = f"[{self.repo_name}]"
-            if repo_section not in content:
-                logger.error(f"❌ Repository section '{repo_section}' not found in pacman.conf")
-                return False
-            
-            # AGGRESSIVE FIX: Use sed to temporarily set SigLevel to Optional TrustAll
-            # This handles both commented and uncommented SigLevel lines
-            temp_conf = "/tmp/pacman.conf.temp"
-            
-            # First, backup the original
-            backup_cmd = f"sudo cp /etc/pacman.conf /etc/pacman.conf.bak"
-            backup_result = subprocess.run(backup_cmd, shell=True, capture_output=True, text=True, check=False)
-            if backup_result.returncode == 0:
-                logger.info("✅ Backed up pacman.conf")
-            
-            # Use sed to find our repo section and change SigLevel to Optional TrustAll
-            # This handles multiple SigLevel lines (commented and uncommented)
-            sed_cmd_simple = f"""
-            sudo sed -i '/^{re.escape(repo_section)}/,/^\\[/ s/^#*SigLevel = .*/SigLevel = Optional TrustAll/' /etc/pacman.conf
-            """
-            
-            logger.info("Running sed to temporarily set SigLevel = Optional TrustAll...")
-            result = subprocess.run(sed_cmd_simple, shell=True, capture_output=True, text=True, check=False)
-            
-            if result.returncode != 0:
-                logger.warning(f"⚠️ sed command failed: {result.stderr[:200]}")
-                # Try alternative method
-                logger.info("Trying alternative method to set SigLevel...")
-                
-                lines = content.split('\n')
-                new_lines = []
-                in_section = False
-                siglevel_changed = False
-                
-                for line in lines:
-                    if line.strip() == repo_section:
-                        in_section = True
-                        new_lines.append(line)
-                    elif in_section and line.strip().startswith('['):
-                        in_section = False
-                        new_lines.append(line)
-                    elif in_section and line.strip().startswith('SigLevel'):
-                        # Change to Optional TrustAll
-                        new_lines.append("SigLevel = Optional TrustAll")
-                        siglevel_changed = True
-                    elif in_section and line.strip().startswith('#SigLevel'):
-                        # Uncomment and change
-                        new_lines.append("SigLevel = Optional TrustAll")
-                        siglevel_changed = True
-                    else:
-                        new_lines.append(line)
-                
-                # If no SigLevel found in section, add it
-                if in_section and not siglevel_changed:
-                    # Find where to insert it (after Server line or at end of section)
-                    for i in range(len(new_lines)-1, -1, -1):
-                        if new_lines[i].strip() == repo_section:
-                            # Insert after repo section line
-                            new_lines.insert(i+1, "SigLevel = Optional TrustAll")
-                            break
-                
-                with open(temp_conf, 'w') as f:
-                    f.write('\n'.join(new_lines))
-                
-                # Copy temp file to pacman.conf
-                copy_cmd = f"sudo cp {temp_conf} /etc/pacman.conf"
-                subprocess.run(copy_cmd, shell=True, check=False)
-            
-            logger.info("✅ Temporarily set SigLevel = Optional TrustAll")
-            
-            # Now run pacman -Sy with the temporary SigLevel
-            cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-            result = self.run_cmd(cmd, log_cmd=True, timeout=300, check=False)
-            
-            if result.returncode == 0:
-                logger.info("✅ Pacman databases synced successfully (with temporary SigLevel)")
-                
-                # FIX 2: Post-Sync Restore - Immediately restore proper SigLevel
-                logger.info("🔄 Restoring SigLevel to Required DatabaseOptional...")
-                
-                # Use sed to restore original SigLevel
-                restore_cmd = f"""
-                sudo sed -i '/^{re.escape(repo_section)}/,/^\\[/ s/^#*SigLevel = .*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
-                """
-                
-                restore_result = subprocess.run(restore_cmd, shell=True, capture_output=True, text=True, check=False)
-                
-                if restore_result.returncode == 0:
-                    logger.info("✅ Restored SigLevel to Required DatabaseOptional")
-                else:
-                    logger.warning(f"⚠️ Failed to restore SigLevel: {restore_result.stderr[:200]}")
-                    # Try alternative restore
-                    self._apply_repository_decision("ENABLE")
-                
-                return True
-            else:
-                logger.error("❌ Pacman sync failed even with temporary SigLevel")
-                
-                # Try to restore anyway
-                self._apply_repository_decision("ENABLE")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error in aggressive sync mode: {e}")
-            # Try to restore on error
-            try:
-                self._apply_repository_decision("ENABLE")
-            except:
-                pass
+        # Run pacman -Sy
+        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        result = self.run_cmd(cmd, log_cmd=True, timeout=300, check=False)
+        
+        if result.returncode == 0:
+            logger.info("✅ Pacman databases synced successfully")
+            return True
+        else:
+            logger.error("❌ Pacman sync failed")
+            if result.stderr:
+                logger.error(f"Error: {result.stderr[:500]}")
             return False
-    
-    def _apply_repository_decision(self, decision):
-        """Apply repository enable/disable decision with proper SigLevel and ensure no empty headers."""
-        pacman_conf = Path("/etc/pacman.conf")
-        
-        if not pacman_conf.exists():
-            logger.warning("pacman.conf not found")
-            return
-        
-        try:
-            with open(pacman_conf, 'r') as f:
-                content = f.read()
-            
-            repo_section = f"[{self.repo_name}]"
-            lines = content.split('\n')
-            new_lines = []
-            in_our_section = False
-            section_has_content = False
-            
-            for line in lines:
-                # Check if we're entering our section
-                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
-                    if decision == "DISABLE":
-                        new_lines.append(f"#{repo_section}")
-                    else:
-                        new_lines.append(repo_section)
-                    in_our_section = True
-                    section_has_content = False
-                elif in_our_section:
-                    # Check if we're leaving our section
-                    if line.strip().startswith('[') or line.strip() == '':
-                        # We're leaving the section, add content if needed
-                        if not section_has_content and decision == "ENABLE":
-                            # Add required content to empty section
-                            new_lines.append("SigLevel = Required DatabaseOptional")
-                            if self.repo_server_url:
-                                new_lines.append(f"Server = {self.repo_server_url}")
-                            else:
-                                new_lines.append("# Server = [URL not configured]")
-                            new_lines.append("")
-                        in_our_section = False
-                        new_lines.append(line)
-                    else:
-                        # We're still in our section
-                        if decision == "DISABLE":
-                            new_lines.append(f"#{line}")
-                        else:
-                            # Update SigLevel when enabling
-                            if line.strip().startswith('SigLevel'):
-                                new_lines.append("SigLevel = Required DatabaseOptional")
-                                section_has_content = True
-                            elif line.strip().startswith('Server'):
-                                if self.repo_server_url:
-                                    new_lines.append(f"Server = {self.repo_server_url}")
-                                    section_has_content = True
-                                else:
-                                    new_lines.append("# Server = [URL not configured]")
-                            else:
-                                new_lines.append(line)
-                                if line.strip() and not line.strip().startswith('#'):
-                                    section_has_content = True
-                else:
-                    new_lines.append(line)
-            
-            # If enabling and section wasn't found, add it
-            if decision == "ENABLE" and repo_section not in '\n'.join(new_lines):
-                new_lines.append('')
-                new_lines.append(repo_section)
-                new_lines.append("SigLevel = Required DatabaseOptional")
-                if self.repo_server_url:
-                    new_lines.append(f"Server = {self.repo_server_url}")
-                else:
-                    new_lines.append("# Server = [URL not configured]")
-                new_lines.append('')
-            
-            # Remove any empty [] headers that might have been created
-            final_content = '\n'.join(new_lines)
-            # Remove lines that are just empty brackets
-            final_lines = []
-            for i, line in enumerate(final_content.split('\n')):
-                if line.strip() == '[]':
-                    continue
-                final_lines.append(line)
-            
-            content = '\n'.join(final_lines)
-            
-            # Write back to pacman.conf
-            subprocess.run(['sudo', 'tee', str(pacman_conf)], input=content.encode(), check=False)
-            
-            action = "enabled" if decision == "ENABLE" else "disabled"
-            logger.info(f"✅ Repository '{self.repo_name}' {action} in pacman.conf")
-            
-        except Exception as e:
-            logger.error(f"Failed to apply repository decision: {e}")
     
     def _clean_workspace(self, pkg_dir):
         """Clean workspace before building to avoid contamination."""
@@ -3010,9 +2951,9 @@ class PackageBuilder:
         logger.info(f"✅ Cleanup complete ({cleaned} packages processed)")
     
     def run(self):
-        """Main execution with SRCINFO versioning and Zero-Residue policy."""
+        """FIXED: Main execution with simplified repository discovery and proper GPG integration."""
         print("\n" + "=" * 60)
-        print("🚀 MANJARO PACKAGE BUILDER (SRCINFO VERSIONING + ZERO-RESIDUE)")
+        print("🚀 MANJARO PACKAGE BUILDER (FIXED REPO DISCOVERY + GPG)")
         print("=" * 60)
         
         try:
@@ -3021,20 +2962,37 @@ class PackageBuilder:
             print(f"Repository name: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
             
+            # STEP 0: Initialize GPG FIRST if enabled
+            print("\n" + "=" * 60)
+            print("STEP 0: GPG INITIALIZATION")
+            print("=" * 60)
+            if self.gpg_enabled:
+                if not self._import_gpg_key():
+                    logger.error("❌ Failed to import GPG key, disabling signing")
+                    self.gpg_enabled = False
+                else:
+                    logger.info("✅ GPG initialized successfully")
+            else:
+                logger.info("ℹ️ GPG signing disabled (no key provided)")
+            
             special_deps = getattr(config, 'SPECIAL_DEPENDENCIES', {}) if HAS_CONFIG_FILES else {}
             print(f"Special dependencies loaded: {len(special_deps)}")
             
-            # STEP 1: SSH/rsync - List all *.pkg.tar.zst files
+            # STEP 1: SIMPLIFIED REPOSITORY DISCOVERY
             print("\n" + "=" * 60)
-            print("PHASE 1: REPOSITORY FILESYSTEM STATE (SOURCE OF TRUTH)")
+            print("STEP 1: SIMPLIFIED REPOSITORY STATE DISCOVERY")
             print("=" * 60)
             
-            # Disable repository initially to prevent pacman errors
-            self._apply_repository_decision("DISABLE")
+            # Check if repository exists on VPS
+            repo_exists, has_packages = self._check_repository_exists_on_vps()
             
-            # Ensure remote directory exists first
+            # Apply repository state based on discovery
+            self._apply_repository_state(repo_exists, has_packages)
+            
+            # Ensure remote directory exists
             self._ensure_remote_directory()
             
+            # STEP 2: List remote packages for version comparison
             remote_packages = self._list_remote_packages()
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
@@ -3050,20 +3008,20 @@ class PackageBuilder:
             else:
                 logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
             
-            # STEP 2: Package Pruning - Ensure packages.py is SSOT
+            # STEP 3: Package Pruning - Ensure packages.py is SSOT
             # This must happen BEFORE building new packages
             self._prune_orphaned_packages()
             
-            # STEP 3: Check existing database files
+            # STEP 4: Check existing database files
             existing_db_files, missing_db_files = self._check_database_files()
             
             # Fetch existing database if available
             if existing_db_files:
                 self._fetch_existing_database(existing_db_files)
             
-            # Build packages (repository is disabled during build)
+            # Build packages
             print("\n" + "=" * 60)
-            print("PHASE 2: PACKAGE BUILDING (SRCINFO VERSIONING)")
+            print("STEP 5: PACKAGE BUILDING (SRCINFO VERSIONING)")
             print("=" * 60)
             
             total_built = self.build_packages()
@@ -3073,18 +3031,15 @@ class PackageBuilder:
             
             if local_packages or remote_packages:
                 print("\n" + "=" * 60)
-                print("PHASE 3: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
+                print("STEP 6: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
                 print("=" * 60)
                 
                 # Generate database with ALL locally available packages
                 if self._generate_full_database():
-                    # Import GPG key if available
+                    # Sign repository database files if GPG is enabled
                     if self.gpg_enabled:
-                        if self._import_gpg_key():
-                            # Sign repository database files
-                            self._sign_repository_files()
-                        else:
-                            logger.warning("GPG key import failed. Repository will not be signed.")
+                        if not self._sign_repository_files():
+                            logger.warning("⚠️ Failed to sign repository files, continuing anyway")
                     
                     # Upload regenerated database and packages
                     if not self.test_ssh_connection():
@@ -3100,12 +3055,16 @@ class PackageBuilder:
                         # Cleanup old packages (keep only last 3 versions)
                         self.cleanup_old_packages()
                         
-                        # STEP 4: ONLY NOW enable repository and sync pacman
+                        # STEP 7: Update repository state and sync pacman
                         print("\n" + "=" * 60)
-                        print("PHASE 4: PACMAN SYNCHRONIZATION (CONSUMER)")
+                        print("STEP 7: FINAL REPOSITORY STATE UPDATE")
                         print("=" * 60)
                         
-                        self._apply_repository_decision("ENABLE")
+                        # Re-check repository state (it should exist now)
+                        repo_exists, has_packages = self._check_repository_exists_on_vps()
+                        self._apply_repository_state(repo_exists, has_packages)
+                        
+                        # Sync pacman databases
                         self._sync_pacman_databases()
                         
                         # Synchronize PKGBUILDs
@@ -3129,10 +3088,8 @@ class PackageBuilder:
                 else:
                     print("✅ All packages are up to date or built successfully!")
                 
-                # Even if no packages built, ensure repository is in correct state
-                if remote_packages:
-                    self._apply_repository_decision("ENABLE")
-                    self._sync_pacman_databases()
+                # Clean up GPG even if no packages built
+                self._cleanup_gpg()
             
             elapsed = time.time() - self.stats["start_time"]
             
