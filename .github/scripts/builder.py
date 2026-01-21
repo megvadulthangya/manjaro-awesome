@@ -16,6 +16,7 @@ import hashlib
 import logging
 import socket
 import glob
+import tarfile
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -327,64 +328,52 @@ class PackageBuilder:
         active_files_path = self.output_dir / "active_files.txt"
         
         try:
-            # Try to read the database file
-            if db_file.suffix == '.gz' or db_file.name.endswith('.tar.gz'):
-                result = subprocess.run(
-                    ['tar', '-tzf', str(db_file)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=30
-                )
-            else:
-                # Uncompressed database
-                with open(db_file, 'rb') as f:
-                    header = f.read(100)
-                    if b'SQLite' in header:
-                        logger.info("✅ Database is SQLite format")
-                        result = subprocess.run(
-                            ['file', str(db_file)],
-                            capture_output=True,
-                            text=True,
-                            check=False
-                        )
-                    else:
-                        # Try tar anyway
-                        result = subprocess.run(
-                            ['tar', '-tf', str(db_file)],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                            timeout=30
-                        )
-            
-            if result.returncode != 0:
-                logger.error(f"❌ Database integrity check failed: {result.stderr[:200]}")
-                logger.error("   Cleanup ABORTED - database appears corrupted.")
-                return
-                
-            # Parse database entries and write to active_files.txt for safety check
-            db_entries = []
+            # FIXED: Use Python's tarfile module to read database entries
             active_packages_found = 0
+            db_entries = []
             
-            with open(active_files_path, 'w') as active_file:
-                for line in result.stdout.split('\n'):
-                    line = line.strip()
-                    if line.endswith('/desc'):
-                        # Extract package name from path (format: pkgname-version/desc)
-                        pkg_path = line[:-5]  # Remove '/desc'
-                        if '/' in pkg_path:
-                            pkg_dir = pkg_path.split('/')[-1]
-                            # Extract base package name (without version)
-                            # Format: pkgname-version-release
-                            if '-' in pkg_dir:
-                                parts = pkg_dir.split('-')
-                                # Reconstruct package name (everything except last two parts: version-release)
-                                if len(parts) >= 3:
-                                    pkg_name = '-'.join(parts[:-2])
-                                    db_entries.append(pkg_name)
-                                    active_file.write(f"{pkg_name}\n")
-                                    active_packages_found += 1
+            # Check file extension to determine how to read it
+            if db_file.suffix == '.gz' or str(db_file).endswith('.tar.gz'):
+                try:
+                    with tarfile.open(db_file, 'r:gz') as tar:
+                        # Count entries that end with '/desc' (package metadata files)
+                        for member in tar.getmembers():
+                            if member.name.endswith('/desc'):
+                                # Extract package name from path (format: pkgname-version/desc)
+                                pkg_path = member.name[:-5]  # Remove '/desc'
+                                if '/' in pkg_path:
+                                    pkg_dir = pkg_path.split('/')[-1]
+                                    # Extract base package name (without version)
+                                    if '-' in pkg_dir:
+                                        parts = pkg_dir.split('-')
+                                        if len(parts) >= 3:
+                                            pkg_name = '-'.join(parts[:-2])
+                                            db_entries.append(pkg_name)
+                                            active_packages_found += 1
+                except Exception as e:
+                    logger.error(f"❌ Failed to read tar.gz database: {e}")
+                    return
+            elif db_file.suffix == '.db':
+                # Try to read as plain tar file
+                try:
+                    with tarfile.open(db_file, 'r') as tar:
+                        for member in tar.getmembers():
+                            if member.name.endswith('/desc'):
+                                pkg_path = member.name[:-5]
+                                if '/' in pkg_path:
+                                    pkg_dir = pkg_path.split('/')[-1]
+                                    if '-' in pkg_dir:
+                                        parts = pkg_dir.split('-')
+                                        if len(parts) >= 3:
+                                            pkg_name = '-'.join(parts[:-2])
+                                            db_entries.append(pkg_name)
+                                            active_packages_found += 1
+                except:
+                    logger.error("❌ Database is not in a readable format")
+                    return
+            else:
+                logger.error(f"❌ Unsupported database file format: {db_file}")
+                return
             
             logger.info(f"✅ Database contains {active_packages_found} package entries")
             
@@ -399,6 +388,11 @@ class PackageBuilder:
                 logger.error("   🚨 CLEANUP ABORTED - NO FILES WILL BE DELETED!")
                 logger.error("   Server packages are PRESERVED for safety.")
                 return
+            
+            # Write active packages to file for safety check
+            with open(active_files_path, 'w') as active_file:
+                for pkg_name in db_entries:
+                    active_file.write(f"{pkg_name}\n")
             
             # Check active_files.txt size as additional safety
             active_files_size = active_files_path.stat().st_size
@@ -534,7 +528,7 @@ class PackageBuilder:
                 active_files_path.unlink()
 
     def _import_gpg_key(self):
-        """Import GPG private key and set trust level WITHOUT master secret key (container-safe)."""
+        """Import GPG private key and set trust level WITHOUT interactive terminal (container-safe)."""
         if not self.gpg_enabled:
             logger.info("GPG Key not detected. Skipping repository signing.")
             return False
@@ -618,7 +612,7 @@ class PackageBuilder:
                                 logger.info(f"✅ Set ultimate trust for key fingerprint: {fingerprint[:16]}...")
                             break
             
-            # CRITICAL FIX: Export public key and add to pacman-key WITHOUT lsign-key
+            # CRITICAL FIX: Export public key and add to pacman-key WITHOUT interactive terminal
             if fingerprint:
                 try:
                     # Export public key to a temporary file
@@ -647,25 +641,30 @@ class PackageBuilder:
                     else:
                         logger.info("✅ Key added to pacman-key")
                     
-                    # FIX: Instead of lsign-key (which requires master secret key),
-                    # set ultimate trust directly in the pacman keyring using gpg
-                    logger.info(f"Setting ultimate trust in pacman keyring for fingerprint: {fingerprint}...")
+                    # FIX: Instead of interactive gpg --edit-key (which needs /dev/tty),
+                    # use gpg --import-ownertrust for the pacman keyring
+                    logger.info(f"Setting ultimate trust in pacman keyring for fingerprint: {fingerprint[:16]}...")
                     
-                    # Use gpg to set ultimate trust without needing master secret key
-                    trust_gpg_cmd = [
+                    # Create ownertrust file content: fingerprint:trust_level
+                    ownertrust_content = f"{fingerprint}:6:\n"
+                    
+                    # Write to temporary file
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.trust', delete=False) as trust_file:
+                        trust_file.write(ownertrust_content)
+                        trust_file_path = trust_file.name
+                    
+                    # Import ownertrust into pacman keyring
+                    trust_cmd = [
                         'sudo', 'gpg',
                         '--homedir', '/etc/pacman.d/gnupg',
-                        '--no-permission-warning',
-                        '--command-fd', '0',
-                        '--edit-key', fingerprint,
-                        'trust'
+                        '--batch',
+                        '--import-ownertrust',
+                        trust_file_path
                     ]
                     
                     try:
-                        # Send "5" (ultimate trust) and "y" (yes) to the command
                         trust_process = subprocess.run(
-                            trust_gpg_cmd,
-                            input="5\ny\n",
+                            trust_cmd,
                             capture_output=True,
                             text=True,
                             check=False
@@ -681,9 +680,10 @@ class PackageBuilder:
                         logger.warning(f"⚠️ Error setting trust with gpg: {e}")
                         # Don't fail the build if this doesn't work
                         logger.warning("⚠️ Continuing build despite gpg trust error")
-                    
-                    # Clean up temporary public key file
-                    os.unlink(pub_key_path)
+                    finally:
+                        # Clean up temporary files
+                        os.unlink(trust_file_path)
+                        os.unlink(pub_key_path)
                     
                 except Exception as e:
                     logger.error(f"Error during pacman-key setup: {e}")
@@ -1389,24 +1389,6 @@ class PackageBuilder:
             
             # Use sed to find our repo section and change SigLevel to Optional TrustAll
             # This handles multiple SigLevel lines (commented and uncommented)
-            sed_cmd = f"""
-            # Create a temporary file
-            cat /etc/pacman.conf | sed -n '
-            /^{re.escape(repo_section)}$/,/^\\[/ {{
-                /^{re.escape(repo_section)}$/p
-                /^SigLevel =/ {{
-                    s/^#*SigLevel =.*/SigLevel = Optional TrustAll/
-                    p
-                    d
-                }}
-                /^\\[/!p
-                /^\\[/p
-            }}
-            /^{re.escape(repo_section)}$/!p
-            ' > {temp_conf}
-            """
-            
-            # Fallback: simpler sed command if the above fails
             sed_cmd_simple = f"""
             sudo sed -i '/^{re.escape(repo_section)}/,/^\\[/ s/^#*SigLevel = .*/SigLevel = Optional TrustAll/' /etc/pacman.conf
             """
