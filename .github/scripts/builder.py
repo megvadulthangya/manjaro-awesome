@@ -281,17 +281,30 @@ class PackageBuilder:
     def _server_cleanup(self) -> None:
         """ZERO-RESIDUE SERVER CLEANUP: Remove ALL package files from VPS using EXACT FILENAME MATCHING.
         
-        STRICT LOGIC:
-        1. Extract EXACT filenames (e.g., 'qownnotes-26.1.10-1-x86_64.pkg.tar.zst') from newly generated database
-        2. List EVERY .pkg.tar.zst and .sig file currently on VPS
-        3. EXACT MATCH comparison: if vps_file_name NOT in valid_filenames, DELETE IMMEDIATELY
-        4. ATOMIC execution: single SSH rm -f command for all orphaned files
+        FIXED VERSION: Protects repository metadata files and properly handles GPG signatures.
         
-        NO prefix matching, NO version parsing, NO "same package" logic. ONLY exact filename identity.
+        STRICT LOGIC:
+        1. Attempt to sync pacman database before cleanup
+        2. Extract EXACT filenames from newly generated database
+        3. For each package, add its signature file to valid_filenames
+        4. PROTECT repository metadata files from deletion
+        5. EXACT MATCH comparison: if vps_file_name NOT in valid_filenames, DELETE
+        6. ATOMIC execution: single SSH rm -f command for all orphaned files
+        
+        PROTECTED FILES (do NOT delete):
+        - .db, .db.tar.gz, .db.sig, .files, .files.tar.gz, .files.sig, .abs.tar.gz
         """
         print("\n" + "=" * 60)
-        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Exact Filename Matching")
+        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Exact Filename Matching (FIXED)")
         print("=" * 60)
+        
+        # RE-SYNC BEFORE CLEANUP: Attempt pacman sync
+        print("\n🔄 Attempting pacman sync before cleanup...")
+        try:
+            self._sync_pacman_databases()
+        except Exception as e:
+            logger.warning(f"⚠️ pacman sync failed before cleanup: {e}")
+            logger.info("Continuing with cleanup despite sync failure")
         
         # VALVE 1: Check if cleanup should run at all (only after successful operations)
         if not hasattr(self, '_upload_successful') or not self._upload_successful:
@@ -376,7 +389,7 @@ class PackageBuilder:
                 logger.error(f"❌ Unsupported database file format: {db_file}")
                 return
             
-            logger.info(f"✅ Database contains {len(valid_filenames)} valid package filenames")
+            logger.info(f"✅ Database contains {len(valid_filenames)} valid package filenames (including signatures)")
             
             # VALVE 2: CRITICAL - Must have at least one valid package in database
             if len(valid_filenames) == 0:
@@ -384,14 +397,27 @@ class PackageBuilder:
                 logger.error("   🚨 CLEANUP ABORTED - Database empty, potential data loss!")
                 return
             
+            # STEP 2: PROTECT REPOSITORY METADATA FILES
+            # Add repository metadata files to valid_filenames to protect them
+            protected_extensions = [
+                '.db', '.db.tar.gz', '.db.sig',
+                '.files', '.files.tar.gz', '.files.sig',
+                '.abs.tar.gz'
+            ]
+            
+            for ext in protected_extensions:
+                protected_file = f"{self.repo_name}{ext}"
+                valid_filenames.add(protected_file)
+                logger.debug(f"Protected repository file: {protected_file}")
+            
             # Log some sample valid filenames
             sample_filenames = list(valid_filenames)[:5]
-            logger.info(f"Sample valid filenames: {sample_filenames}")
+            logger.info(f"Sample valid filenames (including protected metadata): {sample_filenames}")
             
-            # STEP 2: Get COMPLETE inventory of all files on VPS
+            # STEP 3: Get COMPLETE inventory of all files on VPS
             logger.info("📋 Getting complete VPS file inventory...")
             remote_cmd = f"""
-            # Get all package files and signatures
+            # Get all package files and signatures (but not protected repository metadata)
             find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" \) 2>/dev/null
             """
             
@@ -422,14 +448,23 @@ class PackageBuilder:
                 vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
                 logger.info(f"Found {len(vps_files)} files on VPS")
                 
-                # STEP 3: EXACT MATCH COMPARISON - identify orphaned files
+                # STEP 4: EXACT MATCH COMPARISON - identify orphaned files
                 orphaned_files = []
                 for vps_file in vps_files:
                     # Extract just the filename from the full path
                     filename = Path(vps_file).name
                     
+                    # Check if this is a protected repository metadata file
+                    # (these should already be in valid_filenames, but double-check)
+                    is_protected = False
+                    for ext in protected_extensions:
+                        if filename == f"{self.repo_name}{ext}":
+                            is_protected = True
+                            logger.debug(f"Skipping protected repository file: {filename}")
+                            break
+                    
                     # EXACT MATCH CHECK: if filename NOT in valid_filenames, it's orphaned
-                    if filename not in valid_filenames:
+                    if not is_protected and filename not in valid_filenames:
                         orphaned_files.append(vps_file)
                         logger.info(f"🚨 Orphaned file identified: {filename}")
                 
@@ -437,11 +472,14 @@ class PackageBuilder:
                     logger.info("✅ No orphaned files found - VPS matches database exactly")
                     return
                 
-                # STEP 4: ATOMIC EXECUTION - delete all orphaned files in single command
+                # STEP 5: DEBUGGING - Log files to be deleted BEFORE running rm -f
                 logger.warning(f"🚨 Identified {len(orphaned_files)} orphaned files for deletion")
-                logger.warning(f"Orphaned files: {[Path(f).name for f in orphaned_files[:10]]}{'...' if len(orphaned_files) > 10 else ''}")
+                logger.warning("Files to be deleted:")
+                for orphaned_file in orphaned_files:
+                    filename = Path(orphaned_file).name
+                    logger.warning(f"   🗑️  {filename}")
                 
-                # Build single atomic delete command
+                # STEP 6: ATOMIC EXECUTION - delete all orphaned files in single command
                 if orphaned_files:
                     # Quote each filename for safety
                     quoted_files = [f"'{f}'" for f in orphaned_files]
