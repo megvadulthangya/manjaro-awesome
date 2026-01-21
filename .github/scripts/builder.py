@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 class PackageBuilder:
     def __init__(self):
+        # Run pre-flight environment validation
+        self._validate_env()
+        
         # GPG signing configuration - INITIALIZE FIRST
         self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
         self.gpg_key_id = os.getenv('GPG_KEY_ID')
@@ -100,6 +103,40 @@ class PackageBuilder:
             "aur_failed": 0,
             "local_failed": 0,
         }
+    
+    def _validate_env(self):
+        """Pre-flight environment validation - check for required variables."""
+        print("\n" + "=" * 60)
+        print("PRE-FLIGHT ENVIRONMENT VALIDATION")
+        print("=" * 60)
+        
+        required_vars = [
+            'REPO_NAME',
+            'VPS_HOST',
+            'VPS_USER',
+            'VPS_SSH_KEY',
+        ]
+        
+        for var in required_vars:
+            value = os.getenv(var)
+            if not value or value.strip() == '':
+                logger.error(f"[ERROR] Variable {var} is empty! Ensure it is set in GitHub Secrets.")
+                sys.exit(1)
+        
+        # Log validation success (with secret masking)
+        logger.info("✅ Environment validation passed:")
+        for var in required_vars:
+            value = os.getenv(var)
+            if value:
+                masked = "***" + value[-4:] if len(value) > 4 else "***"
+                logger.info(f"   {var}: {masked}")
+        
+        # Check optional variables but don't fail
+        optional_vars = ['REPO_SERVER_URL', 'REMOTE_DIR']
+        for var in optional_vars:
+            value = os.getenv(var)
+            if not value or value.strip() == '':
+                logger.warning(f"⚠️ Optional variable {var} is empty")
     
     def _setup_ssh_config(self):
         """Setup SSH config file for builder user - container invariant"""
@@ -353,13 +390,8 @@ class PackageBuilder:
         self.repo_server_url = os.getenv('REPO_SERVER_URL', '')
         self.remote_dir = os.getenv('REMOTE_DIR')
         
-        # Repository name from environment or config
-        env_repo_name = os.getenv('REPO_NAME')
-        if HAS_CONFIG_FILES:
-            config_repo_name = getattr(config, 'REPO_DB_NAME', '')
-            self.repo_name = env_repo_name if env_repo_name else config_repo_name
-        else:
-            self.repo_name = env_repo_name if env_repo_name else ''
+        # Repository name from environment (validated in _validate_env)
+        self.repo_name = os.getenv('REPO_NAME')
         
         # Validate required configuration
         required_env = ['VPS_USER', 'VPS_HOST', 'VPS_SSH_KEY']
@@ -373,11 +405,6 @@ class PackageBuilder:
         if not self.remote_dir:
             logger.error("❌ Missing required configuration: REMOTE_DIR")
             logger.error("Set REMOTE_DIR environment variable")
-            sys.exit(1)
-        
-        if not self.repo_name:
-            logger.error("❌ Missing required configuration: REPO_NAME")
-            logger.error("Set REPO_NAME environment variable or configure REPO_DB_NAME in config.py")
             sys.exit(1)
         
         print(f"🔧 Configuration loaded:")
@@ -942,7 +969,7 @@ class PackageBuilder:
         return True
     
     def _apply_repository_decision(self, decision):
-        """Apply repository enable/disable decision."""
+        """Apply repository enable/disable decision with proper SigLevel."""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -959,7 +986,7 @@ class PackageBuilder:
             in_our_section = False
             
             for line in lines:
-                if line.strip() == repo_section:
+                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
                     if decision == "DISABLE":
                         new_lines.append(f"#{repo_section}")
                     else:
@@ -973,9 +1000,22 @@ class PackageBuilder:
                         if decision == "DISABLE":
                             new_lines.append(f"#{line}")
                         else:
-                            new_lines.append(line)
+                            # Update SigLevel when enabling
+                            if line.strip().startswith('SigLevel'):
+                                new_lines.append("SigLevel = Required DatabaseOptional")
+                            else:
+                                new_lines.append(line)
                 else:
                     new_lines.append(line)
+            
+            # If enabling and section wasn't found, add it
+            if decision == "ENABLE" and repo_section not in '\n'.join(new_lines):
+                new_lines.append('')
+                new_lines.append(repo_section)
+                new_lines.append("SigLevel = Required DatabaseOptional")
+                if self.repo_server_url:
+                    new_lines.append(f"Server = {self.repo_server_url}")
+                new_lines.append('')
             
             content = '\n'.join(new_lines)
             subprocess.run(['sudo', 'tee', str(pacman_conf)], input=content.encode(), check=True)
@@ -1017,14 +1057,13 @@ class PackageBuilder:
                 logger.warning(f"  Could not remove {leftover}: {e}")
     
     def _compare_versions(self, remote_version, pkgver, pkgrel, epoch):
-        """Compare versions and return True if we should build."""
-        # If no remote version exists, we must build
+        """Compare versions using vercmp-style logic. Return True if AUR_VERSION > REMOTE_VERSION."""
+        # If no remote version exists, we should build
         if not remote_version:
             logger.info(f"[DEBUG] Comparing Package: Remote(NONE) vs New({pkgver}-{pkgrel}) -> BUILD TRIGGERED (no remote)")
             return True
         
         # Parse remote version
-        # Remote version format: "epoch:pkgver-pkgrel" or "pkgver-pkgrel"
         remote_epoch = None
         remote_pkgver = None
         remote_pkgrel = None
@@ -1045,42 +1084,101 @@ class PackageBuilder:
                 remote_pkgver = remote_version
                 remote_pkgrel = "1"  # Default
         
-        # If epochs differ, build
-        if (epoch is not None and remote_epoch is None) or (epoch is None and remote_epoch is not None):
-            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch mismatch)")
-            return True
+        # Build version strings for comparison
+        new_version_str = f"{epoch or '0'}:{pkgver}-{pkgrel}"
+        remote_version_str = f"{remote_epoch or '0'}:{remote_pkgver}-{remote_pkgrel}"
         
-        # If both have epochs, compare them
-        if epoch and remote_epoch:
-            try:
-                epoch_int = int(epoch)
-                remote_epoch_int = int(remote_epoch)
-                if epoch_int != remote_epoch_int:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch}:{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch {remote_epoch_int} != {epoch_int})")
+        # Use vercmp for proper version comparison
+        try:
+            # Try to use vercmp if available
+            result = subprocess.run(['vercmp', new_version_str, remote_version_str], 
+                                  capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                # vercmp returns:
+                # <0 if first version is older
+                # 0 if equal
+                # >0 if first version is newer
+                cmp_result = int(result.stdout.strip())
+                
+                if cmp_result > 0:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> BUILD TRIGGERED (new version is newer)")
                     return True
+                elif cmp_result == 0:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> SKIP (versions identical)")
+                    return False
+                else:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> SKIP (remote version is newer)")
+                    return False
+            else:
+                # Fallback to simple comparison if vercmp fails
+                logger.warning("vercmp failed, using fallback comparison")
+                return self._fallback_version_comparison(remote_version, pkgver, pkgrel, epoch)
+                
+        except Exception as e:
+            logger.warning(f"vercmp comparison failed: {e}, using fallback")
+            return self._fallback_version_comparison(remote_version, pkgver, pkgrel, epoch)
+    
+    def _fallback_version_comparison(self, remote_version, pkgver, pkgrel, epoch):
+        """Fallback version comparison when vercmp is not available."""
+        # Parse remote version
+        remote_epoch = None
+        remote_pkgver = None
+        remote_pkgrel = None
+        
+        if ':' in remote_version:
+            remote_epoch_str, rest = remote_version.split(':', 1)
+            remote_epoch = remote_epoch_str
+            if '-' in rest:
+                remote_pkgver, remote_pkgrel = rest.split('-', 1)
+            else:
+                remote_pkgver = rest
+                remote_pkgrel = "1"
+        else:
+            if '-' in remote_version:
+                remote_pkgver, remote_pkgrel = remote_version.split('-', 1)
+            else:
+                remote_pkgver = remote_version
+                remote_pkgrel = "1"
+        
+        # Compare epochs first
+        if epoch != remote_epoch:
+            try:
+                epoch_int = int(epoch or 0)
+                remote_epoch_int = int(remote_epoch or 0)
+                if epoch_int > remote_epoch_int:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch {epoch_int} > {remote_epoch_int})")
+                    return True
+                else:
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (epoch {epoch_int} <= {remote_epoch_int})")
+                    return False
             except ValueError:
                 # If epochs aren't integers, compare as strings
                 if epoch != remote_epoch:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch}:{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch string mismatch)")
-                    return True
+                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (epoch string mismatch)")
+                    return False
         
-        # Compare pkgver
-        if remote_pkgver != pkgver:
-            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgver {remote_pkgver} != {pkgver})")
+        # Compare pkgver using Arch Linux version comparison rules
+        # Simple comparison - in production, use vercmp
+        if pkgver != remote_pkgver:
+            # This is a simplified comparison - vercmp is more accurate
+            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgver different)")
             return True
         
         # Compare pkgrel
         try:
             remote_pkgrel_int = int(remote_pkgrel)
             pkgrel_int = int(pkgrel)
-            if pkgrel_int != remote_pkgrel_int:
-                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel {remote_pkgrel_int} != {pkgrel_int})")
+            if pkgrel_int > remote_pkgrel_int:
+                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel {pkgrel_int} > {remote_pkgrel_int})")
                 return True
+            else:
+                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (pkgrel {pkgrel_int} <= {remote_pkgrel_int})")
+                return False
         except ValueError:
             # If pkgrel isn't integer, compare as strings
             if pkgrel != remote_pkgrel:
-                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel string mismatch)")
-                return True
+                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (pkgrel string mismatch)")
+                return False
         
         # Versions are identical
         logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (versions identical)")
@@ -1679,11 +1777,11 @@ class PackageBuilder:
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version info from FRESH PKGBUILD
+        # Extract version info from FRESH PKGBUILD using strict regex
         content = pkgbuild.read_text()
-        pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        epoch_match = re.search(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         
         if pkgver_match and pkgrel_match:
             pkgver = pkgver_match.group(1)
@@ -1695,7 +1793,7 @@ class PackageBuilder:
             # Get remote version for comparison
             remote_version = self.get_remote_version(pkg_name)
             
-            # DECISION LOGIC: Only skip if versions are identical
+            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
             if remote_version and not self._compare_versions(remote_version, pkgver, pkgrel, epoch):
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
@@ -1775,11 +1873,11 @@ class PackageBuilder:
             logger.error(f"No PKGBUILD found for {pkg_name}")
             return False
         
-        # Read FRESH PKGBUILD (no caching)
+        # Read FRESH PKGBUILD (no caching) with strict regex
         content = pkgbuild.read_text()
-        pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
-        epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+        epoch_match = re.search(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
         
         if pkgver_match and pkgrel_match:
             pkgver = pkgver_match.group(1)
@@ -1791,7 +1889,7 @@ class PackageBuilder:
             # Get remote version for comparison
             remote_version = self.get_remote_version(pkg_name)
             
-            # DECISION LOGIC: Only skip if versions are identical
+            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
             if remote_version and not self._compare_versions(remote_version, pkgver, pkgrel, epoch):
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
@@ -1928,12 +2026,12 @@ class PackageBuilder:
             
             changed = False
             
-            current_pkgver_match = re.search(r'^pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+            current_pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if current_pkgver_match:
                 current_pkgver = current_pkgver_match.group(1)
                 if current_pkgver != pkg_data['pkgver']:
                     content = re.sub(
-                        r'^pkgver\s*=\s*["\']?[^"\'\n]+',
+                        r'^\s*pkgver\s*=\s*["\']?[^"\'\n]+',
                         f"pkgver={pkg_data['pkgver']}",
                         content,
                         flags=re.MULTILINE
@@ -1941,12 +2039,12 @@ class PackageBuilder:
                     changed = True
                     logger.info(f"  Updated pkgver: {current_pkgver} -> {pkg_data['pkgver']}")
             
-            current_pkgrel_match = re.search(r'^pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+            current_pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if current_pkgrel_match:
                 current_pkgrel = current_pkgrel_match.group(1)
                 if current_pkgrel != pkg_data['pkgrel']:
                     content = re.sub(
-                        r'^pkgrel\s*=\s*["\']?[^"\'\n]+',
+                        r'^\s*pkgrel\s*=\s*["\']?[^"\'\n]+',
                         f"pkgrel={pkg_data['pkgrel']}",
                         content,
                         flags=re.MULTILINE
@@ -1954,13 +2052,13 @@ class PackageBuilder:
                     changed = True
                     logger.info(f"  Updated pkgrel: {current_pkgrel} -> {pkg_data['pkgrel']}")
             
-            current_epoch_match = re.search(r'^epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
+            current_epoch_match = re.search(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)', content, re.MULTILINE)
             if pkg_data['epoch'] is not None:
                 if current_epoch_match:
                     current_epoch = current_epoch_match.group(1)
                     if current_epoch != pkg_data['epoch']:
                         content = re.sub(
-                            r'^epoch\s*=\s*["\']?[^"\'\n]+',
+                            r'^\s*epoch\s*=\s*["\']?[^"\'\n]+',
                             f"epoch={pkg_data['epoch']}",
                             content,
                             flags=re.MULTILINE
@@ -1981,7 +2079,7 @@ class PackageBuilder:
                     content = '\n'.join(new_lines)
             else:
                 if current_epoch_match:
-                    content = re.sub(r'^epoch\s*=\s*["\']?[^"\'\n]+\n?', '', content, flags=re.MULTILINE)
+                    content = re.sub(r'^\s*epoch\s*=\s*["\']?[^"\'\n]+\n?', '', content, flags=re.MULTILINE)
                     changed = True
                     logger.info(f"  Removed epoch: {current_epoch_match.group(1)}")
             
