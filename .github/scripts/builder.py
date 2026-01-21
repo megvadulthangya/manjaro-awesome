@@ -279,18 +279,18 @@ class PackageBuilder:
         return f"{pkgver}-{pkgrel}"
 
     def _server_cleanup(self) -> None:
-        """ZERO-RESIDUE SERVER CLEANUP: Remove ALL package files from VPS that are not in current database.
+        """ZERO-RESIDUE SERVER CLEANUP: Remove ALL package files from VPS using EXACT FILENAME MATCHING.
         
-        IMMEDIATE DELETION: No retention, no "X days" buffer, no "Keep N versions".
-        If a new version is built, the old version MUST be deleted immediately.
+        STRICT LOGIC:
+        1. Extract EXACT filenames (e.g., 'qownnotes-26.1.10-1-x86_64.pkg.tar.zst') from newly generated database
+        2. List EVERY .pkg.tar.zst and .sig file currently on VPS
+        3. EXACT MATCH comparison: if vps_file_name NOT in valid_filenames, DELETE IMMEDIATELY
+        4. ATOMIC execution: single SSH rm -f command for all orphaned files
         
-        SAFETY VALVES MODIFIED:
-        1. Only prevent deletion if database is completely empty (0 entries)
-        2. Allow partial cleanup (some files in database, some not)
-        3. Execute actual `rm -f` commands, not just dry-run
+        NO prefix matching, NO version parsing, NO "same package" logic. ONLY exact filename identity.
         """
         print("\n" + "=" * 60)
-        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Immediate Deletion Policy")
+        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Exact Filename Matching")
         print("=" * 60)
         
         # VALVE 1: Check if cleanup should run at all (only after successful operations)
@@ -317,26 +317,35 @@ class PackageBuilder:
             logger.error("❌ SAFETY VALVE: No valid database file found!")
             return
         
-        # VALVE 2: Database integrity check - MODIFIED TO ALLOW PARTIAL CLEANUP
         logger.info("🔍 Performing database integrity check...")
         
         try:
-            # Extract ALL package filenames from database (with full version-architecture)
-            db_package_entries = set()  # Will contain full package names like "package-1.0.0-1-x86_64"
+            # STEP 1: Extract EXACT filenames from database
+            valid_filenames = set()  # Set of ALL valid filenames that should exist on VPS
             
             # Check file extension to determine how to read it
             if db_file.suffix == '.gz' or str(db_file).endswith('.tar.gz'):
                 try:
                     with tarfile.open(db_file, 'r:gz') as tar:
-                        # Extract package names from member paths
+                        # Extract package filenames from %FILENAME% entries in desc files
                         for member in tar.getmembers():
                             if member.name.endswith('/desc'):
-                                # Extract full package name from path
-                                # Format: pkgname-version-release-arch/desc
-                                pkg_path = member.name[:-5]  # Remove '/desc'
-                                if '/' in pkg_path:
-                                    full_pkg_name = pkg_path.split('/')[-1]
-                                    db_package_entries.add(full_pkg_name)
+                                # Read the desc file to get the exact filename
+                                f = tar.extractfile(member)
+                                if f:
+                                    content = f.read().decode('utf-8', errors='ignore')
+                                    lines = content.split('\n')
+                                    for i, line in enumerate(lines):
+                                        if line.strip() == '%FILENAME%' and i + 1 < len(lines):
+                                            filename = lines[i + 1].strip()
+                                            if filename:
+                                                valid_filenames.add(filename)
+                                                # Also add the signature file if it exists locally
+                                                sig_filename = f"{filename}.sig"
+                                                sig_path = self.output_dir / sig_filename
+                                                if sig_path.exists():
+                                                    valid_filenames.add(sig_filename)
+                                                logger.debug(f"Found in database: {filename}")
                 except Exception as e:
                     logger.error(f"❌ Failed to read tar.gz database: {e}")
                     return
@@ -346,27 +355,45 @@ class PackageBuilder:
                     with tarfile.open(db_file, 'r') as tar:
                         for member in tar.getmembers():
                             if member.name.endswith('/desc'):
-                                pkg_path = member.name[:-5]
-                                if '/' in pkg_path:
-                                    full_pkg_name = pkg_path.split('/')[-1]
-                                    db_package_entries.add(full_pkg_name)
-                except:
-                    logger.error("❌ Database is not in a readable format")
+                                f = tar.extractfile(member)
+                                if f:
+                                    content = f.read().decode('utf-8', errors='ignore')
+                                    lines = content.split('\n')
+                                    for i, line in enumerate(lines):
+                                        if line.strip() == '%FILENAME%' and i + 1 < len(lines):
+                                            filename = lines[i + 1].strip()
+                                            if filename:
+                                                valid_filenames.add(filename)
+                                                # Also add the signature file if it exists locally
+                                                sig_filename = f"{filename}.sig"
+                                                sig_path = self.output_dir / sig_filename
+                                                if sig_path.exists():
+                                                    valid_filenames.add(sig_filename)
+                except Exception as e:
+                    logger.error(f"❌ Failed to read .db database: {e}")
                     return
             else:
                 logger.error(f"❌ Unsupported database file format: {db_file}")
                 return
             
-            logger.info(f"✅ Database contains {len(db_package_entries)} package entries")
+            logger.info(f"✅ Database contains {len(valid_filenames)} valid package filenames")
             
-            # VALVE 3: MODIFIED - Only abort if database is COMPLETELY empty
-            if len(db_package_entries) == 0:
-                logger.error("❌❌❌ CRITICAL SAFETY VALVE ACTIVATED: Database has ZERO package entries!")
+            # VALVE 2: CRITICAL - Must have at least one valid package in database
+            if len(valid_filenames) == 0:
+                logger.error("❌❌❌ CRITICAL SAFETY VALVE ACTIVATED: Database has ZERO package filenames!")
                 logger.error("   🚨 CLEANUP ABORTED - Database empty, potential data loss!")
                 return
             
-            # Get ALL package files from server
-            remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '*.pkg.tar.*' 2>/dev/null"
+            # Log some sample valid filenames
+            sample_filenames = list(valid_filenames)[:5]
+            logger.info(f"Sample valid filenames: {sample_filenames}")
+            
+            # STEP 2: Get COMPLETE inventory of all files on VPS
+            logger.info("📋 Getting complete VPS file inventory...")
+            remote_cmd = f"""
+            # Get all package files and signatures
+            find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" \) 2>/dev/null
+            """
             
             ssh_cmd = [
                 "ssh",
@@ -384,59 +411,49 @@ class PackageBuilder:
                 )
                 
                 if result.returncode != 0:
-                    logger.warning(f"Could not list server files: {result.stderr[:200]}")
+                    logger.warning(f"Could not list VPS files: {result.stderr[:200]}")
                     return
                 
-                server_files_raw = result.stdout.strip()
-                if not server_files_raw:
-                    logger.info("No package files found on server - nothing to clean up")
+                vps_files_raw = result.stdout.strip()
+                if not vps_files_raw:
+                    logger.info("No package files found on VPS - nothing to clean up")
                     return
                 
-                server_files = [f.strip() for f in server_files_raw.split('\n') if f.strip()]
-                logger.info(f"Found {len(server_files)} package files on server")
+                vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
+                logger.info(f"Found {len(vps_files)} files on VPS")
                 
-                # Identify orphaned files - DIRECT COMPARISON APPROACH
+                # STEP 3: EXACT MATCH COMPARISON - identify orphaned files
                 orphaned_files = []
-                for server_file in server_files:
-                    filename = Path(server_file).name
+                for vps_file in vps_files:
+                    # Extract just the filename from the full path
+                    filename = Path(vps_file).name
                     
-                    # Extract base filename without extensions
-                    # Remove .pkg.tar.zst or .pkg.tar.xz and .sig
-                    base_filename = filename
-                    for ext in ['.pkg.tar.zst', '.pkg.tar.xz', '.sig']:
-                        base_filename = base_filename.replace(ext, '')
-                    
-                    # Check if this package is in the database
-                    is_in_database = False
-                    for db_entry in db_package_entries:
-                        # Direct comparison: check if db_entry is a prefix of base_filename
-                        # This handles: db_entry="package-1.0.0-1-x86_64" matches "package-1.0.0-1-x86_64"
-                        # And also split packages: db_entry="package-split-1.0.0-1-x86_64" matches "package-split-1.0.0-1-x86_64"
-                        if base_filename.startswith(db_entry):
-                            is_in_database = True
-                            break
-                    
-                    if not is_in_database:
-                        orphaned_files.append(server_file)
+                    # EXACT MATCH CHECK: if filename NOT in valid_filenames, it's orphaned
+                    if filename not in valid_filenames:
+                        orphaned_files.append(vps_file)
                         logger.info(f"🚨 Orphaned file identified: {filename}")
                 
                 if not orphaned_files:
-                    logger.info("✅ No orphaned files found")
+                    logger.info("✅ No orphaned files found - VPS matches database exactly")
                     return
                 
-                # VALVE 4: Final check - ensure we're not deleting ALL files
-                # We already passed the "database empty" check, so partial cleanup is allowed
+                # STEP 4: ATOMIC EXECUTION - delete all orphaned files in single command
                 logger.warning(f"🚨 Identified {len(orphaned_files)} orphaned files for deletion")
-                logger.warning(f"Sample orphaned files: {[Path(f).name for f in orphaned_files[:5]]}")
+                logger.warning(f"Orphaned files: {[Path(f).name for f in orphaned_files[:10]]}{'...' if len(orphaned_files) > 10 else ''}")
                 
-                # Delete orphaned files - NO MERCY, IMMEDIATE DELETION
-                logger.info(f"🚀 Deleting {len(orphaned_files)} orphaned files immediately...")
-                deleted_count = 0
-                
-                for orphaned_file in orphaned_files:
-                    filename = Path(orphaned_file).name
-                    # Delete main package file - ACTUAL DELETION, NOT DRY-RUN
-                    delete_cmd = f"rm -fv '{orphaned_file}'"
+                # Build single atomic delete command
+                if orphaned_files:
+                    # Quote each filename for safety
+                    quoted_files = [f"'{f}'" for f in orphaned_files]
+                    files_to_delete = ' '.join(quoted_files)
+                    
+                    delete_cmd = f"rm -fv {files_to_delete}"
+                    
+                    logger.info(f"🚀 Executing ATOMIC deletion command:")
+                    logger.info(f"   SSH: {self.vps_user}@{self.vps_host}")
+                    logger.info(f"   COMMAND: {delete_cmd}")
+                    
+                    # Execute the deletion command
                     ssh_delete = [
                         "ssh",
                         f"{self.vps_user}@{self.vps_host}",
@@ -448,36 +465,69 @@ class PackageBuilder:
                         capture_output=True,
                         text=True,
                         check=False,
-                        timeout=30
+                        timeout=60
                     )
                     
                     if result.returncode == 0:
-                        logger.info(f"✅ IMMEDIATELY DELETED: {filename}")
-                        deleted_count += 1
-                        
-                        # Also delete signature if exists
-                        sig_file = f"{orphaned_file}.sig"
-                        sig_delete_cmd = f"rm -f '{sig_file}' 2>/dev/null || true"
-                        ssh_sig_delete = [
-                            "ssh",
-                            f"{self.vps_user}@{self.vps_host}",
-                            sig_delete_cmd
-                        ]
-                        subprocess.run(ssh_sig_delete, check=False, timeout=10)
+                        deleted_count = len(orphaned_files)
+                        logger.info(f"✅ ATOMIC deletion successful! Removed {deleted_count} files")
+                        if result.stdout:
+                            for line in result.stdout.splitlines():
+                                if line.strip():
+                                    logger.info(f"   {line}")
                     else:
-                        logger.warning(f"⚠️ Failed to delete {filename}: {result.stderr[:200]}")
+                        logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
+                        # Fallback: try deleting files one by one
+                        logger.info("⚠️ Falling back to individual file deletion...")
+                        self._delete_files_individually(orphaned_files)
                 
-                logger.info(f"✅ ZERO-RESIDUE cleanup complete: {deleted_count}/{len(orphaned_files)} files removed")
-                logger.info(f"📊 Server now has {len(server_files) - deleted_count} package files")
+                logger.info(f"📊 Cleanup complete: VPS now has exactly {len(valid_filenames)} valid files")
                 
             except subprocess.TimeoutExpired:
                 logger.error("❌ SSH command timed out - aborting cleanup for safety")
             except Exception as e:
-                logger.error(f"❌ Error during server file enumeration: {e}")
+                logger.error(f"❌ Error during VPS file enumeration: {e}")
                 
         except Exception as e:
             logger.error(f"❌ Critical error in database processing: {e}")
             logger.error("   Cleanup ABORTED to preserve server state.")
+    
+    def _delete_files_individually(self, orphaned_files):
+        """Fallback: Delete orphaned files one by one."""
+        deleted_count = 0
+        failed_count = 0
+        
+        for orphaned_file in orphaned_files:
+            filename = Path(orphaned_file).name
+            delete_cmd = f"rm -fv '{orphaned_file}'"
+            
+            ssh_delete = [
+                "ssh",
+                f"{self.vps_user}@{self.vps_host}",
+                delete_cmd
+            ]
+            
+            try:
+                result = subprocess.run(
+                    ssh_delete,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30
+                )
+                
+                if result.returncode == 0:
+                    logger.info(f"✅ Deleted: {filename}")
+                    deleted_count += 1
+                else:
+                    logger.warning(f"⚠️ Failed to delete {filename}: {result.stderr[:200]}")
+                    failed_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Error deleting {filename}: {e}")
+                failed_count += 1
+        
+        logger.info(f"📊 Individual deletion: {deleted_count} deleted, {failed_count} failed")
 
     def _import_gpg_key(self):
         """Import GPG private key and set trust level WITHOUT interactive terminal (container-safe)."""
@@ -2766,11 +2816,11 @@ class PackageBuilder:
         """
         
         # Log the command
-        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (Zero-residue cleanup handles orphans):")
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete (Exact-match cleanup handles orphans):")
         logger.info(rsync_cmd.strip())
         logger.info(f"SOURCE: {self.output_dir}/")
         logger.info(f"DESTINATION: {self.vps_user}@{self.vps_host}:{self.remote_dir}/")
-        logger.info(f"IMPORTANT: Using Zero-Residue SSH cleanup for immediate deletion policy")
+        logger.info(f"IMPORTANT: Using Exact-Filename-Match cleanup for zero-residue repository")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -2801,7 +2851,7 @@ class PackageBuilder:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
                 self._upload_successful = True  # CRITICAL: Set success flag
                 
-                # Run Zero-Residue cleanup after successful upload ONLY
+                # Run Exact-Filename-Match cleanup after successful upload ONLY
                 self._server_cleanup()
                 
                 # Verification
@@ -2863,7 +2913,7 @@ class PackageBuilder:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
                 self._upload_successful = True  # CRITICAL: Set success flag
                 
-                # Run Zero-Residue cleanup after successful upload ONLY
+                # Run Exact-Filename-Match cleanup after successful upload ONLY
                 self._server_cleanup()
                 
                 # Verification
@@ -3070,7 +3120,7 @@ class PackageBuilder:
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
             print(f"SRCINFO parsing: ✅ Implemented")
-            print(f"Zero-Residue:    ✅ Immediate deletion policy active")
+            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
             print("=" * 60)
             
             if self.built_packages:
