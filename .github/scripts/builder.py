@@ -534,7 +534,7 @@ class PackageBuilder:
                 active_files_path.unlink()
 
     def _import_gpg_key(self):
-        """Import GPG private key and set trust level WITH PACMAN-KEY LOCAL SIGNING."""
+        """Import GPG private key and set trust level WITH PACMAN-KEY LOCAL SIGNING (with sudo)."""
         if not self.gpg_enabled:
             logger.info("GPG Key not detected. Skipping repository signing.")
             return False
@@ -618,7 +618,7 @@ class PackageBuilder:
                                 logger.info(f"✅ Set ultimate trust for key fingerprint: {fingerprint[:16]}...")
                             break
             
-            # CRITICAL FIX: Export public key and add to pacman-key with local signing
+            # CRITICAL FIX: Export public key and add to pacman-key with local signing (using sudo)
             if fingerprint:
                 try:
                     # Export public key to a temporary file
@@ -633,10 +633,10 @@ class PackageBuilder:
                         pub_key_file.write(export_process.stdout)
                         pub_key_path = pub_key_file.name
                     
-                    # Add to pacman-key
+                    # Add to pacman-key WITH SUDO
                     logger.info(f"Adding GPG key to pacman-key: {fingerprint[:16]}...")
                     add_process = subprocess.run(
-                        ['pacman-key', '--add', pub_key_path],
+                        ['sudo', 'pacman-key', '--add', pub_key_path],
                         capture_output=True,
                         text=True,
                         check=False
@@ -647,10 +647,10 @@ class PackageBuilder:
                     else:
                         logger.info("✅ Key added to pacman-key")
                     
-                    # Locally sign the key (disables interactive prompt)
+                    # Locally sign the key (disables interactive prompt) WITH SUDO
                     logger.info(f"Locally signing GPG key: {fingerprint[:16]}...")
                     lsign_process = subprocess.run(
-                        ['pacman-key', '--lsign-key', fingerprint],
+                        ['sudo', 'pacman-key', '--lsign-key', fingerprint],
                         capture_output=True,
                         text=True,
                         check=False
@@ -660,7 +660,7 @@ class PackageBuilder:
                         logger.error(f"Failed to locally sign key: {lsign_process.stderr}")
                         # Try alternative: sign with key ID instead of fingerprint
                         lsign_process = subprocess.run(
-                            ['pacman-key', '--lsign-key', self.gpg_key_id],
+                            ['sudo', 'pacman-key', '--lsign-key', self.gpg_key_id],
                             capture_output=True,
                             text=True,
                             check=False
@@ -1352,7 +1352,7 @@ class PackageBuilder:
             logger.info("Ensuring GPG key is trusted by pacman-key...")
             try:
                 # Check if key is already known to pacman-key
-                check_cmd = f"pacman-key --list-keys {self.gpg_key_id} 2>/dev/null | grep -q '{self.gpg_key_id}'"
+                check_cmd = f"sudo pacman-key --list-keys {self.gpg_key_id} 2>/dev/null | grep -q '{self.gpg_key_id}'"
                 result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
                     logger.warning(f"GPG key {self.gpg_key_id} not found in pacman-key, attempting to re-add...")
@@ -1735,7 +1735,7 @@ class PackageBuilder:
             sys.exit(1)
     
     def _install_dependencies_strict(self, deps):
-        """STRICT dependency resolution: pacman first, then yay. FIXED: Remove 'lgi' if 'lua-lgi' is present."""
+        """STRICT dependency resolution: pacman first, then yay. FIXED: Handle phantom package 'lgi'."""
         if not deps:
             return True
         
@@ -1744,27 +1744,36 @@ class PackageBuilder:
         
         # Clean dependency names - more robust cleaning
         clean_deps = []
+        phantom_packages = set()
+        
         for dep in deps:
             dep_clean = re.sub(r'[<=>].*', '', dep).strip()
             # Remove any empty strings or strings with only special characters
             if dep_clean and dep_clean.strip() and not any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
                 # Ensure the dependency name is valid (contains alphanumeric chars)
                 if re.search(r'[a-zA-Z0-9]', dep_clean):
+                    # Check if this is a known phantom package
+                    if dep_clean == 'lgi':
+                        phantom_packages.add('lgi')
+                        logger.warning(f"⚠️ Found phantom package 'lgi' - will be replaced with 'lua-lgi'")
+                        continue
                     clean_deps.append(dep_clean)
+        
+        # Remove any duplicate entries
+        clean_deps = list(dict.fromkeys(clean_deps))
+        
+        # FIX: If we removed 'lgi', ensure 'lua-lgi' is present
+        if 'lgi' in phantom_packages and 'lua-lgi' not in clean_deps:
+            logger.info("Adding 'lua-lgi' to replace phantom package 'lgi'")
+            clean_deps.append('lua-lgi')
         
         if not clean_deps:
             logger.info("No valid dependencies to install after cleaning")
             return True
         
-        # FIX: Remove 'lgi' if 'lua-lgi' is present (phantom package issue)
-        if 'lua-lgi' in clean_deps and 'lgi' in clean_deps:
-            logger.info("FIX: Removing phantom package 'lgi' since 'lua-lgi' is present")
-            clean_deps = [d for d in clean_deps if d != 'lgi']
-        
-        # Also remove any duplicate entries
-        clean_deps = list(dict.fromkeys(clean_deps))
-        
         logger.info(f"Valid dependencies to install: {clean_deps}")
+        if phantom_packages:
+            logger.info(f"Phantom packages removed: {', '.join(phantom_packages)}")
         
         # STEP 0: Sync pacman database first to prevent "could not register '' database" error
         print("STEP 0: Syncing pacman database...")
