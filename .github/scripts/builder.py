@@ -389,8 +389,8 @@ class PackageBuilder:
         print(f"   Config files loaded: {HAS_CONFIG_FILES}")
         print(f"   GPG signing: {'ENABLED' if self.gpg_enabled else 'DISABLED'}")
     
-    def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False):
-        """Run command with comprehensive logging."""
+    def run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False, timeout=1800):
+        """Run command with comprehensive logging and timeout."""
         if log_cmd:
             logger.info(f"RUNNING COMMAND: {cmd}")
         
@@ -401,6 +401,7 @@ class PackageBuilder:
             env = os.environ.copy()
             env['HOME'] = f'/home/{user}'
             env['USER'] = user
+            env['LC_ALL'] = 'C'  # Set LC_ALL to C for consistent output
             
             try:
                 sudo_cmd = ['sudo', '-u', user]
@@ -414,7 +415,8 @@ class PackageBuilder:
                     capture_output=capture,
                     text=True,
                     check=check,
-                    env=env
+                    env=env,
+                    timeout=timeout
                 )
                 if log_cmd:
                     if result.stdout:
@@ -423,6 +425,13 @@ class PackageBuilder:
                         logger.info(f"STDERR: {result.stderr[:500]}")
                     logger.info(f"EXIT CODE: {result.returncode}")
                 return result
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                if capture and e.stdout:
+                    logger.error(f"Partial stdout: {e.stdout.decode('utf-8', errors='ignore')[:500]}")
+                if capture and e.stderr:
+                    logger.error(f"Partial stderr: {e.stderr.decode('utf-8', errors='ignore')[:500]}")
+                raise
             except subprocess.CalledProcessError as e:
                 if log_cmd:
                     logger.error(f"Command failed: {cmd}")
@@ -436,13 +445,18 @@ class PackageBuilder:
                 return e
         else:
             try:
+                env = os.environ.copy()
+                env['LC_ALL'] = 'C'  # Set LC_ALL to C for consistent output
+                
                 result = subprocess.run(
                     cmd,
                     cwd=cwd,
                     shell=shell,
                     capture_output=capture,
                     text=True,
-                    check=check
+                    check=check,
+                    env=env,
+                    timeout=timeout
                 )
                 if log_cmd:
                     if result.stdout:
@@ -451,6 +465,13 @@ class PackageBuilder:
                         logger.info(f"STDERR: {result.stderr[:500]}")
                     logger.info(f"EXIT CODE: {result.returncode}")
                 return result
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                if capture and e.stdout:
+                    logger.error(f"Partial stdout: {e.stdout.decode('utf-8', errors='ignore')[:500]}")
+                if capture and e.stderr:
+                    logger.error(f"Partial stderr: {e.stderr.decode('utf-8', errors='ignore')[:500]}")
+                raise
             except subprocess.CalledProcessError as e:
                 if log_cmd:
                     logger.error(f"Command failed: {cmd}")
@@ -910,8 +931,8 @@ class PackageBuilder:
         print("FINAL STEP: Syncing pacman databases (sudo pacman -Sy --noconfirm)")
         print("=" * 60)
         
-        cmd = "sudo pacman -Sy --noconfirm"
-        result = self.run_cmd(cmd, log_cmd=True)
+        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        result = self.run_cmd(cmd, log_cmd=True, timeout=300)
         
         if result.returncode != 0:
             logger.error("❌ Failed to sync pacman databases")
@@ -1132,41 +1153,94 @@ class PackageBuilder:
         print(f"\nInstalling {len(deps)} dependencies...")
         logger.info(f"Dependencies to install: {deps}")
         
-        # Clean dependency names
+        # Clean dependency names - more robust cleaning
         clean_deps = []
         for dep in deps:
             dep_clean = re.sub(r'[<=>].*', '', dep).strip()
-            if dep_clean and not any(x in dep_clean for x in ['$', '{', '}']):
-                clean_deps.append(dep_clean)
+            # Remove any empty strings or strings with only special characters
+            if dep_clean and dep_clean.strip() and not any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
+                # Ensure the dependency name is valid (contains alphanumeric chars)
+                if re.search(r'[a-zA-Z0-9]', dep_clean):
+                    clean_deps.append(dep_clean)
         
         if not clean_deps:
+            logger.info("No valid dependencies to install after cleaning")
             return True
         
+        logger.info(f"Valid dependencies to install: {clean_deps}")
+        
+        # STEP 0: Sync pacman database first to prevent "could not register '' database" error
+        print("STEP 0: Syncing pacman database...")
+        sync_cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        sync_result = self.run_cmd(sync_cmd, log_cmd=True, check=False, timeout=300)
+        
+        if sync_result.returncode != 0:
+            logger.warning(f"⚠️ pacman -Sy failed: {sync_result.stderr[:200] if sync_result.stderr else 'No error message'}")
+            # Continue anyway, as the database might still work
+        
         # STEP 1: Try system packages FIRST with sudo
-        print("STEP 1: Trying pacman (sudo)...")
+        print(f"STEP 1: Trying pacman (sudo) for {len(clean_deps)} dependencies...")
         deps_str = ' '.join(clean_deps)
-        cmd = f"sudo pacman -S --needed --noconfirm {deps_str}"
-        result = self.run_cmd(cmd, log_cmd=True, check=False)
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
+        result = self.run_cmd(cmd, log_cmd=True, check=False, timeout=1200)  # 20 minute timeout for large deps
         
         if result.returncode == 0:
             logger.info("✅ All dependencies installed via pacman")
             return True
         
-        logger.warning(f"⚠️ pacman failed for some dependencies, trying yay...")
+        logger.warning(f"⚠️ pacman failed for some dependencies (exit code: {result.returncode})")
+        if result.stderr:
+            stderr_preview = result.stderr[:500]
+            logger.warning(f"pacman stderr preview: {stderr_preview}")
         
         # STEP 2: Fallback to AUR (yay) WITHOUT sudo
-        print("STEP 2: Trying yay (without sudo)...")
-        cmd = f"yay -S --needed --noconfirm {deps_str}"
-        result = self.run_cmd(cmd, log_cmd=True, check=False, user="builder")
+        print(f"STEP 2: Trying yay (without sudo) for {len(clean_deps)} dependencies...")
+        cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+        result = self.run_cmd(cmd, log_cmd=True, check=False, user="builder", timeout=1800)  # 30 minute timeout for AUR
         
         if result.returncode == 0:
             logger.info("✅ Dependencies installed via yay")
             return True
         
-        # STEP 3: Failure handling - mark as failed but continue
-        logger.error(f"❌ Failed to install dependencies: {deps}")
-        print(f"Failed dependencies: {deps}")
-        return False
+        # STEP 3: Try to install dependencies one by one to identify which ones fail
+        logger.error(f"❌ Both pacman and yay failed for dependencies")
+        
+        # Try installing one by one as a last resort
+        print("STEP 3: Trying to install dependencies one by one...")
+        success_count = 0
+        failed_deps = []
+        
+        for dep in clean_deps:
+            print(f"  Trying to install: {dep}")
+            
+            # Try pacman first
+            cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {dep}"
+            result = self.run_cmd(cmd, log_cmd=False, check=False, timeout=300)
+            
+            if result.returncode == 0:
+                success_count += 1
+                logger.info(f"  ✅ Installed {dep} via pacman")
+                continue
+            
+            # Try yay if pacman failed
+            cmd = f"LC_ALL=C yay -S --needed --noconfirm {dep}"
+            result = self.run_cmd(cmd, log_cmd=False, check=False, user="builder", timeout=600)
+            
+            if result.returncode == 0:
+                success_count += 1
+                logger.info(f"  ✅ Installed {dep} via yay")
+            else:
+                failed_deps.append(dep)
+                logger.warning(f"  ❌ Failed to install {dep}")
+        
+        if success_count > 0:
+            logger.info(f"✅ Installed {success_count}/{len(clean_deps)} dependencies")
+        
+        if failed_deps:
+            logger.error(f"❌ Failed to install {len(failed_deps)} dependencies: {failed_deps}")
+            return False
+        
+        return True
     
     def _extract_dependencies_from_srcinfo(self, pkg_dir):
         """Extract dependencies from .SRCINFO file."""
@@ -1644,7 +1718,7 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True)
+                                        cwd=pkg_dir, check=False, capture=True, timeout=600)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
@@ -1658,7 +1732,8 @@ class PackageBuilder:
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
                 capture=True,
-                check=False
+                check=False,
+                timeout=3600  # 1 hour timeout for building
             )
             
             if build_result.returncode == 0:
@@ -1738,7 +1813,7 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self.run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True)
+                                        cwd=pkg_dir, check=False, capture=True, timeout=600)
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 return False
@@ -1756,7 +1831,8 @@ class PackageBuilder:
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
                 capture=True,
-                check=False
+                check=False,
+                timeout=3600  # 1 hour timeout for building
             )
             
             if build_result.returncode == 0:
