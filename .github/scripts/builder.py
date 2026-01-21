@@ -162,8 +162,15 @@ class PackageBuilder:
         
         logger.info("GPG Key detected. Importing private key...")
         
+        # Handle both string and bytes for the private key
+        key_data = self.gpg_private_key
+        if isinstance(key_data, bytes):
+            key_data_str = key_data.decode('utf-8')
+        else:
+            key_data_str = str(key_data)
+        
         # Validate private key format before attempting import
-        if not self.gpg_private_key or '-----BEGIN PGP PRIVATE KEY BLOCK-----' not in self.gpg_private_key:
+        if not key_data_str or '-----BEGIN PGP PRIVATE KEY BLOCK-----' not in key_data_str:
             logger.error("❌ CRITICAL: Invalid GPG private key format. Missing '-----BEGIN PGP PRIVATE KEY BLOCK-----' header.")
             logger.error("The GPG_PRIVATE_KEY secret must contain a valid PGP private key block.")
             logger.error("Disabling GPG signing for this build.")
@@ -178,18 +185,24 @@ class PackageBuilder:
             env = os.environ.copy()
             env['GNUPGHOME'] = temp_gpg_home
             
-            # Import the private key
+            # Import the private key - handle bytes/string correctly
+            if isinstance(self.gpg_private_key, bytes):
+                key_input = self.gpg_private_key
+            else:
+                key_input = self.gpg_private_key.encode('utf-8')
+            
             import_process = subprocess.run(
                 ['gpg', '--batch', '--import'],
-                input=self.gpg_private_key.encode(),
+                input=key_input,
                 capture_output=True,
-                text=True,
+                text=False,  # Use binary mode for input
                 env=env,
                 check=False
             )
             
             if import_process.returncode != 0:
-                logger.error(f"Failed to import GPG key: {import_process.stderr}")
+                stderr = import_process.stderr.decode('utf-8') if isinstance(import_process.stderr, bytes) else import_process.stderr
+                logger.error(f"Failed to import GPG key: {stderr}")
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
                 return False
             
@@ -215,9 +228,9 @@ class PackageBuilder:
                             # Set ultimate trust (6 = ultimate)
                             trust_process = subprocess.run(
                                 ['gpg', '--import-ownertrust'],
-                                input=f"{fingerprint}:6:\n".encode(),
+                                input=f"{fingerprint}:6:\n".encode('utf-8'),
                                 capture_output=True,
-                                text=True,
+                                text=False,
                                 env=env,
                                 check=False
                             )
