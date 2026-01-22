@@ -5,9 +5,10 @@ Repository Management Module - Handles database operations, cleanup, and Zero-Re
 import os
 import subprocess
 import shutil
+import re
 import logging
 from pathlib import Path
-from typing import List, Set, Tuple, Optional
+from typing import List, Set, Tuple, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class RepoManager:
         self.repo_name = config['repo_name']
         self.output_dir = Path(config['output_dir'])
         self.remote_dir = config['remote_dir']
-        self.mirror_temp_dir = Path(config['mirror_temp_dir'])
+        self.mirror_temp_dir = Path(config.get('mirror_temp_dir', '/tmp/repo_mirror'))
         self.vps_user = config['vps_user']
         self.vps_host = config['vps_host']
         
@@ -43,114 +44,151 @@ class RepoManager:
         """Set the upload success flag for safety valve"""
         self._upload_successful = successful
     
-    def pre_build_purge_old_versions(self, pkg_name: str, old_version: str):
+    def _extract_version_from_filename(self, filename: str, pkg_name: str) -> Optional[str]:
         """
-        PRE-BUILD PURGE: Remove old version files from local mirror directory 
-        BEFORE building new version.
+        Extract version from package filename using SRCINFO-style parsing
         
-        ✅ FIXED QOWNNOTES PROBLÉMA: Agresszív tisztítás minden helyi könyvtárból,
-        még akkor is ha a build elmarad (skip).
+        Args:
+            filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
+            pkg_name: Package name (e.g., 'qownnotes')
         
-        Ensures the local directory only contains the latest version before repo-add runs.
+        Returns:
+            Version string (e.g., '26.1.9-1') or None if cannot parse
         """
-        logger.info(f"🔍 PRE-BUILD PURGE FIX: Aggressive cleanup for {pkg_name} (old: {old_version})")
+        try:
+            # Remove extensions
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            # Find where package name ends
+            for i in range(len(parts) - 2, 0, -1):
+                possible_name = '-'.join(parts[:i])
+                if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
+                    # Remaining parts: version-release-architecture
+                    if len(parts) >= i + 3:
+                        version_part = parts[i]
+                        release_part = parts[i+1]
+                        
+                        # Check for epoch (e.g., "2-26.1.9-1" -> "2:26.1.9-1")
+                        if i + 2 < len(parts) and parts[i].isdigit():
+                            # Might have epoch format: epoch-version-release-arch
+                            epoch_part = parts[i]
+                            version_part = parts[i+1]
+                            release_part = parts[i+2]
+                            return f"{epoch_part}:{version_part}-{release_part}"
+                        else:
+                            return f"{version_part}-{release_part}"
+        except Exception as e:
+            logger.debug(f"Could not extract version from {filename}: {e}")
+        
+        return None
+    
+    def pre_build_purge_old_versions(self, pkg_name: str, old_version: str, keep_version: Optional[str] = None):
+        """
+        PRE-BUILD PURGE: Remove old version files from local directories
+        while PRESERVING the version we intend to keep.
+        
+        CRITICAL FIX: output_dir is the "Source of Truth". 
+        - If building new version: delete old_version, keep new_version
+        - If skipping (already up-to-date): delete old_version ONLY if different from keep_version
+        
+        Args:
+            pkg_name: Package name
+            old_version: The version to potentially delete (e.g., "26.1.9-1")
+            keep_version: The version to preserve (if None, we're building new version)
+        """
+        logger.info(f"🔍 Pre-build purge: {pkg_name} (old: {old_version}, keep: {keep_version or 'NEW_BUILD'})")
+        
+        # Only delete if old_version is DIFFERENT from what we want to keep
+        if keep_version and old_version == keep_version:
+            logger.info(f"✅ Skipping purge: old_version ({old_version}) is same as keep_version")
+            return
         
         # Convert old version to filename patterns
-        old_patterns = []
+        patterns_to_delete = []
         
-        # Pattern 1: Standard version (no epoch)
+        # Pattern for version without epoch
         if ':' not in old_version:
-            # Standard pattern: name-version-release-arch.pkg.tar.*
-            old_patterns.append(f"*{pkg_name}-{old_version}-*.pkg.tar.*")
-            # ✅ EXTRA FIX: Also match any version that starts with the same base (e.g., 26.1.9-1 vs 26.1.9-2)
-            version_base = old_version.split('-')[0] if '-' in old_version else old_version
-            old_patterns.append(f"*{pkg_name}-{version_base}-*.pkg.tar.*")
+            # e.g., "26.1.9-1" -> "*qownnotes-26.1.9-1-*.pkg.tar.*"
+            patterns_to_delete.append(f"*{pkg_name}-{old_version}-*.pkg.tar.*")
         else:
-            # Pattern 2: Version with epoch (e.g., "2:26.1.9-1" -> "2-26.1.9-1")
+            # Pattern with epoch: "2:26.1.9-1" -> filename becomes "2-26.1.9-1"
             epoch, rest = old_version.split(':', 1)
-            old_patterns.append(f"*{pkg_name}-{epoch}-{rest}-*.pkg.tar.*")
-            # ✅ EXTRA FIX: Also match base version without epoch
-            version_base = rest.split('-')[0] if '-' in rest else rest
-            old_patterns.append(f"*{pkg_name}-{version_base}-*.pkg.tar.*")
-        
-        # ✅ KRITIKUS JAVÍTÁS: Agresszív törlés MINDEN csomagnév egyezésért
-        # Töröljük az ÖSSZES régebbi verziót, nem csak a pontos egyezést
-        old_patterns.append(f"{pkg_name}-*.pkg.tar.*")
+            patterns_to_delete.append(f"*{pkg_name}-{epoch}-{rest}-*.pkg.tar.*")
         
         deleted_count = 0
-        deleted_files = []
         
-        # Check both output_dir and mirror_temp_dir
+        # Check output_dir (SOURCE OF TRUTH) and mirror_temp_dir
         for search_dir in [self.output_dir, self.mirror_temp_dir]:
             if not search_dir.exists():
                 continue
                 
-            for pattern in old_patterns:
+            for pattern in patterns_to_delete:
                 for old_file in search_dir.glob(pattern):
                     try:
+                        # Extract version from filename to verify it matches old_version
                         filename = old_file.name
+                        extracted_version = self._extract_version_from_filename(filename, pkg_name)
                         
-                        # ✅ KÜLÖNÖSEN FONTOS: Ellenőrizzük, hogy ez valóban a régi verzió-e
-                        # Ha a fájlnévben pontosan az old_version van, töröljük
-                        # De ha csak a csomagnév egyezik, de a verzió KÜLÖNBÖZŐ, akkor is töröljük
-                        if old_version in filename or pkg_name in filename:
-                            old_file.unlink()
-                            logger.info(f"🗑️ AGGRESSIVE PURGE: Removed {old_file.name} from {search_dir.name}")
-                            deleted_files.append(filename)
-                            deleted_count += 1
-                            
-                            # Also remove signature if it exists
-                            sig_file = old_file.with_suffix(old_file.suffix + '.sig')
-                            if sig_file.exists():
-                                sig_file.unlink()
-                                logger.info(f"🗑️ Removed old signature {sig_file.name}")
-                                deleted_files.append(sig_file.name)
-                        else:
-                            logger.debug(f"⚠️ Skipping {filename} - doesn't match old version pattern")
-                            
+                        if extracted_version == old_version:
+                            # CRITICAL: Check if we have this same version in keep_version files
+                            if keep_version:
+                                # Look for files with keep_version in output_dir
+                                keep_pattern = f"*{pkg_name}-{keep_version.replace(':', '-')}-*.pkg.tar.*"
+                                keep_files = list(self.output_dir.glob(keep_pattern))
+                                if keep_files:
+                                    # We're keeping this version, safe to delete old one
+                                    old_file.unlink()
+                                    logger.info(f"🗑️ Removed old version {old_file.name} from {search_dir.name}")
+                                    deleted_count += 1
+                                    
+                                    # Also remove signature if it exists
+                                    sig_file = old_file.with_suffix(old_file.suffix + '.sig')
+                                    if sig_file.exists():
+                                        sig_file.unlink()
+                                        logger.info(f"🗑️ Removed old signature {sig_file.name}")
+                                else:
+                                    logger.info(f"⚠️ Keeping {filename} - no keep_version files found")
+                            else:
+                                # We're building new version, safe to delete old one
+                                old_file.unlink()
+                                logger.info(f"🗑️ Removed old version {old_file.name} from {search_dir.name}")
+                                deleted_count += 1
+                                
+                                # Also remove signature if it exists
+                                sig_file = old_file.with_suffix(old_file.suffix + '.sig')
+                                if sig_file.exists():
+                                    sig_file.unlink()
+                                    logger.info(f"🗑️ Removed old signature {sig_file.name}")
                     except Exception as e:
                         logger.warning(f"⚠️ Could not remove old file {old_file}: {e}")
         
         if deleted_count > 0:
-            logger.info(f"✅ PRE-BUILD PURGE FIX: Removed {deleted_count} old version file(s) for {pkg_name}")
-            logger.info(f"📋 Deleted files: {deleted_files}")
+            logger.info(f"✅ Pre-build purge: Removed {deleted_count} old version file(s) for {pkg_name}")
         else:
-            logger.debug(f"ℹ️ Pre-build purge: No old version files found for {pkg_name}")
+            logger.debug(f"ℹ️ Pre-build purge: No matching old version files found for {pkg_name}")
     
     def server_cleanup(self):
         """
         ZERO-RESIDUE SERVER CLEANUP: Remove orphaned package files from VPS 
-        using LOCAL OUTPUT DIRECTORY as source of truth.
+        using LOCAL OUTPUT DIRECTORY as SOURCE OF TRUTH.
         
-        ✅ FIXED: Cleanup runs as long as upload of NEW packages was successful,
-        even if GPG signing had warnings.
-        
-        STRICT LOGIC:
-        1. Attempt to sync pacman database before cleanup
-        2. Get ALL package files from local output directory (newly built + mirrored)
-        3. Get ALL database files from local output directory
-        4. PROTECT repository metadata files from deletion
-        5. Compare VPS files with local files - delete anything on VPS not present locally
-        6. ATOMIC execution: single SSH rm -f command for all orphaned files
+        CRITICAL FIX: This runs even if GPG signing has minor warnings.
+        Only requirement: upload must have been attempted.
         """
         print("\n" + "=" * 60)
-        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Using local output directory as source of truth")
+        print("🔒 ZERO-RESIDUE SERVER CLEANUP: output_dir is Source of Truth")
         print("=" * 60)
         
-        # ✅ FIX: Cleanup runs as long as upload was successful
-        # Nem csak teljes sikeres feltöltés, hanem ha bármilyen új csomag feltöltése sikerült
+        # VALVE 1: Check if cleanup should run at all (only if upload was attempted)
+        # CRITICAL FIX: Don't check for success, check for attempt
         if not hasattr(self, '_upload_successful'):
-            logger.error("❌ SAFETY VALVE: Cleanup cannot run because upload status unknown!")
+            logger.error("❌ SAFETY VALVE: Cleanup cannot run because upload was not attempted!")
             return
         
-        # ✅ MÓDOSÍTÁS: A cleanup fut, ha volt bármilyen sikeres feltöltés
-        # Nem csak akkor, ha minden tökéletes volt (GPG figyelmeztetések mellett is fut)
-        if not self._upload_successful:
-            logger.warning("⚠️ Upload was not fully successful, but attempting cleanup anyway...")
-            # Itt dönthetünk úgy, hogy mégsem fut, de a specifikáció szerint próbáljuk meg
-            # return  # Eredetileg itt return-öltünk, de most próbáljuk meg
+        logger.info("🔄 Zero-Residue cleanup initiated (upload was attempted)")
         
-        # STEP 1: Get ALL valid files from local output directory
+        # STEP 1: Get ALL valid files from local output directory (SOURCE OF TRUTH)
         valid_filenames = self._collect_valid_files()
         
         # VALVE 2: CRITICAL - Must have at least one valid file
@@ -162,14 +200,13 @@ class RepoManager:
         # STEP 2: Get COMPLETE inventory of all files on VPS
         vps_files = self._get_vps_file_inventory()
         if vps_files is None:
-            logger.warning("⚠️ Could not get VPS file inventory, skipping cleanup")
             return
         
         # STEP 3: Identify orphaned files (files on VPS not in local output directory)
         orphaned_files = self._identify_orphaned_files(vps_files, valid_filenames)
         
         if not orphaned_files:
-            logger.info("✅ No orphaned files found - VPS matches local output directory exactly")
+            logger.info("✅ No orphaned files found - VPS matches output_dir exactly")
             return
         
         # STEP 4: DEBUGGING - Log files to be deleted BEFORE running rm -f
@@ -178,22 +215,22 @@ class RepoManager:
         # STEP 5: ATOMIC EXECUTION - delete all orphaned files in single command
         self._atomic_deletion(orphaned_files)
         
-        logger.info(f"📊 Cleanup complete: VPS now has exactly {len(valid_filenames)} valid files")
+        logger.info(f"📊 Zero-Residue cleanup complete: VPS now has exactly {len(valid_filenames)} valid files")
     
     def _collect_valid_files(self) -> Set[str]:
-        """Collect all valid files from local output directory"""
+        """Collect all valid files from local output directory (SOURCE OF TRUTH)"""
         valid_filenames = set()
-        logger.info("🔍 Collecting ALL valid files from local output directory...")
+        logger.info("🔍 Collecting ALL valid files from output_dir (Source of Truth)...")
         
         # Get ALL package files from local output directory
         for pkg_file in self.output_dir.glob("*.pkg.tar.*"):
-            if pkg_file.is_file():
+            if pkg_file.is_file() and pkg_file.stat().st_size > 0:
                 valid_filenames.add(pkg_file.name)
                 logger.debug(f"✅ Added package to valid files: {pkg_file.name}")
                 
                 # Also add signature file if it exists locally
                 sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
-                if sig_file.exists():
+                if sig_file.exists() and sig_file.stat().st_size > 0:
                     valid_filenames.add(sig_file.name)
                     logger.debug(f"✅ Added signature to valid files: {sig_file.name}")
         
@@ -212,17 +249,17 @@ class RepoManager:
         
         for pattern in db_patterns:
             db_file = self.output_dir / pattern
-            if db_file.exists():
+            if db_file.exists() and db_file.stat().st_size > 0:
                 valid_filenames.add(db_file.name)
                 logger.debug(f"✅ Added database file to valid files: {db_file.name}")
         
         # CRITICAL: Also add ALL .sig files for packages that have them
         for sig_file in self.output_dir.glob("*.sig"):
-            if sig_file.is_file():
+            if sig_file.is_file() and sig_file.stat().st_size > 0:
                 valid_filenames.add(sig_file.name)
                 logger.debug(f"✅ Added signature file to valid files: {sig_file.name}")
         
-        logger.info(f"✅ Local output directory has {len(valid_filenames)} valid files")
+        logger.info(f"✅ Output directory (Source of Truth) has {len(valid_filenames)} valid files")
         
         # Log some sample valid filenames
         if valid_filenames:
@@ -398,9 +435,6 @@ class RepoManager:
         print("PHASE: Repository Database Generation")
         print("=" * 60)
         
-        # First, do a final aggressive cleanup of old versions
-        self._final_aggressive_cleanup()
-        
         # Get all package files from local output directory
         all_packages = self._get_all_local_packages()
         
@@ -497,37 +531,6 @@ class RepoManager:
                 
         finally:
             os.chdir(old_cwd)
-    
-    def _final_aggressive_cleanup(self):
-        """Final aggressive cleanup before database generation"""
-        logger.info("🔍 FINAL AGGRESSIVE CLEANUP: Removing duplicate/old versions...")
-        
-        # Scan for all package files and identify duplicates
-        all_files = list(self.output_dir.glob("*.pkg.tar.*"))
-        package_versions = {}
-        
-        # Group files by package name
-        for pkg_file in all_files:
-            filename = pkg_file.name
-            # Extract package name (simplified logic)
-            # Format: name-version-release-arch.pkg.tar.zst
-            parts = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '').split('-')
-            if len(parts) >= 4:
-                # Assume the last 3 parts are arch, release, version
-                # Everything before that is package name
-                name_parts = parts[:-3]
-                if name_parts:
-                    pkg_name = '-'.join(name_parts)
-                    if pkg_name not in package_versions:
-                        package_versions[pkg_name] = []
-                    package_versions[pkg_name].append(pkg_file)
-        
-        # For each package, keep only the newest version
-        for pkg_name, files in package_versions.items():
-            if len(files) > 1:
-                logger.warning(f"⚠️ Multiple versions found for {pkg_name}: {[f.name for f in files]}")
-                # Keep all for now - version comparison is complex
-                # In production, we'd use vercmp to determine newest
     
     def _get_all_local_packages(self) -> List[str]:
         """Get ALL package files from local output directory (mirrored + newly built)"""

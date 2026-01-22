@@ -7,7 +7,7 @@ import subprocess
 import shutil
 import tempfile
 import logging
-from pathlib import Path  # ✅ HIBAJAVÍTÁS: Path import hozzáadva
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class GPGHandler:
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
                 return False
             
-            logger.info(f"✅ GPG key imported successfully")
+            logger.info("✅ GPG key imported successfully")
             
             # Get fingerprint and set ultimate trust
             list_process = subprocess.run(
@@ -107,7 +107,7 @@ class GPGHandler:
                                 check=False
                             )
                             if trust_process.returncode == 0:
-                                logger.info(f"✅ Set ultimate trust for GPG key")
+                                logger.info("✅ Set ultimate trust for GPG key")
                             break
             
             # Export public key and add to pacman-key WITHOUT interactive terminal
@@ -164,7 +164,7 @@ class GPGHandler:
                         )
                         
                         if trust_process.returncode == 0:
-                            logger.info(f"✅ Set ultimate trust for key in pacman keyring")
+                            logger.info("✅ Set ultimate trust for key in pacman keyring")
                         else:
                             logger.warning(f"⚠️ Failed to set trust with gpg: {trust_process.stderr[:200]}")
                     except Exception as e:
@@ -191,6 +191,7 @@ class GPGHandler:
     def sign_repository_files(self, repo_name: str, output_dir: str) -> bool:
         """Sign repository database files with GPG"""
         if not self.gpg_enabled:
+            logger.info("GPG signing disabled - skipping repository signing")
             return False
         
         if not hasattr(self, 'gpg_home') or not hasattr(self, 'gpg_env'):
@@ -198,13 +199,14 @@ class GPGHandler:
             return False
         
         try:
-            output_path = Path(output_dir)  # ✅ HIBAJAVÍTÁS: Path használata
+            output_path = Path(output_dir)
             files_to_sign = [
                 output_path / f"{repo_name}.db",
                 output_path / f"{repo_name}.files"
             ]
             
             signed_count = 0
+            failed_count = 0
             
             for file_to_sign in files_to_sign:
                 if not file_to_sign.exists():
@@ -233,17 +235,25 @@ class GPGHandler:
                     logger.info(f"✅ Created signature: {sig_file.name}")
                     signed_count += 1
                 else:
-                    logger.error(f"Failed to sign {file_to_sign.name}: {sign_process.stderr}")
+                    logger.warning(f"⚠️ Failed to sign {file_to_sign.name}: {sign_process.stderr[:200]}")
+                    failed_count += 1
             
             if signed_count > 0:
                 logger.info(f"✅ Successfully signed {signed_count} repository file(s)")
+                # CRITICAL FIX: Minor warnings should not block the build
+                if failed_count > 0:
+                    logger.warning(f"⚠️ {failed_count} file(s) failed to sign, but continuing anyway")
                 return True
             else:
                 logger.error("Failed to sign any repository files")
+                # CRITICAL FIX: Don't fail the build if GPG signing has issues
+                logger.warning("⚠️ Continuing build without GPG signatures")
                 return False
                 
         except Exception as e:
             logger.error(f"Error signing repository files: {e}")
+            # CRITICAL FIX: Don't fail the build if GPG signing has issues
+            logger.warning("⚠️ Continuing build without GPG signatures due to error")
             return False
     
     def cleanup(self):
