@@ -2,8 +2,10 @@
 VPS Client Module - Handles SSH, Rsync, and remote operations
 """
 
+import os
 import subprocess
 import shutil
+import time
 import logging
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -345,14 +347,18 @@ class VPSClient:
             logger.warning("No files to upload")
             return False
         
-        # Log files to upload
+        # Log files to upload (safe - only filenames, not paths)
         logger.info(f"Files to upload ({len(files_to_upload)}):")
         for f in files_to_upload:
-            size_mb = os.path.getsize(f) / (1024 * 1024)
-            file_type = "PACKAGE"
-            if self.repo_name in os.path.basename(f):
-                file_type = "DATABASE" if not f.endswith('.sig') else "SIGNATURE"
-            logger.info(f"  - {os.path.basename(f)} ({size_mb:.1f}MB) [{file_type}]")
+            try:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                filename = os.path.basename(f)
+                file_type = "PACKAGE"
+                if self.repo_name in filename:
+                    file_type = "DATABASE" if not f.endswith('.sig') else "SIGNATURE"
+                logger.info(f"  - {filename} ({size_mb:.1f}MB) [{file_type}]")
+            except Exception:
+                logger.info(f"  - {os.path.basename(f)} [UNKNOWN SIZE]")
         
         # Build RSYNC command WITHOUT --delete
         rsync_cmd = f"""

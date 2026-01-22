@@ -27,10 +27,24 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, script_dir)
 
 # Import our modules
-from modules.repo_manager import RepoManager
-from modules.vps_client import VPSClient
-from modules.build_engine import BuildEngine
-from modules.gpg_handler import GPGHandler
+try:
+    from modules.repo_manager import RepoManager
+    from modules.vps_client import VPSClient
+    from modules.build_engine import BuildEngine
+    from modules.gpg_handler import GPGHandler
+    MODULES_LOADED = True
+    logger = logging.getLogger(__name__)
+    logger.info("✅ All modules imported successfully")
+except ImportError as e:
+    print(f"❌ CRITICAL: Failed to import modules: {e}")
+    print(f"❌ Please ensure modules are in: {script_dir}/modules/")
+    MODULES_LOADED = False
+    sys.exit(1)
+except NameError as e:
+    print(f"❌ CRITICAL: NameError in modules: {e}")
+    print(f"❌ This indicates missing imports in module files")
+    MODULES_LOADED = False
+    sys.exit(1)
 
 # Try to import our config files
 try:
@@ -138,13 +152,14 @@ class PackageBuilder:
             if not value or value.strip() == '':
                 logger.warning(f"⚠️ Optional variable {var} is empty")
         
-        # Log validation success (with secret masking)
+        # ✅ BIZTONSÁGI JAVÍTÁS: NE jelenítsünk meg titkos információkat!
         logger.info("✅ Environment validation passed:")
         for var in required_vars + optional_but_recommended:
             value = os.getenv(var)
-            if value:
-                masked = "***" + value[-4:] if len(value) > 4 else "***"
-                logger.info(f"   {var}: {masked}")
+            if value and value.strip() != '':
+                logger.info(f"   {var}: [LOADED]")
+            else:
+                logger.info(f"   {var}: [MISSING]")
         
         # Validate REPO_NAME for pacman.conf
         repo_name = os.getenv('REPO_NAME')
@@ -171,7 +186,9 @@ class PackageBuilder:
         self.repo_name = os.getenv('REPO_NAME')
         
         print(f"🔧 Configuration loaded:")
-        print(f"   SSH: {self.vps_user}@{self.vps_host}")
+        # ✅ BIZTONSÁGI JAVÍTÁS: Csak nem titkos információkat jelenítsünk meg
+        print(f"   SSH user: {self.vps_user}")
+        print(f"   VPS host: {self.vps_host}")
         print(f"   Remote directory: {self.remote_dir}")
         print(f"   Repository name: {self.repo_name}")
         if self.repo_server_url:
@@ -180,40 +197,51 @@ class PackageBuilder:
     
     def _init_modules(self):
         """Initialize all modules with configuration"""
-        # VPS Client configuration
-        vps_config = {
-            'vps_user': self.vps_user,
-            'vps_host': self.vps_host,
-            'remote_dir': self.remote_dir,
-            'ssh_options': self.ssh_options,
-            'repo_name': self.repo_name,
-        }
-        self.vps_client = VPSClient(vps_config)
-        self.vps_client.setup_ssh_config(self.ssh_key)
-        
-        # Repository Manager configuration
-        repo_config = {
-            'repo_name': self.repo_name,
-            'output_dir': self.output_dir,
-            'remote_dir': self.remote_dir,
-            'mirror_temp_dir': self.mirror_temp_dir,
-            'vps_user': self.vps_user,
-            'vps_host': self.vps_host,
-        }
-        self.repo_manager = RepoManager(repo_config)
-        
-        # Build Engine configuration
-        build_config = {
-            'repo_root': self.repo_root,
-            'output_dir': self.output_dir,
-            'aur_build_dir': self.aur_build_dir,
-            'aur_urls': self.aur_urls,
-            'repo_name': self.repo_name,
-        }
-        self.build_engine = BuildEngine(build_config)
-        
-        # GPG Handler
-        self.gpg_handler = GPGHandler()
+        try:
+            # VPS Client configuration
+            vps_config = {
+                'vps_user': self.vps_user,
+                'vps_host': self.vps_host,
+                'remote_dir': self.remote_dir,
+                'ssh_options': self.ssh_options,
+                'repo_name': self.repo_name,
+            }
+            self.vps_client = VPSClient(vps_config)
+            self.vps_client.setup_ssh_config(self.ssh_key)
+            
+            # Repository Manager configuration
+            repo_config = {
+                'repo_name': self.repo_name,
+                'output_dir': self.output_dir,
+                'remote_dir': self.remote_dir,
+                'mirror_temp_dir': self.mirror_temp_dir,
+                'vps_user': self.vps_user,
+                'vps_host': self.vps_host,
+            }
+            self.repo_manager = RepoManager(repo_config)
+            
+            # Build Engine configuration
+            build_config = {
+                'repo_root': self.repo_root,
+                'output_dir': self.output_dir,
+                'aur_build_dir': self.aur_build_dir,
+                'aur_urls': self.aur_urls,
+                'repo_name': self.repo_name,
+            }
+            self.build_engine = BuildEngine(build_config)
+            
+            # GPG Handler
+            self.gpg_handler = GPGHandler()
+            
+            logger.info("✅ All modules initialized successfully")
+            
+        except NameError as e:
+            logger.error(f"❌ NameError during module initialization: {e}")
+            logger.error("This indicates missing imports in module files")
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"❌ Error initializing modules: {e}")
+            sys.exit(1)
     
     def _get_repo_root(self):
         """Get the repository root directory reliably"""
@@ -964,7 +992,8 @@ class PackageBuilder:
             import traceback
             traceback.print_exc()
             # Ensure GPG cleanup even on failure
-            self.gpg_handler.cleanup()
+            if hasattr(self, 'gpg_handler'):
+                self.gpg_handler.cleanup()
             return 1
 
 

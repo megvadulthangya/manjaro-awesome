@@ -2,6 +2,7 @@
 Build Engine Module - Handles AUR, makepkg, and package building logic
 """
 
+import os
 import re
 import subprocess
 import shutil
