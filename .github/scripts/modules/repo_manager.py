@@ -42,8 +42,7 @@ class RepoManager:
         
         # 🚨 KRITIKUS: Store target versions for each package
         self._package_target_versions: Dict[str, str] = {}
-        self._mirrored_packages: Dict[str, List[str]] = {}  # Track what we mirrored
-        self._skipped_packages: Set[str] = set()  # Track packages that were skipped
+        self._skipped_packages: Dict[str, str] = {}  # Track skipped packages with their remote versions
     
     def set_upload_successful(self, successful: bool):
         """Set the upload success flag for safety valve"""
@@ -60,10 +59,18 @@ class RepoManager:
         self._package_target_versions[pkg_name] = target_version
         logger.debug(f"📝 Registered target version for {pkg_name}: {target_version}")
     
-    def register_skipped_package(self, pkg_name: str):
-        """Register a package that was skipped (mirrored version should be kept)"""
-        self._skipped_packages.add(pkg_name)
-        logger.debug(f"📝 Registered skipped package: {pkg_name}")
+    def register_skipped_package(self, pkg_name: str, remote_version: str):
+        """
+        Register a package that was skipped because it's up-to-date.
+        
+        Args:
+            pkg_name: Package name
+            remote_version: The remote version that should be kept (not deleted)
+        """
+        self._skipped_packages[pkg_name] = remote_version
+        # Set the target version to the remote version to prevent deletion
+        self._package_target_versions[pkg_name] = remote_version
+        logger.info(f"📝 Registered SKIPPED package: {pkg_name} (remote: {remote_version})")
     
     def intelligent_mirror_filtering(self, remote_filenames: List[str]) -> List[str]:
         """
@@ -122,20 +129,13 @@ class RepoManager:
                 for version_str, filename in versions:
                     if version_str == latest_version:
                         files_to_mirror.append(filename)
-                        # Store the latest version as the target version for skipped packages
-                        if pkg_name in self._skipped_packages:
-                            self._package_target_versions[pkg_name] = version_str
                         logger.info(f"✅ Keeping latest version: {filename} ({version_str})")
                     else:
                         logger.info(f"🗑️ Discarding old version: {filename} ({version_str})")
                         removed_count += 1
             else:
                 # Single version, keep it
-                version_str = versions[0][0]
                 files_to_mirror.append(versions[0][1])
-                # Store the version as target for skipped packages
-                if pkg_name in self._skipped_packages:
-                    self._package_target_versions[pkg_name] = version_str
         
         if removed_count > 0:
             logger.info(f"🎯 Intelligent filtering: Removed {removed_count} old versions, keeping {len(files_to_mirror)} files")
@@ -186,24 +186,32 @@ class RepoManager:
         """
         🚨 KRITIKUS JAVÍTÁS: Surgical old version removal
         
-        LOGIC FIX: When build is SKIPPED, target_version becomes MIRRORED_VERSION
-        Surgical purge must KEEP files that match target_version (even if mirrored)
+        CRITICAL FIX: When build is SKIPPED, target_version must be REMOTE VERSION
+        to prevent deletion of up-to-date packages.
         
         Args:
             pkg_name: Package name
             old_version: Version to potentially delete
             target_version: Version we want to keep (None if building new)
         """
+        # 🚨 CRITICAL BUG FIX: Check if package was skipped
+        if pkg_name in self._skipped_packages:
+            # This package was skipped because it's up-to-date
+            # Use the remote version as target to prevent deletion
+            remote_version = self._skipped_packages[pkg_name]
+            logger.info(f"🔪 Surgical purge: {pkg_name} (SKIPPED, old: {old_version}, remote: {remote_version})")
+            
+            if old_version != remote_version:
+                # Old version doesn't match remote version - delete it
+                self._delete_specific_version(pkg_name, old_version)
+            else:
+                # Old version matches remote version - KEEP IT
+                logger.info(f"✅ KEEPING skipped package {pkg_name} (version {old_version})")
+            return
+        
+        # Original logic for non-skipped packages
         logger.info(f"🔪 Surgical purge: {pkg_name} (old: {old_version}, target: {target_version or 'NEW_BUILD'})")
         
-        # 🚨 KRITIKUS FIX: If package was skipped, use mirrored version as target
-        if pkg_name in self._skipped_packages:
-            if pkg_name in self._package_target_versions:
-                target_version = self._package_target_versions[pkg_name]
-                logger.info(f"🔄 Skipped package {pkg_name}, using mirrored version as target: {target_version}")
-        
-        # 🚨 KRITIKUS: If we're skipping build because server is up-to-date,
-        # but we have an old version locally, DELETE IT IMMEDIATELY
         if target_version and old_version != target_version:
             # We want to keep target_version, delete old_version
             self._delete_specific_version(pkg_name, old_version)
