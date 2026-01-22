@@ -4,7 +4,7 @@
 _pkgname=gghelper
 pkgname=${_pkgname}
 pkgver=2.1.3
-pkgrel=2
+pkgrel=1
 pkgdesc="Git workflow assistant with GitHub Actions conflict resolution"
 arch=('any')
 url="https://github.com/megvadulthangya/gghelper"
