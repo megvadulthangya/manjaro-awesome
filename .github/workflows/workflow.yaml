@@ -26,6 +26,9 @@ jobs:
       REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
       
+      # PRIVACY-SECURE PACKAGER IDENTITY (GitHub Secret)
+      PACKAGER_ENV: ${{ secrets.PACKAGER_ENV }}
+      
       # OPTIONAL SECRETS
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -433,6 +436,7 @@ jobs:
           REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
           REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
           REPO_NAME: ${{ secrets.REPO_NAME }}
+          PACKAGER_ENV: ${{ secrets.PACKAGER_ENV }}
           CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -445,6 +449,7 @@ jobs:
           
           echo "Current directory: $(pwd)"
           echo "Repository: $GITHUB_REPO"
+          echo "PACKAGER_ENV status: $([ -n "$PACKAGER_ENV" ] && echo "SET (privacy protected)" || echo "NOT SET - using default")"
           
           # Test SSH connection one more time with identical options to builder.py
           echo "=== Final SSH Test ==="
@@ -582,7 +587,7 @@ jobs:
           if [ -f "build_output.log" ]; then
             echo ""
             echo "=== Build Statistics ==="
-            grep -E "BUILD SUMMARY|Duration:|AUR packages:|Local packages:|Total built:|Skipped:|GPG signing:" build_output.log | tail -10 || echo "No summary found"
+            grep -E "BUILD SUMMARY|Duration:|AUR packages:|Local packages:|Total built:|Skipped:|GPG signing:|PACKAGER:" build_output.log | tail -15 || echo "No summary found"
           fi
           
           if [ -d "artifact_packages" ]; then

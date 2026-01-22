@@ -2,10 +2,15 @@
 Configuration file for Manjaro Package Builder
 """
 
+import os
+
 # Repository configuration
 REPO_DB_NAME = "manjaro-awesome"  # Default repository name
 OUTPUT_DIR = "built_packages"     # Local output directory
 BUILD_TRACKING_DIR = ".buildtracking"  # Build tracking directory
+
+# PACKAGER identity from environment variable (secure via GitHub Secrets)
+PACKAGER_ID = os.getenv("PACKAGER_ENV", "Maintainer <no-reply@gshoots.hu>")
 
 # SSH and Git configuration
 SSH_REPO_URL = "git@github.com:megvadulthangya/manjaro-awesome.git"

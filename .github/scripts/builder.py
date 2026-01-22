@@ -97,6 +97,10 @@ class PackageBuilder:
         self.ssh_options = getattr(config, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]) if HAS_CONFIG_FILES else ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]
         self.github_repo = os.getenv('GITHUB_REPO', getattr(config, 'GITHUB_REPO', 'megvadulthangya/manjaro-awesome.git') if HAS_CONFIG_FILES else 'megvadulthangya/manjaro-awesome.git')
         
+        # Get PACKAGER_ID from config
+        self.packager_id = getattr(config, 'PACKAGER_ID', 'Maintainer <no-reply@gshoots.hu>') if HAS_CONFIG_FILES else 'Maintainer <no-reply@gshoots.hu>'
+        logger.info(f"🔧 PACKAGER_ID configured: {self.packager_id}")
+        
         # Initialize modules
         self._init_modules()
         
@@ -133,6 +137,7 @@ class PackageBuilder:
             'REPO_SERVER_URL',
             'GPG_KEY_ID',
             'GPG_PRIVATE_KEY',
+            'PACKAGER_ENV',
         ]
         
         # Check required variables
@@ -402,16 +407,21 @@ class PackageBuilder:
                 logger.error(f"Error: {result.stderr[:500]}")
             return False
     
-    def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False, timeout=1800):
-        """Run command with comprehensive logging and timeout"""
+    def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, 
+                 log_cmd=False, timeout=1800, extra_env=None):
+        """Run command with comprehensive logging, timeout, and optional extra environment variables"""
         if log_cmd:
             logger.info(f"RUNNING COMMAND: {cmd}")
         
         if cwd is None:
             cwd = self.repo_root
         
+        # Prepare environment
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+        
         if user:
-            env = os.environ.copy()
             env['HOME'] = f'/home/{user}'
             env['USER'] = user
             env['LC_ALL'] = 'C'
@@ -449,7 +459,6 @@ class PackageBuilder:
                 return e
         else:
             try:
-                env = os.environ.copy()
                 env['LC_ALL'] = 'C'
                 
                 result = subprocess.run(
@@ -523,7 +532,7 @@ class PackageBuilder:
         return None
     
     def _build_aur_package(self, pkg_name: str) -> bool:
-        """Build AUR package with SRCINFO-based version comparison"""
+        """Build AUR package with SRCINFO-based version comparison and PACKAGER injection"""
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -604,7 +613,8 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self._run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True, timeout=600)
+                                        cwd=pkg_dir, check=False, capture=True, timeout=600,
+                                        extra_env={"PACKAGER": self.packager_id})
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
@@ -619,7 +629,8 @@ class PackageBuilder:
                 cwd=pkg_dir,
                 capture=True,
                 check=False,
-                timeout=3600
+                timeout=3600,
+                extra_env={"PACKAGER": self.packager_id}
             )
             
             if build_result.returncode == 0:
@@ -649,7 +660,7 @@ class PackageBuilder:
             return False
     
     def _build_local_package(self, pkg_name: str) -> bool:
-        """Build local package with SRCINFO-based version comparison"""
+        """Build local package with SRCINFO-based version comparison and PACKAGER injection"""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -699,7 +710,8 @@ class PackageBuilder:
             
             print("Downloading sources...")
             source_result = self._run_cmd(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True, timeout=600)
+                                        cwd=pkg_dir, check=False, capture=True, timeout=600,
+                                        extra_env={"PACKAGER": self.packager_id})
             if source_result.returncode != 0:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 return False
@@ -718,7 +730,8 @@ class PackageBuilder:
                 cwd=pkg_dir,
                 capture=True,
                 check=False,
-                timeout=3600
+                timeout=3600,
+                extra_env={"PACKAGER": self.packager_id}
             )
             
             if build_result.returncode == 0:
@@ -848,6 +861,7 @@ class PackageBuilder:
             print(f"Repository root: {self.repo_root}")
             print(f"Repository name: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
+            print(f"PACKAGER identity: {self.packager_id}")
             
             # STEP 0: Initialize GPG FIRST if enabled
             print("\n" + "=" * 60)
@@ -976,6 +990,7 @@ class PackageBuilder:
             print(f"Total built:     {total_built}")
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+            print(f"PACKAGER:        {self.packager_id}")
             print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
             print(f"Pre-Build Purge: ✅ Old versions removed before database generation")
             print("=" * 60)
