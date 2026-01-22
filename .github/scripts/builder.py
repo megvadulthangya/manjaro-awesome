@@ -279,23 +279,20 @@ class PackageBuilder:
         return f"{pkgver}-{pkgrel}"
 
     def _server_cleanup(self) -> None:
-        """ZERO-RESIDUE SERVER CLEANUP: Remove ALL package files from VPS using EXACT FILENAME MATCHING.
+        """ZERO-RESIDUE SERVER CLEANUP: Remove orphaned package files from VPS using LOCAL OUTPUT DIRECTORY as source of truth.
         
-        FIXED VERSION: Protects repository metadata files and properly handles GPG signatures.
+        FIXED VERSION: Uses ALL packages in local output directory as valid, not just database entries.
         
         STRICT LOGIC:
         1. Attempt to sync pacman database before cleanup
-        2. Extract EXACT filenames from newly generated database
-        3. For each package, add its signature file to valid_filenames
+        2. Get ALL package files from local output directory (newly built + mirrored)
+        3. Get ALL database files from local output directory
         4. PROTECT repository metadata files from deletion
-        5. EXACT MATCH comparison: if vps_file_name NOT in valid_filenames, DELETE
+        5. Compare VPS files with local files - delete anything on VPS not present locally
         6. ATOMIC execution: single SSH rm -f command for all orphaned files
-        
-        PROTECTED FILES (do NOT delete):
-        - .db, .db.tar.gz, .db.sig, .files, .files.tar.gz, .files.sig, .abs.tar.gz
         """
         print("\n" + "=" * 60)
-        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Exact Filename Matching (FIXED)")
+        print("🔒 ZERO-RESIDUE SERVER CLEANUP: Using local output directory as source of truth")
         print("=" * 60)
         
         # RE-SYNC BEFORE CLEANUP: Attempt pacman sync
@@ -311,223 +308,185 @@ class PackageBuilder:
             logger.error("❌ SAFETY VALVE: Cleanup cannot run because upload was not successful!")
             return
         
-        # Get database file path - check both compressed and uncompressed
-        db_files = [
-            self.output_dir / f"{self.repo_name}.db",
-            self.output_dir / f"{self.repo_name}.db.tar.gz",
-            self.output_dir / f"{self.repo_name}.files",
-            self.output_dir / f"{self.repo_name}.files.tar.gz"
+        # STEP 1: Get ALL valid files from local output directory
+        valid_filenames = set()
+        
+        logger.info("🔍 Collecting ALL valid files from local output directory...")
+        
+        # Get ALL package files from local output directory
+        for pkg_file in self.output_dir.glob("*.pkg.tar.*"):
+            if pkg_file.is_file():
+                valid_filenames.add(pkg_file.name)
+                logger.debug(f"✅ Added package to valid files: {pkg_file.name}")
+                
+                # Also add signature file if it exists locally
+                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                if sig_file.exists():
+                    valid_filenames.add(sig_file.name)
+                    logger.debug(f"✅ Added signature to valid files: {sig_file.name}")
+        
+        # Get ALL database files from local output directory
+        db_patterns = [
+            f"{self.repo_name}.db",
+            f"{self.repo_name}.db.tar.gz",
+            f"{self.repo_name}.files",
+            f"{self.repo_name}.files.tar.gz",
+            f"{self.repo_name}.abs.tar.gz",
+            f"{self.repo_name}.db.sig",
+            f"{self.repo_name}.db.tar.gz.sig",
+            f"{self.repo_name}.files.sig",
+            f"{self.repo_name}.files.tar.gz.sig",
         ]
         
-        db_file = None
-        for db_candidate in db_files:
-            if db_candidate.exists() and db_candidate.stat().st_size > 0:
-                db_file = db_candidate
-                logger.info(f"✅ Found valid database file: {db_file.name} ({db_file.stat().st_size / 1024:.1f} KB)")
-                break
+        for pattern in db_patterns:
+            db_file = self.output_dir / pattern
+            if db_file.exists():
+                valid_filenames.add(db_file.name)
+                logger.debug(f"✅ Added database file to valid files: {db_file.name}")
         
-        if not db_file:
-            logger.error("❌ SAFETY VALVE: No valid database file found!")
+        # CRITICAL: Also add ALL .sig files for packages that have them
+        for sig_file in self.output_dir.glob("*.sig"):
+            if sig_file.is_file():
+                valid_filenames.add(sig_file.name)
+                logger.debug(f"✅ Added signature file to valid files: {sig_file.name}")
+        
+        logger.info(f"✅ Local output directory has {len(valid_filenames)} valid files")
+        
+        # VALVE 2: CRITICAL - Must have at least one valid file
+        if len(valid_filenames) == 0:
+            logger.error("❌❌❌ CRITICAL SAFETY VALVE ACTIVATED: No valid files in output directory!")
+            logger.error("   🚨 CLEANUP ABORTED - Output directory empty, potential data loss!")
             return
         
-        logger.info("🔍 Performing database integrity check...")
+        # Log some sample valid filenames
+        sample_filenames = list(valid_filenames)[:10]
+        logger.info(f"Sample valid files: {sample_filenames}")
+        
+        # STEP 2: Get COMPLETE inventory of all files on VPS
+        logger.info("📋 Getting complete VPS file inventory...")
+        remote_cmd = f"""
+        # Get all package files, signatures, and database files
+        find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" -o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" -o -name "*.abs.tar.gz" \) 2>/dev/null
+        """
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
         
         try:
-            # STEP 1: Extract EXACT filenames from database
-            valid_filenames = set()  # Set of ALL valid filenames that should exist on VPS
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
             
-            # Check file extension to determine how to read it
-            if db_file.suffix == '.gz' or str(db_file).endswith('.tar.gz'):
-                try:
-                    with tarfile.open(db_file, 'r:gz') as tar:
-                        # Extract package filenames from %FILENAME% entries in desc files
-                        for member in tar.getmembers():
-                            if member.name.endswith('/desc'):
-                                # Read the desc file to get the exact filename
-                                f = tar.extractfile(member)
-                                if f:
-                                    content = f.read().decode('utf-8', errors='ignore')
-                                    lines = content.split('\n')
-                                    for i, line in enumerate(lines):
-                                        if line.strip() == '%FILENAME%' and i + 1 < len(lines):
-                                            filename = lines[i + 1].strip()
-                                            if filename:
-                                                valid_filenames.add(filename)
-                                                # Also add the signature file if it exists locally
-                                                sig_filename = f"{filename}.sig"
-                                                sig_path = self.output_dir / sig_filename
-                                                if sig_path.exists():
-                                                    valid_filenames.add(sig_filename)
-                                                logger.debug(f"Found in database: {filename}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to read tar.gz database: {e}")
-                    return
-            elif db_file.suffix == '.db':
-                # Try to read as plain tar file
-                try:
-                    with tarfile.open(db_file, 'r') as tar:
-                        for member in tar.getmembers():
-                            if member.name.endswith('/desc'):
-                                f = tar.extractfile(member)
-                                if f:
-                                    content = f.read().decode('utf-8', errors='ignore')
-                                    lines = content.split('\n')
-                                    for i, line in enumerate(lines):
-                                        if line.strip() == '%FILENAME%' and i + 1 < len(lines):
-                                            filename = lines[i + 1].strip()
-                                            if filename:
-                                                valid_filenames.add(filename)
-                                                # Also add the signature file if it exists locally
-                                                sig_filename = f"{filename}.sig"
-                                                sig_path = self.output_dir / sig_filename
-                                                if sig_path.exists():
-                                                    valid_filenames.add(sig_filename)
-                except Exception as e:
-                    logger.error(f"❌ Failed to read .db database: {e}")
-                    return
-            else:
-                logger.error(f"❌ Unsupported database file format: {db_file}")
+            if result.returncode != 0:
+                logger.warning(f"Could not list VPS files: {result.stderr[:200]}")
                 return
             
-            logger.info(f"✅ Database contains {len(valid_filenames)} valid package filenames (including signatures)")
-            
-            # VALVE 2: CRITICAL - Must have at least one valid package in database
-            if len(valid_filenames) == 0:
-                logger.error("❌❌❌ CRITICAL SAFETY VALVE ACTIVATED: Database has ZERO package filenames!")
-                logger.error("   🚨 CLEANUP ABORTED - Database empty, potential data loss!")
+            vps_files_raw = result.stdout.strip()
+            if not vps_files_raw:
+                logger.info("No files found on VPS - nothing to clean up")
                 return
             
-            # STEP 2: PROTECT REPOSITORY METADATA FILES
-            # Add repository metadata files to valid_filenames to protect them
-            protected_extensions = [
-                '.db', '.db.tar.gz', '.db.sig',
-                '.files', '.files.tar.gz', '.files.sig',
-                '.abs.tar.gz'
-            ]
+            vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
+            logger.info(f"Found {len(vps_files)} files on VPS")
             
-            for ext in protected_extensions:
-                protected_file = f"{self.repo_name}{ext}"
-                valid_filenames.add(protected_file)
-                logger.debug(f"Protected repository file: {protected_file}")
+            # STEP 3: Identify orphaned files (files on VPS not in local output directory)
+            orphaned_files = []
+            protected_count = 0
             
-            # Log some sample valid filenames
-            sample_filenames = list(valid_filenames)[:5]
-            logger.info(f"Sample valid filenames (including protected metadata): {sample_filenames}")
+            for vps_file in vps_files:
+                # Extract just the filename from the full path
+                filename = Path(vps_file).name
+                
+                # Skip repository metadata files that might not be in output directory
+                # but are essential for pacman to function
+                protected_extensions = [
+                    '.db', '.db.tar.gz', '.db.sig',
+                    '.files', '.files.tar.gz', '.files.sig',
+                    '.abs.tar.gz'
+                ]
+                
+                is_protected = False
+                for ext in protected_extensions:
+                    if filename.endswith(ext):
+                        is_protected = True
+                        protected_count += 1
+                        logger.debug(f"🔒 Protected repository file: {filename}")
+                        break
+                
+                # EXACT MATCH CHECK: if filename NOT in valid_filenames and not protected, it's orphaned
+                if not is_protected and filename not in valid_filenames:
+                    orphaned_files.append(vps_file)
+                    logger.info(f"🚨 Orphaned file identified: {filename}")
             
-            # STEP 3: Get COMPLETE inventory of all files on VPS
-            logger.info("📋 Getting complete VPS file inventory...")
-            remote_cmd = f"""
-            # Get all package files and signatures (but not protected repository metadata)
-            find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" \) 2>/dev/null
-            """
+            logger.info(f"🔒 Protected {protected_count} repository metadata files from deletion")
             
-            ssh_cmd = [
-                "ssh",
-                f"{self.vps_user}@{self.vps_host}",
-                remote_cmd
-            ]
+            if not orphaned_files:
+                logger.info("✅ No orphaned files found - VPS matches local output directory exactly")
+                return
             
-            try:
+            # STEP 4: DEBUGGING - Log files to be deleted BEFORE running rm -f
+            logger.warning(f"🚨 Identified {len(orphaned_files)} orphaned files for deletion")
+            logger.warning("Files to be deleted:")
+            for orphaned_file in orphaned_files:
+                filename = Path(orphaned_file).name
+                logger.warning(f"   🗑️  {filename}")
+            
+            # STEP 5: ATOMIC EXECUTION - delete all orphaned files in single command
+            if orphaned_files:
+                # Quote each filename for safety
+                quoted_files = [f"'{f}'" for f in orphaned_files]
+                files_to_delete = ' '.join(quoted_files)
+                
+                delete_cmd = f"rm -fv {files_to_delete}"
+                
+                logger.info(f"🚀 Executing ATOMIC deletion command:")
+                logger.info(f"   SSH: {self.vps_user}@{self.vps_host}")
+                logger.info(f"   COMMAND: {delete_cmd}")
+                
+                # Execute the deletion command
+                ssh_delete = [
+                    "ssh",
+                    f"{self.vps_user}@{self.vps_host}",
+                    delete_cmd
+                ]
+                
                 result = subprocess.run(
-                    ssh_cmd,
+                    ssh_delete,
                     capture_output=True,
                     text=True,
                     check=False,
-                    timeout=30
+                    timeout=60
                 )
                 
-                if result.returncode != 0:
-                    logger.warning(f"Could not list VPS files: {result.stderr[:200]}")
-                    return
-                
-                vps_files_raw = result.stdout.strip()
-                if not vps_files_raw:
-                    logger.info("No package files found on VPS - nothing to clean up")
-                    return
-                
-                vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
-                logger.info(f"Found {len(vps_files)} files on VPS")
-                
-                # STEP 4: EXACT MATCH COMPARISON - identify orphaned files
-                orphaned_files = []
-                for vps_file in vps_files:
-                    # Extract just the filename from the full path
-                    filename = Path(vps_file).name
-                    
-                    # Check if this is a protected repository metadata file
-                    # (these should already be in valid_filenames, but double-check)
-                    is_protected = False
-                    for ext in protected_extensions:
-                        if filename == f"{self.repo_name}{ext}":
-                            is_protected = True
-                            logger.debug(f"Skipping protected repository file: {filename}")
-                            break
-                    
-                    # EXACT MATCH CHECK: if filename NOT in valid_filenames, it's orphaned
-                    if not is_protected and filename not in valid_filenames:
-                        orphaned_files.append(vps_file)
-                        logger.info(f"🚨 Orphaned file identified: {filename}")
-                
-                if not orphaned_files:
-                    logger.info("✅ No orphaned files found - VPS matches database exactly")
-                    return
-                
-                # STEP 5: DEBUGGING - Log files to be deleted BEFORE running rm -f
-                logger.warning(f"🚨 Identified {len(orphaned_files)} orphaned files for deletion")
-                logger.warning("Files to be deleted:")
-                for orphaned_file in orphaned_files:
-                    filename = Path(orphaned_file).name
-                    logger.warning(f"   🗑️  {filename}")
-                
-                # STEP 6: ATOMIC EXECUTION - delete all orphaned files in single command
-                if orphaned_files:
-                    # Quote each filename for safety
-                    quoted_files = [f"'{f}'" for f in orphaned_files]
-                    files_to_delete = ' '.join(quoted_files)
-                    
-                    delete_cmd = f"rm -fv {files_to_delete}"
-                    
-                    logger.info(f"🚀 Executing ATOMIC deletion command:")
-                    logger.info(f"   SSH: {self.vps_user}@{self.vps_host}")
-                    logger.info(f"   COMMAND: {delete_cmd}")
-                    
-                    # Execute the deletion command
-                    ssh_delete = [
-                        "ssh",
-                        f"{self.vps_user}@{self.vps_host}",
-                        delete_cmd
-                    ]
-                    
-                    result = subprocess.run(
-                        ssh_delete,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        timeout=60
-                    )
-                    
-                    if result.returncode == 0:
-                        deleted_count = len(orphaned_files)
-                        logger.info(f"✅ ATOMIC deletion successful! Removed {deleted_count} files")
-                        if result.stdout:
-                            for line in result.stdout.splitlines():
-                                if line.strip():
-                                    logger.info(f"   {line}")
-                    else:
-                        logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
-                        # Fallback: try deleting files one by one
-                        logger.info("⚠️ Falling back to individual file deletion...")
-                        self._delete_files_individually(orphaned_files)
-                
-                logger.info(f"📊 Cleanup complete: VPS now has exactly {len(valid_filenames)} valid files")
-                
-            except subprocess.TimeoutExpired:
-                logger.error("❌ SSH command timed out - aborting cleanup for safety")
-            except Exception as e:
-                logger.error(f"❌ Error during VPS file enumeration: {e}")
+                if result.returncode == 0:
+                    deleted_count = len(orphaned_files)
+                    logger.info(f"✅ ATOMIC deletion successful! Removed {deleted_count} files")
+                    if result.stdout:
+                        for line in result.stdout.splitlines():
+                            if line.strip():
+                                logger.info(f"   {line}")
+                else:
+                    logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
+                    # Fallback: try deleting files one by one
+                    logger.info("⚠️ Falling back to individual file deletion...")
+                    self._delete_files_individually(orphaned_files)
+            
+            logger.info(f"📊 Cleanup complete: VPS now has exactly {len(valid_filenames)} valid files")
+            
+        except subprocess.TimeoutExpired:
+            logger.error("❌ SSH command timed out - aborting cleanup for safety")
+        except Exception as e:
+            logger.error(f"❌ Error during VPS file enumeration: {e}")
                 
         except Exception as e:
-            logger.error(f"❌ Critical error in database processing: {e}")
+            logger.error(f"❌ Critical error in cleanup processing: {e}")
             logger.error("   Cleanup ABORTED to preserve server state.")
     
     def _delete_files_individually(self, orphaned_files):
