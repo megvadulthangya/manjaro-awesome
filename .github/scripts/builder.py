@@ -278,6 +278,71 @@ class PackageBuilder:
             return f"{epoch}:{pkgver}-{pkgrel}"
         return f"{pkgver}-{pkgrel}"
 
+    def _pre_build_purge_old_versions(self, pkg_name: str, old_version: str) -> None:
+        """PRE-BUILD PURGE: Remove old version files from local mirror directory BEFORE building new version.
+        
+        This ensures the local directory only contains the latest version before repo-add runs.
+        """
+        logger.info(f"🔍 Pre-build purge: Looking for old version files of {pkg_name} ({old_version})")
+        
+        # Convert old version to filename patterns
+        # Old version format could be: "26.1.9-1" or "2:26.1.9-1" (with epoch)
+        
+        # For pattern matching, we need to handle different filename formats
+        old_patterns = []
+        
+        # Pattern 1: Standard version (no epoch)
+        if ':' not in old_version:
+            # e.g., "26.1.9-1" -> "*26.1.9-1*.pkg.tar.*"
+            old_patterns.append(f"*{pkg_name}-{old_version}-*.pkg.tar.*")
+        else:
+            # Pattern 2: Version with epoch
+            # e.g., "2:26.1.9-1" -> filename becomes "2-26.1.9-1"
+            epoch, rest = old_version.split(':', 1)
+            old_patterns.append(f"*{pkg_name}-{epoch}-{rest}-*.pkg.tar.*")
+        
+        # Also check for the package name pattern without specific version
+        # This catches any old version files
+        old_patterns.append(f"{pkg_name}-*.pkg.tar.*")
+        
+        deleted_count = 0
+        
+        # Check both output_dir and mirror_temp_dir
+        for search_dir in [self.output_dir, self.mirror_temp_dir]:
+            if not search_dir.exists():
+                continue
+                
+            for pattern in old_patterns:
+                for old_file in search_dir.glob(pattern):
+                    # Skip if this is the current version we're about to build
+                    # We'll identify current files by checking if they match the old_version pattern exactly
+                    filename = old_file.name
+                    
+                    # Extract version from filename for comparison
+                    # Filename format: name-version-release-arch.pkg.tar.zst
+                    # or name-epoch-version-release-arch.pkg.tar.zst
+                    
+                    # Skip if file is actually the new version we're building
+                    # (this shouldn't happen, but just in case)
+                    if old_version in filename:
+                        try:
+                            old_file.unlink()
+                            logger.info(f"🗑️ Pre-emptively removed old version {old_file.name} from {search_dir.name}")
+                            deleted_count += 1
+                            
+                            # Also remove signature if it exists
+                            sig_file = old_file.with_suffix(old_file.suffix + '.sig')
+                            if sig_file.exists():
+                                sig_file.unlink()
+                                logger.info(f"🗑️ Removed old signature {sig_file.name}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not remove old file {old_file}: {e}")
+        
+        if deleted_count > 0:
+            logger.info(f"✅ Pre-build purge: Removed {deleted_count} old version file(s) for {pkg_name}")
+        else:
+            logger.debug(f"ℹ️ Pre-build purge: No old version files found for {pkg_name}")
+
     def _server_cleanup(self) -> None:
         """ZERO-RESIDUE SERVER CLEANUP: Remove orphaned package files from VPS using LOCAL OUTPUT DIRECTORY as source of truth.
         
@@ -2359,6 +2424,9 @@ class PackageBuilder:
             
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
+                
+                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
+                self._pre_build_purge_old_versions(pkg_name, remote_version)
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
                 
@@ -2446,6 +2514,9 @@ class PackageBuilder:
             
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
+                
+                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
+                self._pre_build_purge_old_versions(pkg_name, remote_version)
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
                 
@@ -3118,6 +3189,7 @@ class PackageBuilder:
             print(f"GPG signing:     {'Enabled' if self.gpg_enabled else 'Disabled'}")
             print(f"SRCINFO parsing: ✅ Implemented")
             print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+            print(f"Pre-Build Purge: ✅ Old versions removed before database generation")
             print("=" * 60)
             
             if self.built_packages:
