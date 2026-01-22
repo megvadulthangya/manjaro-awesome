@@ -7,6 +7,7 @@ import subprocess
 import shutil
 import tempfile
 import logging
+from pathlib import Path  # ✅ HIBAJAVÍTÁS: Path import hozzáadva
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ class GPGHandler:
             return False
         
         try:
-            output_path = Path(output_dir)
+            output_path = Path(output_dir)  # ✅ HIBAJAVÍTÁS: Path használata
             files_to_sign = [
                 output_path / f"{repo_name}.db",
                 output_path / f"{repo_name}.files"
