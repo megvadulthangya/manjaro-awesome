@@ -5,6 +5,7 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
     "gghelper",
+    "cudnn",
     "gtk2",
     "awesome-freedesktop-git",
     "lain-git",
@@ -32,7 +33,7 @@ AUR_PACKAGES = [
     "tamzen-font",
     "betterlockscreen",
     "nordic-theme",
-    #"nordic-darker-theme",
+    "nordic-darker-theme",
     "geany-nord-theme",
     "nordzy-icon-theme",
     "oh-my-posh-bin",
@@ -44,12 +45,12 @@ AUR_PACKAGES = [
     "xnviewmp",
     "simplescreenrecorder",
     "gtkhash-thunar",
-    "a4tech-bloody-driver-git"
-#    "nordic-bluish-accent-theme",
-#    "nordic-bluish-accent-standard-buttons-theme",
-#    "nordic-polar-standard-buttons-theme",
-#    "nordic-standard-buttons-theme",
- #   "nordic-darker-standard-buttons-theme"
+    "a4tech-bloody-driver-git",
+    "nordic-bluish-accent-theme",
+    "nordic-bluish-accent-standard-buttons-theme",
+    "nordic-polar-standard-buttons-theme",
+    "nordic-standard-buttons-theme",
+    "nordic-darker-standard-buttons-theme"
 ]
 
 # Optionally, you can also define package groups or categories
