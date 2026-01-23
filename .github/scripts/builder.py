@@ -660,9 +660,8 @@ class PackageBuilder:
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 
-                # ZERO-RESIDUE FIX: Remove old version even if build is skipped
-                if remote_version:
-                    self.repo_manager.pre_build_purge_old_versions(pkg_name, remote_version)
+                # ZERO-RESIDUE FIX: Register the target version for this skipped package
+                self.repo_manager.register_skipped_package(pkg_name, remote_version)
                 
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
@@ -779,6 +778,8 @@ class PackageBuilder:
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
+                    # ZERO-RESIDUE FIX: Register the target version for this built package
+                    self.repo_manager.register_package_target_version(pkg_name, version)
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -818,9 +819,8 @@ class PackageBuilder:
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 
-                # ZERO-RESIDUE FIX: Remove old version even if build is skipped
-                if remote_version:
-                    self.repo_manager.pre_build_purge_old_versions(pkg_name, remote_version)
+                # ZERO-RESIDUE FIX: Register the target version for this skipped package
+                self.repo_manager.register_skipped_package(pkg_name, remote_version)
                 
                 return False
             
@@ -940,6 +940,9 @@ class PackageBuilder:
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
                     self.rebuilt_local_packages.append(pkg_name)
+                    
+                    # ZERO-RESIDUE FIX: Register the target version for this built package
+                    self.repo_manager.register_package_target_version(pkg_name, version)
                     
                     # Collect metadata for hokibot
                     if built_files:
@@ -1121,6 +1124,12 @@ class PackageBuilder:
                 print("STEP 6: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
                 print("=" * 60)
                 
+                # ZERO-RESIDUE FIX: Perform server cleanup BEFORE database generation
+                print("\n" + "=" * 60)
+                print("🚨 PRE-DATABASE CLEANUP: Removing zombie packages from server")
+                print("=" * 60)
+                self.repo_manager.server_cleanup()
+                
                 # Generate database with ALL locally available packages
                 if self.repo_manager.generate_full_database():
                     # Sign repository database files if GPG is enabled
@@ -1134,6 +1143,13 @@ class PackageBuilder:
                     
                     # Upload everything (packages + database + signatures)
                     upload_success = self.upload_packages()
+                    
+                    # ZERO-RESIDUE FIX: Perform final server cleanup AFTER upload
+                    if upload_success:
+                        print("\n" + "=" * 60)
+                        print("🚨 POST-UPLOAD CLEANUP: Final zombie package removal")
+                        print("=" * 60)
+                        self.repo_manager.server_cleanup()
                     
                     # Clean up GPG temporary directory
                     self.gpg_handler.cleanup()
@@ -1185,7 +1201,8 @@ class PackageBuilder:
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             print(f"PACKAGER:        {self.packager_id}")
             print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-            print(f"Pre-Build Purge: ✅ Old versions removed before database generation")
+            print(f"Target Version:  ✅ Package target versions registered: {len(self.repo_manager._package_target_versions)}")
+            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.repo_manager._skipped_packages)}")
             print("=" * 60)
             
             if self.built_packages:
