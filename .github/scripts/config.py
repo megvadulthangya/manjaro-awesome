@@ -57,3 +57,6 @@ AUR_BUILD_DIR = "build_aur"
 
 # GitHub repository for synchronization
 GITHUB_REPO = "megvadulthangya/manjaro-awesome.git"
+
+# Debug/Verbose mode configuration
+VERBOSE_BUILD_LOGS = True  # Set to True to print full build output on failure
