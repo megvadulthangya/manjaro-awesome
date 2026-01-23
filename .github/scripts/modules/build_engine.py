@@ -4,43 +4,43 @@ Build Engine Module - Handles AUR, makepkg, and package building logic
 
 import os
 import re
+import sys
 import subprocess
 import shutil
 import logging
-import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-# Import configuration
+logger = logging.getLogger(__name__)
+
+# Import config for DEBUG_MODE
 try:
     import config
-    VERBOSE_BUILD_LOGS = getattr(config, 'VERBOSE_BUILD_LOGS', True)
+    HAS_CONFIG = True
 except ImportError:
-    VERBOSE_BUILD_LOGS = True  # Default to verbose if config not available
-
-logger = logging.getLogger(__name__)
+    HAS_CONFIG = False
 
 
 class BuildEngine:
     """Handles AUR package building, version comparison, and dependency resolution"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config_dict: dict):
         """
         Initialize BuildEngine with configuration
         
         Args:
-            config: Dictionary containing:
+            config_dict: Dictionary containing:
                 - repo_root: Repository root directory
                 - output_dir: Output directory for built packages
                 - aur_build_dir: AUR build directory
                 - aur_urls: AUR URL templates
                 - repo_name: Repository name
         """
-        self.repo_root = Path(config['repo_root'])
-        self.output_dir = Path(config['output_dir'])
-        self.aur_build_dir = Path(config['aur_build_dir'])
-        self.aur_urls = config['aur_urls']
-        self.repo_name = config.get('repo_name', '')
+        self.repo_root = Path(config_dict['repo_root'])
+        self.output_dir = Path(config_dict['output_dir'])
+        self.aur_build_dir = Path(config_dict['aur_build_dir'])
+        self.aur_urls = config_dict['aur_urls']
+        self.repo_name = config_dict.get('repo_name', '')
         
         # State
         self.hokibot_data = []
@@ -55,6 +55,9 @@ class BuildEngine:
             "aur_failed": 0,
             "local_failed": 0,
         }
+        
+        # Debug mode from config
+        self.debug_mode = HAS_CONFIG and getattr(config, 'DEBUG_MODE', False)
     
     def extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
         """Extract pkgver, pkgrel, and epoch from .SRCINFO or makepkg --printsrcinfo output"""
@@ -345,9 +348,17 @@ class BuildEngine:
         return False
     
     def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False, timeout=1800):
-        """Run command with comprehensive logging and timeout"""
+        """
+        Run command with comprehensive logging and timeout.
+        
+        CRITICAL FIX: When DEBUG_MODE is True, bypass logger and print directly to stdout
+        to ensure output appears in CI/CD console.
+        """
         if log_cmd:
-            logger.info(f"RUNNING COMMAND: {cmd}")
+            if self.debug_mode:
+                print(f"🔧 [DEBUG] RUNNING COMMAND: {cmd}", flush=True)
+            else:
+                logger.info(f"RUNNING COMMAND: {cmd}")
         
         if cwd is None:
             cwd = self.repo_root
@@ -368,88 +379,56 @@ class BuildEngine:
                 result = subprocess.run(
                     sudo_cmd,
                     capture_output=capture,
-                    text=False,  # Capture as bytes for better error handling
+                    text=True,
                     check=check,
                     env=env,
                     timeout=timeout
                 )
                 
-                # Decode output for logging
-                stdout_text = ""
-                stderr_text = ""
-                if result.stdout:
-                    try:
-                        stdout_text = result.stdout.decode('utf-8')
-                    except UnicodeDecodeError:
-                        stdout_text = result.stdout.decode('latin-1', errors='replace')
-                if result.stderr:
-                    try:
-                        stderr_text = result.stderr.decode('utf-8')
-                    except UnicodeDecodeError:
-                        stderr_text = result.stderr.decode('latin-1', errors='replace')
+                # CRITICAL: When in debug mode, bypass logger and print directly
+                if log_cmd or self.debug_mode:
+                    if self.debug_mode:
+                        if result.stdout:
+                            print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
+                        if result.stderr:
+                            print(f"🔧 [DEBUG] STDERR:\n{result.stderr}", flush=True)
+                        print(f"🔧 [DEBUG] EXIT CODE: {result.returncode}", flush=True)
+                    else:
+                        if result.stdout:
+                            logger.info(f"STDOUT: {result.stdout[:500]}")
+                        if result.stderr:
+                            logger.info(f"STDERR: {result.stderr[:500]}")
+                        logger.info(f"EXIT CODE: {result.returncode}")
                 
-                if log_cmd:
-                    if stdout_text:
-                        logger.info(f"STDOUT: {stdout_text[:500]}")
-                    if stderr_text:
-                        logger.info(f"STDERR: {stderr_text[:500]}")
-                    logger.info(f"EXIT CODE: {result.returncode}")
+                # CRITICAL: If command failed and we're in debug mode, print full output
+                if result.returncode != 0 and self.debug_mode:
+                    print(f"❌ [DEBUG] COMMAND FAILED: {cmd}", flush=True)
+                    if result.stdout and len(result.stdout) > 500:
+                        print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
+                    if result.stderr and len(result.stderr) > 500:
+                        print(f"❌ [DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
                 
-                # Return result with decoded text
-                result.stdout = stdout_text
-                result.stderr = stderr_text
                 return result
-                
             except subprocess.TimeoutExpired as e:
-                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                if self.debug_mode:
+                    print(f"❌ [DEBUG] {error_msg}", flush=True)
+                logger.error(error_msg)
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
-                
-                # Decode output for verbose logging if enabled
-                stdout_bytes = e.stdout if hasattr(e, 'stdout') and e.stdout else b''
-                stderr_bytes = e.stderr if hasattr(e, 'stderr') and e.stderr else b''
-                
-                # CRITICAL FIX: Print raw output on failure when VERBOSE_BUILD_LOGS is True
-                if VERBOSE_BUILD_LOGS and stdout_bytes:
-                    print("\n" + "="*80, flush=True)
-                    print("VERBOSE BUILD OUTPUT - STDOUT (RAW):", flush=True)
-                    print("="*80, flush=True)
-                    try:
-                        print(stdout_bytes.decode('utf-8'), flush=True)
-                    except UnicodeDecodeError:
-                        print(stdout_bytes.decode('latin-1', errors='replace'), flush=True)
-                
-                if VERBOSE_BUILD_LOGS and stderr_bytes:
-                    print("\n" + "="*80, flush=True)
-                    print("VERBOSE BUILD OUTPUT - STDERR (RAW):", flush=True)
-                    print("="*80, flush=True)
-                    try:
-                        print(stderr_bytes.decode('utf-8'), flush=True)
-                    except UnicodeDecodeError:
-                        print(stderr_bytes.decode('latin-1', errors='replace'), flush=True)
-                
+                if log_cmd or self.debug_mode:
+                    error_msg = f"Command failed: {cmd}"
+                    if self.debug_mode:
+                        print(f"❌ [DEBUG] {error_msg}", flush=True)
+                        if hasattr(e, 'stdout') and e.stdout:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if hasattr(e, 'stderr') and e.stderr:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                    else:
+                        logger.error(error_msg)
                 if check:
                     raise
-                # Return a mock result with decoded output
-                class MockResult:
-                    def __init__(self):
-                        self.returncode = e.returncode
-                        self.stdout = ""
-                        self.stderr = ""
-                        if stdout_bytes:
-                            try:
-                                self.stdout = stdout_bytes.decode('utf-8')
-                            except UnicodeDecodeError:
-                                self.stdout = stdout_bytes.decode('latin-1', errors='replace')
-                        if stderr_bytes:
-                            try:
-                                self.stderr = stderr_bytes.decode('utf-8')
-                            except UnicodeDecodeError:
-                                self.stderr = stderr_bytes.decode('latin-1', errors='replace')
-                
-                return MockResult()
+                return e
         else:
             try:
                 env = os.environ.copy()
@@ -460,85 +439,53 @@ class BuildEngine:
                     cwd=cwd,
                     shell=shell,
                     capture_output=capture,
-                    text=False,  # Capture as bytes for better error handling
+                    text=True,
                     check=check,
                     env=env,
                     timeout=timeout
                 )
                 
-                # Decode output for logging
-                stdout_text = ""
-                stderr_text = ""
-                if result.stdout:
-                    try:
-                        stdout_text = result.stdout.decode('utf-8')
-                    except UnicodeDecodeError:
-                        stdout_text = result.stdout.decode('latin-1', errors='replace')
-                if result.stderr:
-                    try:
-                        stderr_text = result.stderr.decode('utf-8')
-                    except UnicodeDecodeError:
-                        stderr_text = result.stderr.decode('latin-1', errors='replace')
+                # CRITICAL: When in debug mode, bypass logger and print directly
+                if log_cmd or self.debug_mode:
+                    if self.debug_mode:
+                        if result.stdout:
+                            print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
+                        if result.stderr:
+                            print(f"🔧 [DEBUG] STDERR:\n{result.stderr}", flush=True)
+                        print(f"🔧 [DEBUG] EXIT CODE: {result.returncode}", flush=True)
+                    else:
+                        if result.stdout:
+                            logger.info(f"STDOUT: {result.stdout[:500]}")
+                        if result.stderr:
+                            logger.info(f"STDERR: {result.stderr[:500]}")
+                        logger.info(f"EXIT CODE: {result.returncode}")
                 
-                if log_cmd:
-                    if stdout_text:
-                        logger.info(f"STDOUT: {stdout_text[:500]}")
-                    if stderr_text:
-                        logger.info(f"STDERR: {stderr_text[:500]}")
-                    logger.info(f"EXIT CODE: {result.returncode}")
+                # CRITICAL: If command failed and we're in debug mode, print full output
+                if result.returncode != 0 and self.debug_mode:
+                    print(f"❌ [DEBUG] COMMAND FAILED: {cmd}", flush=True)
+                    if result.stdout and len(result.stdout) > 500:
+                        print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
+                    if result.stderr and len(result.stderr) > 500:
+                        print(f"❌ [DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
                 
-                # Return result with decoded text
-                result.stdout = stdout_text
-                result.stderr = stderr_text
                 return result
-                
             except subprocess.TimeoutExpired as e:
-                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                if self.debug_mode:
+                    print(f"❌ [DEBUG] {error_msg}", flush=True)
+                logger.error(error_msg)
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
-                
-                # Decode output for verbose logging if enabled
-                stdout_bytes = e.stdout if hasattr(e, 'stdout') and e.stdout else b''
-                stderr_bytes = e.stderr if hasattr(e, 'stderr') and e.stderr else b''
-                
-                # CRITICAL FIX: Print raw output on failure when VERBOSE_BUILD_LOGS is True
-                if VERBOSE_BUILD_LOGS and stdout_bytes:
-                    print("\n" + "="*80, flush=True)
-                    print("VERBOSE BUILD OUTPUT - STDOUT (RAW):", flush=True)
-                    print("="*80, flush=True)
-                    try:
-                        print(stdout_bytes.decode('utf-8'), flush=True)
-                    except UnicodeDecodeError:
-                        print(stdout_bytes.decode('latin-1', errors='replace'), flush=True)
-                
-                if VERBOSE_BUILD_LOGS and stderr_bytes:
-                    print("\n" + "="*80, flush=True)
-                    print("VERBOSE BUILD OUTPUT - STDERR (RAW):", flush=True)
-                    print("="*80, flush=True)
-                    try:
-                        print(stderr_bytes.decode('utf-8'), flush=True)
-                    except UnicodeDecodeError:
-                        print(stderr_bytes.decode('latin-1', errors='replace'), flush=True)
-                
+                if log_cmd or self.debug_mode:
+                    error_msg = f"Command failed: {cmd}"
+                    if self.debug_mode:
+                        print(f"❌ [DEBUG] {error_msg}", flush=True)
+                        if hasattr(e, 'stdout') and e.stdout:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if hasattr(e, 'stderr') and e.stderr:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                    else:
+                        logger.error(error_msg)
                 if check:
                     raise
-                # Return a mock result with decoded output
-                class MockResult:
-                    def __init__(self):
-                        self.returncode = e.returncode
-                        self.stdout = ""
-                        self.stderr = ""
-                        if stdout_bytes:
-                            try:
-                                self.stdout = stdout_bytes.decode('utf-8')
-                            except UnicodeDecodeError:
-                                self.stdout = stdout_bytes.decode('latin-1', errors='replace')
-                        if stderr_bytes:
-                            try:
-                                self.stderr = stderr_bytes.decode('utf-8')
-                            except UnicodeDecodeError:
-                                self.stderr = stderr_bytes.decode('latin-1', errors='replace')
-                
-                return MockResult()
+                return e

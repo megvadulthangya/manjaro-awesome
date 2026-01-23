@@ -410,8 +410,14 @@ class PackageBuilder:
     def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, 
                  log_cmd=False, timeout=1800, extra_env=None):
         """Run command with comprehensive logging, timeout, and optional extra environment variables"""
-        if log_cmd:
-            logger.info(f"RUNNING COMMAND: {cmd}")
+        # Check debug mode from config
+        debug_mode = HAS_CONFIG_FILES and getattr(config, 'DEBUG_MODE', False)
+        
+        if log_cmd or debug_mode:
+            if debug_mode:
+                print(f"🔧 [BUILDER DEBUG] RUNNING COMMAND: {cmd}", flush=True)
+            else:
+                logger.info(f"RUNNING COMMAND: {cmd}")
         
         if cwd is None:
             cwd = self.repo_root
@@ -441,19 +447,48 @@ class PackageBuilder:
                     env=env,
                     timeout=timeout
                 )
-                if log_cmd:
-                    if result.stdout:
-                        logger.info(f"STDOUT: {result.stdout[:500]}")
-                    if result.stderr:
-                        logger.info(f"STDERR: {result.stderr[:500]}")
-                    logger.info(f"EXIT CODE: {result.returncode}")
+                
+                # CRITICAL FIX: When in debug mode, bypass logger for critical output
+                if log_cmd or debug_mode:
+                    if debug_mode:
+                        if result.stdout:
+                            print(f"🔧 [BUILDER DEBUG] STDOUT:\n{result.stdout}", flush=True)
+                        if result.stderr:
+                            print(f"🔧 [BUILDER DEBUG] STDERR:\n{result.stderr}", flush=True)
+                        print(f"🔧 [BUILDER DEBUG] EXIT CODE: {result.returncode}", flush=True)
+                    else:
+                        if result.stdout:
+                            logger.info(f"STDOUT: {result.stdout[:500]}")
+                        if result.stderr:
+                            logger.info(f"STDERR: {result.stderr[:500]}")
+                        logger.info(f"EXIT CODE: {result.returncode}")
+                
+                # CRITICAL: If command failed and we're in debug mode, print full output
+                if result.returncode != 0 and debug_mode:
+                    print(f"❌ [BUILDER DEBUG] COMMAND FAILED: {cmd}", flush=True)
+                    if result.stdout and len(result.stdout) > 500:
+                        print(f"❌ [BUILDER DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
+                    if result.stderr and len(result.stderr) > 500:
+                        print(f"❌ [BUILDER DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
+                
                 return result
             except subprocess.TimeoutExpired as e:
-                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                if debug_mode:
+                    print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
+                logger.error(error_msg)
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
+                if log_cmd or debug_mode:
+                    error_msg = f"Command failed: {cmd}"
+                    if debug_mode:
+                        print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
+                        if hasattr(e, 'stdout') and e.stdout:
+                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if hasattr(e, 'stderr') and e.stderr:
+                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                    else:
+                        logger.error(error_msg)
                 if check:
                     raise
                 return e
@@ -471,19 +506,48 @@ class PackageBuilder:
                     env=env,
                     timeout=timeout
                 )
-                if log_cmd:
-                    if result.stdout:
-                        logger.info(f"STDOUT: {result.stdout[:500]}")
-                    if result.stderr:
-                        logger.info(f"STDERR: {result.stderr[:500]}")
-                    logger.info(f"EXIT CODE: {result.returncode}")
+                
+                # CRITICAL FIX: When in debug mode, bypass logger for critical output
+                if log_cmd or debug_mode:
+                    if debug_mode:
+                        if result.stdout:
+                            print(f"🔧 [BUILDER DEBUG] STDOUT:\n{result.stdout}", flush=True)
+                        if result.stderr:
+                            print(f"🔧 [BUILDER DEBUG] STDERR:\n{result.stderr}", flush=True)
+                        print(f"🔧 [BUILDER DEBUG] EXIT CODE: {result.returncode}", flush=True)
+                    else:
+                        if result.stdout:
+                            logger.info(f"STDOUT: {result.stdout[:500]}")
+                        if result.stderr:
+                            logger.info(f"STDERR: {result.stderr[:500]}")
+                        logger.info(f"EXIT CODE: {result.returncode}")
+                
+                # CRITICAL: If command failed and we're in debug mode, print full output
+                if result.returncode != 0 and debug_mode:
+                    print(f"❌ [BUILDER DEBUG] COMMAND FAILED: {cmd}", flush=True)
+                    if result.stdout and len(result.stdout) > 500:
+                        print(f"❌ [BUILDER DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
+                    if result.stderr and len(result.stderr) > 500:
+                        print(f"❌ [BUILDER DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
+                
                 return result
             except subprocess.TimeoutExpired as e:
-                logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                if debug_mode:
+                    print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
+                logger.error(error_msg)
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
+                if log_cmd or debug_mode:
+                    error_msg = f"Command failed: {cmd}"
+                    if debug_mode:
+                        print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
+                        if hasattr(e, 'stdout') and e.stdout:
+                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if hasattr(e, 'stderr') and e.stderr:
+                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                    else:
+                        logger.error(error_msg)
                 if check:
                     raise
                 return e
