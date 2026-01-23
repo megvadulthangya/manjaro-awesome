@@ -1,0 +1,40 @@
+# Maintainer: Gyöngyösi Gábor gabor at gshoots.hu
+
+_cudaver=13  # Csak az URL kereséshez kell
+_base_url="https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/"
+
+# --- AUTOMATIKUS KERESÉS ---
+_latest_file=$(curl -s $_base_url | grep -oP "cudnn-linux-x86_64-[\d.]+_cuda${_cudaver}-archive\.tar\.xz" | sort -V | tail -n 1)
+_latest_ver=$(echo "$_latest_file" | grep -oP 'x86_64-\K[\d.]+(?=_cuda)')
+# ---------------------------
+
+pkgname=cudnn
+pkgver=$_latest_ver
+pkgrel=1
+pkgdesc="NVIDIA CUDA Deep Neural Network library (Standalone version, no dependencies)"
+arch=('x86_64')
+url='https://developer.nvidia.com/cudnn'
+license=('custom')
+
+
+makedepends=('curl')
+
+source=("${_base_url}${_latest_file}")
+sha256sums=('SKIP')
+
+pkgver() {
+  echo "$_latest_ver"
+}
+
+package() {
+  # Belépés a letöltött mappába
+  cd "cudnn-linux-x86_64-${pkgver}_cuda${_cudaver}-archive"
+  
+  mkdir -p "${pkgdir}/usr"
+  
+  # Csak a binárisokat és headereket másoljuk
+  cp -r include lib "${pkgdir}/usr"
+  
+  # Licenc fájl elhelyezése
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
