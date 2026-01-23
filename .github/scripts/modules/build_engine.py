@@ -77,7 +77,12 @@ class BuildEngine:
                     f.write(result.stdout)
                 return self._parse_srcinfo_content(result.stdout)
             else:
-                logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
+                # Log full output on failure
+                logger.error(f"makepkg --printsrcinfo failed with exit code {result.returncode}")
+                if result.stdout:
+                    logger.error(f"FULL STDOUT:\n{result.stdout}")
+                if result.stderr:
+                    logger.error(f"FULL STDERR:\n{result.stderr}")
                 raise RuntimeError(f"Failed to generate .SRCINFO: {result.stderr}")
                 
         except Exception as e:
@@ -324,6 +329,11 @@ class BuildEngine:
             return True
         
         logger.warning(f"⚠️ pacman failed for some dependencies (exit code: {result.returncode})")
+        # Log full output on failure
+        if hasattr(result, 'stdout') and result.stdout:
+            logger.error(f"FULL STDOUT:\n{result.stdout}")
+        if hasattr(result, 'stderr') and result.stderr:
+            logger.error(f"FULL STDERR:\n{result.stderr}")
         
         # Fallback to AUR (yay) WITHOUT sudo
         cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
@@ -334,6 +344,11 @@ class BuildEngine:
             return True
         
         logger.error(f"❌ Both pacman and yay failed for dependencies")
+        # Log full output on failure
+        if hasattr(result, 'stdout') and result.stdout:
+            logger.error(f"FULL STDOUT:\n{result.stdout}")
+        if hasattr(result, 'stderr') and result.stderr:
+            logger.error(f"FULL STDERR:\n{result.stderr}")
         return False
     
     def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, log_cmd=False, timeout=1800):
@@ -385,10 +400,19 @@ class BuildEngine:
                 return result
             except subprocess.TimeoutExpired as e:
                 logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                # Try to log any captured output so far
+                if hasattr(e, 'stdout') and e.stdout:
+                    logger.error(f"Captured stdout before timeout:\n{e.stdout}")
+                if hasattr(e, 'stderr') and e.stderr:
+                    logger.error(f"Captured stderr before timeout:\n{e.stderr}")
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
+                # This should only be reached when check=True and the command failed
+                logger.error(f"Command failed with exit code {e.returncode}: {cmd}")
+                if hasattr(e, 'output') and e.output:
+                    logger.error(f"FULL STDOUT:\n{e.output}")
+                if hasattr(e, 'stderr') and e.stderr:
+                    logger.error(f"FULL STDERR:\n{e.stderr}")
                 if check:
                     raise
                 # Return a mock result with the exception info
@@ -398,6 +422,9 @@ class BuildEngine:
                         self.stdout = e.output if hasattr(e, 'output') else ""
                         self.stderr = e.stderr if hasattr(e, 'stderr') else ""
                 return MockResult(e)
+            except Exception as e:
+                logger.error(f"Unexpected error running command: {e}")
+                raise
         else:
             try:
                 env = os.environ.copy()
@@ -433,10 +460,19 @@ class BuildEngine:
                 return result
             except subprocess.TimeoutExpired as e:
                 logger.error(f"⚠️ Command timed out after {timeout} seconds: {cmd}")
+                # Try to log any captured output so far
+                if hasattr(e, 'stdout') and e.stdout:
+                    logger.error(f"Captured stdout before timeout:\n{e.stdout}")
+                if hasattr(e, 'stderr') and e.stderr:
+                    logger.error(f"Captured stderr before timeout:\n{e.stderr}")
                 raise
             except subprocess.CalledProcessError as e:
-                if log_cmd:
-                    logger.error(f"Command failed: {cmd}")
+                # This should only be reached when check=True and the command failed
+                logger.error(f"Command failed with exit code {e.returncode}: {cmd}")
+                if hasattr(e, 'output') and e.output:
+                    logger.error(f"FULL STDOUT:\n{e.output}")
+                if hasattr(e, 'stderr') and e.stderr:
+                    logger.error(f"FULL STDERR:\n{e.stderr}")
                 if check:
                     raise
                 # Return a mock result with the exception info
@@ -446,3 +482,6 @@ class BuildEngine:
                         self.stdout = e.output if hasattr(e, 'output') else ""
                         self.stderr = e.stderr if hasattr(e, 'stderr') else ""
                 return MockResult(e)
+            except Exception as e:
+                logger.error(f"Unexpected error running command: {e}")
+                raise
