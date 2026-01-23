@@ -23,6 +23,8 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "cuda-12.9",
+    "cudnn9.10-cuda12.9",
     "libinput-gestures",
     "gtkd",
     "qt5-styleplugins",
