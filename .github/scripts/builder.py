@@ -285,7 +285,7 @@ class PackageBuilder:
             sys.exit(1)
     
     def _apply_repository_state(self, exists: bool, has_packages: bool):
-        """Apply repository state with proper SigLevel based on discovery"""
+        """Apply repository state with proper SigLevel based on discovery - CRITICAL FIX: Run pacman -Sy after enabling repository"""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -358,6 +358,16 @@ class PackageBuilder:
             os.unlink(temp_path)
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
+            
+            # CRITICAL FIX: Run pacman -Sy after enabling repository to synchronize databases
+            if exists and has_packages:
+                logger.info("🔄 Synchronizing pacman databases after enabling repository...")
+                cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+                result = self._run_cmd(cmd, log_cmd=True, timeout=300, check=False)
+                if result.returncode == 0:
+                    logger.info("✅ Pacman databases synchronized successfully")
+                else:
+                    logger.warning(f"⚠️ Pacman sync warning: {result.stderr[:200]}")
             
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
@@ -596,7 +606,7 @@ class PackageBuilder:
         return None
     
     def _build_aur_package(self, pkg_name: str) -> bool:
-        """Build AUR package with SRCINFO-based version comparison and PACKAGER injection"""
+        """Build AUR package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -684,10 +694,11 @@ class PackageBuilder:
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            # Install dependencies (simplified - would need dependency extraction)
-            print("Installing dependencies (simplified)...")
+            # CRITICAL FIX: Install dependencies with AUR fallback
+            print("Installing dependencies with AUR fallback...")
             
-            print("Building package...")
+            # First attempt: Standard makepkg -si
+            print("Building package (first attempt)...")
             build_result = self._run_cmd(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
@@ -696,6 +707,65 @@ class PackageBuilder:
                 timeout=3600,
                 extra_env={"PACKAGER": self.packager_id}
             )
+            
+            # If first attempt fails, try yay fallback for missing dependencies
+            if build_result.returncode != 0:
+                logger.warning(f"First build attempt failed for {pkg_name}, trying AUR dependency fallback...")
+                
+                # Extract missing dependencies from error output
+                error_output = build_result.stderr if build_result.stderr else build_result.stdout
+                missing_deps = []
+                
+                # Look for patterns like "error: target not found: <package>"
+                import re
+                missing_patterns = [
+                    r"error: target not found: (\S+)",
+                    r"Could not find all required packages:",
+                    r":: Unable to find (\S+)",
+                ]
+                
+                for pattern in missing_patterns:
+                    matches = re.findall(pattern, error_output)
+                    if matches:
+                        missing_deps.extend(matches)
+                
+                # Also look for specific makepkg dependency errors
+                if "makepkg: cannot find the" in error_output:
+                    lines = error_output.split('\n')
+                    for line in lines:
+                        if "makepkg: cannot find the" in line:
+                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
+                            dep_match = re.search(r"cannot find the '([^']+)'", line)
+                            if dep_match:
+                                missing_deps.append(dep_match.group(1))
+                
+                # Remove duplicates
+                missing_deps = list(set(missing_deps))
+                
+                if missing_deps:
+                    logger.info(f"Found missing dependencies: {missing_deps}")
+                    
+                    # Try to install missing dependencies with yay
+                    deps_str = ' '.join(missing_deps)
+                    yay_cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+                    yay_result = self._run_cmd(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
+                    
+                    if yay_result.returncode == 0:
+                        logger.info("✅ Missing dependencies installed via yay, retrying build...")
+                        
+                        # Retry the build
+                        build_result = self._run_cmd(
+                            f"makepkg -si --noconfirm --clean --nocheck",
+                            cwd=pkg_dir,
+                            capture=True,
+                            check=False,
+                            timeout=3600,
+                            extra_env={"PACKAGER": self.packager_id}
+                        )
+                    else:
+                        logger.error(f"❌ Failed to install missing dependencies with yay")
+                        shutil.rmtree(pkg_dir, ignore_errors=True)
+                        return False
             
             if build_result.returncode == 0:
                 moved = False
@@ -724,7 +794,7 @@ class PackageBuilder:
             return False
     
     def _build_local_package(self, pkg_name: str) -> bool:
-        """Build local package with SRCINFO-based version comparison and PACKAGER injection"""
+        """Build local package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -780,15 +850,16 @@ class PackageBuilder:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 return False
             
-            # Install dependencies (simplified)
-            print("Installing dependencies (simplified)...")
+            # CRITICAL FIX: Install dependencies with AUR fallback
+            print("Installing dependencies with AUR fallback...")
             
-            print("Building package...")
+            # First attempt: Standard makepkg with appropriate flags
             makepkg_flags = "-si --noconfirm --clean"
             if pkg_name == "gtk2":
                 makepkg_flags += " --nocheck"
                 logger.info("GTK2: Skipping check step (long)")
             
+            print("Building package (first attempt)...")
             build_result = self._run_cmd(
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
@@ -797,6 +868,64 @@ class PackageBuilder:
                 timeout=3600,
                 extra_env={"PACKAGER": self.packager_id}
             )
+            
+            # If first attempt fails, try yay fallback for missing dependencies
+            if build_result.returncode != 0:
+                logger.warning(f"First build attempt failed for {pkg_name}, trying AUR dependency fallback...")
+                
+                # Extract missing dependencies from error output
+                error_output = build_result.stderr if build_result.stderr else build_result.stdout
+                missing_deps = []
+                
+                # Look for patterns like "error: target not found: <package>"
+                import re
+                missing_patterns = [
+                    r"error: target not found: (\S+)",
+                    r"Could not find all required packages:",
+                    r":: Unable to find (\S+)",
+                ]
+                
+                for pattern in missing_patterns:
+                    matches = re.findall(pattern, error_output)
+                    if matches:
+                        missing_deps.extend(matches)
+                
+                # Also look for specific makepkg dependency errors
+                if "makepkg: cannot find the" in error_output:
+                    lines = error_output.split('\n')
+                    for line in lines:
+                        if "makepkg: cannot find the" in line:
+                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
+                            dep_match = re.search(r"cannot find the '([^']+)'", line)
+                            if dep_match:
+                                missing_deps.append(dep_match.group(1))
+                
+                # Remove duplicates
+                missing_deps = list(set(missing_deps))
+                
+                if missing_deps:
+                    logger.info(f"Found missing dependencies: {missing_deps}")
+                    
+                    # Try to install missing dependencies with yay
+                    deps_str = ' '.join(missing_deps)
+                    yay_cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+                    yay_result = self._run_cmd(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
+                    
+                    if yay_result.returncode == 0:
+                        logger.info("✅ Missing dependencies installed via yay, retrying build...")
+                        
+                        # Retry the build
+                        build_result = self._run_cmd(
+                            f"makepkg {makepkg_flags}",
+                            cwd=pkg_dir,
+                            capture=True,
+                            check=False,
+                            timeout=3600,
+                            extra_env={"PACKAGER": self.packager_id}
+                        )
+                    else:
+                        logger.error(f"❌ Failed to install missing dependencies with yay")
+                        return False
             
             if build_result.returncode == 0:
                 moved = False

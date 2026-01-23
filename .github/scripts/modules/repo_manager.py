@@ -513,7 +513,7 @@ class RepoManager:
     def _get_vps_file_inventory(self) -> Optional[List[str]]:
         """Get complete inventory of all files on VPS"""
         logger.info("📋 Getting complete VPS file inventory...")
-        remote_cmd = f"""
+        remote_cmd = rf"""
         # Get all package files, signatures, and database files
         find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" -o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" -o -name "*.abs.tar.gz" \) 2>/dev/null
         """

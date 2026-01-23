@@ -325,7 +325,7 @@ class BuildEngine:
         if phantom_packages:
             logger.info(f"Phantom packages removed: {', '.join(phantom_packages)}")
         
-        # Try pacman first
+        # Try pacman first - ensure pacman databases are synced
         deps_str = ' '.join(clean_deps)
         cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
         result = self._run_cmd(cmd, log_cmd=True, check=False, timeout=1200)
@@ -336,8 +336,8 @@ class BuildEngine:
         
         logger.warning(f"⚠️ pacman failed for some dependencies (exit code: {result.returncode})")
         
-        # Fallback to AUR (yay) WITHOUT sudo
-        cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+        # Fallback to AUR (yay) WITHOUT sudo - but first sync pacman
+        cmd = f"sudo LC_ALL=C pacman -Sy && LC_ALL=C yay -S --needed --noconfirm {deps_str}"
         result = self._run_cmd(cmd, log_cmd=True, check=False, user="builder", timeout=1800)
         
         if result.returncode == 0:
