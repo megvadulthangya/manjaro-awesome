@@ -361,10 +361,21 @@ class BuildEngine:
                     sudo_cmd,
                     capture_output=capture,
                     text=True,
-                    check=check,
+                    check=False,
                     env=env,
                     timeout=timeout
                 )
+                
+                # Log full output on failure (non-zero exit code)
+                if result.returncode != 0:
+                    logger.error(f"Command failed with exit code {result.returncode}: {cmd}")
+                    if capture and result.stdout:
+                        logger.error(f"FULL STDOUT:\n{result.stdout}")
+                    if capture and result.stderr:
+                        logger.error(f"FULL STDERR:\n{result.stderr}")
+                    if check:
+                        raise subprocess.CalledProcessError(result.returncode, sudo_cmd, output=result.stdout, stderr=result.stderr)
+                
                 if log_cmd:
                     if result.stdout:
                         logger.info(f"STDOUT: {result.stdout[:500]}")
@@ -380,7 +391,13 @@ class BuildEngine:
                     logger.error(f"Command failed: {cmd}")
                 if check:
                     raise
-                return e
+                # Return a mock result with the exception info
+                class MockResult:
+                    def __init__(self, e):
+                        self.returncode = e.returncode
+                        self.stdout = e.output if hasattr(e, 'output') else ""
+                        self.stderr = e.stderr if hasattr(e, 'stderr') else ""
+                return MockResult(e)
         else:
             try:
                 env = os.environ.copy()
@@ -392,10 +409,21 @@ class BuildEngine:
                     shell=shell,
                     capture_output=capture,
                     text=True,
-                    check=check,
+                    check=False,
                     env=env,
                     timeout=timeout
                 )
+                
+                # Log full output on failure (non-zero exit code)
+                if result.returncode != 0:
+                    logger.error(f"Command failed with exit code {result.returncode}: {cmd}")
+                    if capture and result.stdout:
+                        logger.error(f"FULL STDOUT:\n{result.stdout}")
+                    if capture and result.stderr:
+                        logger.error(f"FULL STDERR:\n{result.stderr}")
+                    if check:
+                        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
+                
                 if log_cmd:
                     if result.stdout:
                         logger.info(f"STDOUT: {result.stdout[:500]}")
@@ -411,4 +439,10 @@ class BuildEngine:
                     logger.error(f"Command failed: {cmd}")
                 if check:
                     raise
-                return e
+                # Return a mock result with the exception info
+                class MockResult:
+                    def __init__(self, e):
+                        self.returncode = e.returncode
+                        self.stdout = e.output if hasattr(e, 'output') else ""
+                        self.stderr = e.stderr if hasattr(e, 'stderr') else ""
+                return MockResult(e)
