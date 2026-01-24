@@ -1,5 +1,5 @@
 """
-VPS Client Module - Handles SSH operations with remote state verification
+VPS Client Module - Handles SSH operations and remote file verification
 """
 
 import os
@@ -8,13 +8,13 @@ import shutil
 import time
 import logging
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class VPSClient:
-    """Handles SSH operations and remote state verification"""
+    """Handles SSH operations and remote file verification"""
     
     def __init__(self, config: dict):
         """
@@ -35,11 +35,11 @@ class VPSClient:
         self.repo_name = config.get('repo_name', '')
         
     def setup_ssh_config(self, ssh_key: Optional[str] = None):
-        """Setup SSH config file for builder user"""
+        """Setup SSH config file for builder user - container invariant"""
         ssh_dir = Path("/home/builder/.ssh")
         ssh_dir.mkdir(exist_ok=True, mode=0o700)
         
-        # Write SSH config file
+        # Write SSH config file using environment variables
         config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
@@ -56,7 +56,7 @@ class VPSClient:
         
         config_file.chmod(0o600)
         
-        # Ensure SSH key exists
+        # Ensure SSH key exists and has correct permissions
         ssh_key_path = ssh_dir / "id_ed25519"
         if not ssh_key_path.exists() and ssh_key:
             with open(ssh_key_path, "w") as f:
@@ -77,7 +77,6 @@ class VPSClient:
         
         ssh_test_cmd = [
             "ssh",
-            *self.ssh_options,
             f"{self.vps_user}@{self.vps_host}",
             "echo SSH_TEST_SUCCESS"
         ]
@@ -148,7 +147,7 @@ class VPSClient:
         fi
         """
         
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
         try:
             result = subprocess.run(
@@ -180,99 +179,10 @@ class VPSClient:
             logger.error(f"❌ Error checking repository: {e}")
             return False, False
     
-    def get_remote_file_hash(self, remote_path: str) -> Optional[str]:
-        """
-        Get SHA256 hash of a remote file via SSH
-        
-        Args:
-            remote_path: Path to file on remote server
-        
-        Returns:
-            SHA256 hash string or None if error
-        """
-        remote_cmd = f"sha256sum '{remote_path}' 2>/dev/null | cut -d' ' -f1"
-        
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options,
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                hash_value = result.stdout.strip()
-                if len(hash_value) == 64:  # SHA256 hash length
-                    logger.debug(f"Got remote hash for {remote_path}: {hash_value[:8]}...")
-                    return hash_value
-                else:
-                    logger.warning(f"Invalid hash format for {remote_path}: {hash_value}")
-                    return None
-            else:
-                logger.debug(f"Could not get hash for {remote_path}: {result.stderr[:200]}")
-                return None
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ SSH timeout getting hash for {remote_path}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Error getting hash for {remote_path}: {e}")
-            return None
-    
-    def check_remote_file_exists(self, remote_path: str) -> bool:
-        """
-        Check if a file exists on remote server via SSH
-        
-        Args:
-            remote_path: Path to check
-        
-        Returns:
-            True if file exists, False otherwise
-        """
-        remote_cmd = f"test -f '{remote_path}' && echo 'EXISTS' || echo 'NOT_FOUND'"
-        
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options,
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30
-            )
-            
-            if result.returncode == 0 and "EXISTS" in result.stdout:
-                logger.debug(f"File exists on VPS: {remote_path}")
-                return True
-            else:
-                logger.debug(f"File not found on VPS: {remote_path}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ SSH timeout checking file {remote_path}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Error checking file {remote_path}: {e}")
-            return False
-    
     def list_remote_packages(self) -> List[str]:
         """List all *.pkg.tar.zst files in the remote repository directory"""
         print("\n" + "=" * 60)
-        print("STEP: Listing remote repository packages (SSH find)")
+        print("STEP 1: Listing remote repository packages (SSH find)")
         print("=" * 60)
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
@@ -282,7 +192,6 @@ class VPSClient:
         
         ssh_cmd = [
             "ssh",
-            *self.ssh_options,
             f"{self.vps_user}@{self.vps_host}",
             f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null || echo 'NO_FILES'"
         ]
@@ -298,6 +207,10 @@ class VPSClient:
             )
             
             logger.info(f"EXIT CODE: {result.returncode}")
+            if result.stdout:
+                logger.info(f"STDOUT (first 1000 chars): {result.stdout[:1000]}")
+            if result.stderr:
+                logger.info(f"STDERR: {result.stderr[:500]}")
             
             if result.returncode == 0:
                 files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
@@ -316,6 +229,90 @@ class VPSClient:
             logger.error(f"SSH command failed: {e}")
             return []
     
+    def get_remote_file_hash(self, path: str) -> Optional[str]:
+        """
+        Get SHA256 hash of a remote file
+        
+        Args:
+            path: Remote file path
+            
+        Returns:
+            SHA256 hash string or None if file doesn't exist or error
+        """
+        logger.info(f"Getting remote file hash: {path}")
+        
+        # Build SSH command to get file hash
+        remote_cmd = f"sha256sum '{path}' 2>/dev/null || echo 'ERROR'"
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                if result.stdout.strip() and "ERROR" not in result.stdout:
+                    # Extract just the hash (first 64 characters before space)
+                    hash_str = result.stdout.strip().split()[0]
+                    if len(hash_str) == 64:  # SHA256 hash length
+                        return hash_str
+                    else:
+                        logger.warning(f"Invalid hash format for {path}: {result.stdout[:100]}")
+                else:
+                    logger.debug(f"File hash command failed or returned error for {path}")
+            else:
+                logger.debug(f"SSH command failed for {path}: {result.stderr[:200]}")
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout getting hash for {path}")
+        except Exception as e:
+            logger.error(f"Error getting hash for {path}: {e}")
+        
+        return None
+    
+    def check_remote_file_exists(self, path: str) -> bool:
+        """
+        Check if a file exists on the remote server
+        
+        Args:
+            path: Remote file path
+            
+        Returns:
+            True if file exists, False otherwise
+        """
+        logger.info(f"Checking if remote file exists: {path}")
+        
+        # Build SSH command to check file existence
+        remote_cmd = f"test -f '{path}' && echo 'EXISTS' || echo 'MISSING'"
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False
+            )
+            
+            if result.returncode == 0 and "EXISTS" in result.stdout:
+                return True
+            else:
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout checking file existence for {path}")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking file existence for {path}: {e}")
+            return False
+    
     def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
         """
         Upload files to server using RSYNC WITHOUT --delete flag
@@ -330,7 +327,7 @@ class VPSClient:
             logger.warning("No files to upload")
             return False
         
-        # Log files to upload
+        # Log files to upload (safe - only filenames, not paths)
         logger.info(f"Files to upload ({len(files_to_upload)}):")
         for f in files_to_upload:
             try:
@@ -375,6 +372,10 @@ class VPSClient:
                 for line in result.stdout.splitlines():
                     if line.strip():
                         logger.info(f"RSYNC: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip() and "No such file or directory" not in line:
+                        logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
@@ -416,6 +417,14 @@ class VPSClient:
             duration = int(end_time - start_time)
             
             logger.info(f"EXIT CODE (attempt 2): {result.returncode}")
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"RSYNC RETRY: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip() and "No such file or directory" not in line:
+                        logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
                 logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
