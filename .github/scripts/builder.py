@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Refactored Modular Architecture with Zero-Residue Policy
+Manjaro Package Builder - Refactored with Remote State Verification
 Main orchestrator that coordinates between modules
 """
 
@@ -15,9 +15,7 @@ import tempfile
 import time
 import hashlib
 import logging
-import socket
-import glob
-import tarfile
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -38,11 +36,6 @@ try:
 except ImportError as e:
     print(f"❌ CRITICAL: Failed to import modules: {e}")
     print(f"❌ Please ensure modules are in: {script_dir}/modules/")
-    MODULES_LOADED = False
-    sys.exit(1)
-except NameError as e:
-    print(f"❌ CRITICAL: NameError in modules: {e}")
-    print(f"❌ This indicates missing imports in module files")
     MODULES_LOADED = False
     sys.exit(1)
 
@@ -70,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 class PackageBuilder:
-    """Main orchestrator that coordinates between modules"""
+    """Main orchestrator with remote state verification"""
     
     def __init__(self):
         # Run pre-flight environment validation
@@ -90,7 +83,6 @@ class PackageBuilder:
         self.build_tracking_dir.mkdir(exist_ok=True)
         
         # Load configuration values from config.py
-        self.mirror_temp_dir = Path(getattr(config, 'MIRROR_TEMP_DIR', '/tmp/repo_mirror') if HAS_CONFIG_FILES else "/tmp/repo_mirror")
         self.sync_clone_dir = Path(getattr(config, 'SYNC_CLONE_DIR', '/tmp/manjaro-awesome-gitclone') if HAS_CONFIG_FILES else "/tmp/manjaro-awesome-gitclone")
         self.aur_urls = getattr(config, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]) if HAS_CONFIG_FILES else ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]
         self.aur_build_dir = self.repo_root / (getattr(config, 'AUR_BUILD_DIR', 'build_aur') if HAS_CONFIG_FILES else "build_aur")
@@ -120,7 +112,7 @@ class PackageBuilder:
         }
 
     def _validate_env(self) -> None:
-        """Comprehensive pre-flight environment validation - check for all required variables"""
+        """Comprehensive pre-flight environment validation"""
         print("\n" + "=" * 60)
         print("PRE-FLIGHT ENVIRONMENT VALIDATION")
         print("=" * 60)
@@ -151,13 +143,12 @@ class PackageBuilder:
         if missing_vars:
             sys.exit(1)
         
-        # Check optional variables and warn if missing
+        # Check optional variables
         for var in optional_but_recommended:
             value = os.getenv(var)
             if not value or value.strip() == '':
                 logger.warning(f"⚠️ Optional variable {var} is empty")
         
-        # ✅ BIZTONSÁGI JAVÍTÁS: NE jelenítsünk meg titkos információkat!
         logger.info("✅ Environment validation passed:")
         for var in required_vars + optional_but_recommended:
             value = os.getenv(var)
@@ -170,10 +161,7 @@ class PackageBuilder:
         repo_name = os.getenv('REPO_NAME')
         if repo_name:
             if not re.match(r'^[a-zA-Z0-9_-]+$', repo_name):
-                logger.error(f"[ERROR] Invalid REPO_NAME '{repo_name}'. Must contain only letters, numbers, hyphens, and underscores.")
-                sys.exit(1)
-            if len(repo_name) > 50:
-                logger.error(f"[ERROR] REPO_NAME '{repo_name}' is too long (max 50 characters).")
+                logger.error(f"[ERROR] Invalid REPO_NAME '{repo_name}'.")
                 sys.exit(1)
     
     def _load_config(self):
@@ -187,11 +175,10 @@ class PackageBuilder:
         self.repo_server_url = os.getenv('REPO_SERVER_URL', '')
         self.remote_dir = os.getenv('REMOTE_DIR')
         
-        # Repository name from environment (validated in _validate_env)
+        # Repository name from environment
         self.repo_name = os.getenv('REPO_NAME')
         
         print(f"🔧 Configuration loaded:")
-        # ✅ BIZTONSÁGI JAVÍTÁS: Csak nem titkos információkat jelenítsünk meg
         print(f"   SSH user: {self.vps_user}")
         print(f"   VPS host: {self.vps_host}")
         print(f"   Remote directory: {self.remote_dir}")
@@ -219,11 +206,13 @@ class PackageBuilder:
                 'repo_name': self.repo_name,
                 'output_dir': self.output_dir,
                 'remote_dir': self.remote_dir,
-                'mirror_temp_dir': self.mirror_temp_dir,
                 'vps_user': self.vps_user,
                 'vps_host': self.vps_host,
             }
             self.repo_manager = RepoManager(repo_config)
+            
+            # Set VPS client in repo manager
+            self.repo_manager.set_vps_client(self.vps_client)
             
             # Build Engine configuration
             build_config = {
@@ -240,10 +229,6 @@ class PackageBuilder:
             
             logger.info("✅ All modules initialized successfully")
             
-        except NameError as e:
-            logger.error(f"❌ NameError during module initialization: {e}")
-            logger.error("This indicates missing imports in module files")
-            sys.exit(1)
         except Exception as e:
             logger.error(f"❌ Error initializing modules: {e}")
             sys.exit(1)
@@ -285,7 +270,7 @@ class PackageBuilder:
             sys.exit(1)
     
     def _apply_repository_state(self, exists: bool, has_packages: bool):
-        """Apply repository state with proper SigLevel based on discovery - CRITICAL FIX: Run pacman -Sy after enabling repository"""
+        """Apply repository state with proper SigLevel"""
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
@@ -303,12 +288,10 @@ class PackageBuilder:
             # Remove old section if it exists
             in_section = False
             for line in lines:
-                # Check if we're entering our section
                 if line.strip() == repo_section or line.strip() == f"#{repo_section}":
                     in_section = True
                     continue
                 elif in_section and (line.strip().startswith('[') or line.strip() == ''):
-                    # We're leaving our section
                     in_section = False
                 
                 if not in_section:
@@ -359,15 +342,13 @@ class PackageBuilder:
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
             
-            # CRITICAL FIX: Run pacman -Sy after enabling repository to synchronize databases
+            # Run pacman -Sy after enabling repository
             if exists and has_packages:
                 logger.info("🔄 Synchronizing pacman databases after enabling repository...")
                 cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
                 result = self._run_cmd(cmd, log_cmd=True, timeout=300, check=False)
                 if result.returncode == 0:
                     logger.info("✅ Pacman databases synchronized successfully")
-                else:
-                    logger.warning(f"⚠️ Pacman sync warning: {result.stderr[:200]}")
             
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
@@ -396,7 +377,6 @@ class PackageBuilder:
             # Debug: List packages in our custom repo
             debug_cmd = f"sudo pacman -Sl {self.repo_name}"
             logger.info(f"🔍 DEBUG: Running command to see what packages pacman sees in our repo:")
-            logger.info(f"Command: {debug_cmd}")
             
             debug_result = self._run_cmd(debug_cmd, log_cmd=True, timeout=30, check=False)
             
@@ -405,22 +385,15 @@ class PackageBuilder:
                     logger.info(f"Packages in {self.repo_name} according to pacman:")
                     for line in debug_result.stdout.splitlines():
                         logger.info(f"  {line}")
-                else:
-                    logger.warning(f"⚠️ pacman -Sl {self.repo_name} returned no output (repo might be empty)")
-            else:
-                logger.warning(f"⚠️ pacman -Sl failed: {debug_result.stderr[:200]}")
             
             return True
         else:
             logger.error("❌ Pacman sync failed")
-            if result.stderr:
-                logger.error(f"Error: {result.stderr[:500]}")
             return False
     
     def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, 
                  log_cmd=False, timeout=1800, extra_env=None):
-        """Run command with comprehensive logging, timeout, and optional extra environment variables"""
-        # Check debug mode from config
+        """Run command with comprehensive logging"""
         debug_mode = HAS_CONFIG_FILES and getattr(config, 'DEBUG_MODE', False)
         
         if log_cmd or debug_mode:
@@ -458,7 +431,6 @@ class PackageBuilder:
                     timeout=timeout
                 )
                 
-                # CRITICAL FIX: When in debug mode, bypass logger for critical output
                 if log_cmd or debug_mode:
                     if debug_mode:
                         if result.stdout:
@@ -473,14 +445,6 @@ class PackageBuilder:
                             logger.info(f"STDERR: {result.stderr[:500]}")
                         logger.info(f"EXIT CODE: {result.returncode}")
                 
-                # CRITICAL: If command failed and we're in debug mode, print full output
-                if result.returncode != 0 and debug_mode:
-                    print(f"❌ [BUILDER DEBUG] COMMAND FAILED: {cmd}", flush=True)
-                    if result.stdout and len(result.stdout) > 500:
-                        print(f"❌ [BUILDER DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
-                    if result.stderr and len(result.stderr) > 500:
-                        print(f"❌ [BUILDER DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
-                
                 return result
             except subprocess.TimeoutExpired as e:
                 error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
@@ -493,10 +457,6 @@ class PackageBuilder:
                     error_msg = f"Command failed: {cmd}"
                     if debug_mode:
                         print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
-                        if hasattr(e, 'stdout') and e.stdout:
-                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
-                        if hasattr(e, 'stderr') and e.stderr:
-                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                     else:
                         logger.error(error_msg)
                 if check:
@@ -517,7 +477,6 @@ class PackageBuilder:
                     timeout=timeout
                 )
                 
-                # CRITICAL FIX: When in debug mode, bypass logger for critical output
                 if log_cmd or debug_mode:
                     if debug_mode:
                         if result.stdout:
@@ -532,14 +491,6 @@ class PackageBuilder:
                             logger.info(f"STDERR: {result.stderr[:500]}")
                         logger.info(f"EXIT CODE: {result.returncode}")
                 
-                # CRITICAL: If command failed and we're in debug mode, print full output
-                if result.returncode != 0 and debug_mode:
-                    print(f"❌ [BUILDER DEBUG] COMMAND FAILED: {cmd}", flush=True)
-                    if result.stdout and len(result.stdout) > 500:
-                        print(f"❌ [BUILDER DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
-                    if result.stderr and len(result.stderr) > 500:
-                        print(f"❌ [BUILDER DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
-                
                 return result
             except subprocess.TimeoutExpired as e:
                 error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
@@ -552,61 +503,14 @@ class PackageBuilder:
                     error_msg = f"Command failed: {cmd}"
                     if debug_mode:
                         print(f"❌ [BUILDER DEBUG] {error_msg}", flush=True)
-                        if hasattr(e, 'stdout') and e.stdout:
-                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
-                        if hasattr(e, 'stderr') and e.stderr:
-                            print(f"❌ [BUILDER DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                     else:
                         logger.error(error_msg)
                 if check:
                     raise
                 return e
     
-    def package_exists(self, pkg_name: str, version=None) -> bool:
-        """Check if package exists on server"""
-        if not self.remote_files:
-            return False
-        
-        pattern = f"^{re.escape(pkg_name)}-"
-        matches = [f for f in self.remote_files if re.match(pattern, f)]
-        
-        if matches:
-            logger.debug(f"Package {pkg_name} exists: {matches[0]}")
-            return True
-        
-        return False
-    
-    def get_remote_version(self, pkg_name: str) -> Optional[str]:
-        """Get the version of a package from remote server using SRCINFO-based extraction"""
-        if not self.remote_files:
-            return None
-        
-        # Look for any file with this package name
-        for filename in self.remote_files:
-            if filename.startswith(f"{pkg_name}-"):
-                # Extract version from filename
-                base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-                parts = base.split('-')
-                
-                # Find where the package name ends
-                for i in range(len(parts) - 2, 0, -1):
-                    possible_name = '-'.join(parts[:i])
-                    if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
-                        if len(parts) >= i + 3:
-                            version_part = parts[i]
-                            release_part = parts[i+1]
-                            if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
-                                epoch_part = parts[i]
-                                version_part = parts[i+1]
-                                release_part = parts[i+2]
-                                return f"{epoch_part}:{version_part}-{release_part}"
-                            else:
-                                return f"{version_part}-{release_part}"
-        
-        return None
-    
     def _build_aur_package(self, pkg_name: str) -> bool:
-        """Build AUR package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
+        """Build AUR package with remote state verification"""
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -616,7 +520,7 @@ class PackageBuilder:
         
         print(f"Cloning {pkg_name} from AUR...")
         
-        # Try different AUR URLs from config (ALWAYS FRESH CLONE)
+        # Try different AUR URLs
         clone_success = False
         for aur_url_template in self.aur_urls:
             aur_url = aur_url_template.format(pkg_name=pkg_name)
@@ -647,20 +551,21 @@ class PackageBuilder:
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version info from SRCINFO (not regex)
+        # Extract version info from SRCINFO
         try:
             pkgver, pkgrel, epoch = self.build_engine.extract_version_from_srcinfo(pkg_dir)
             version = self.build_engine.get_full_version_string(pkgver, pkgrel, epoch)
             
-            # Get remote version for comparison
-            remote_version = self.get_remote_version(pkg_name)
+            # Check if package is up-to-date using remote state verification
+            is_up_to_date, remote_version = self.repo_manager.is_package_up_to_date(
+                pkg_name, version, pkgver, pkgrel, epoch
+            )
             
-            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
-            if remote_version and not self.build_engine.compare_versions(remote_version, pkgver, pkgrel, epoch):
+            if is_up_to_date:
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 
-                # ZERO-RESIDUE FIX: Register the target version for this skipped package
+                # Register the skipped package
                 self.repo_manager.register_skipped_package(pkg_name, remote_version)
                 
                 shutil.rmtree(pkg_dir, ignore_errors=True)
@@ -669,7 +574,7 @@ class PackageBuilder:
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
                 
-                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
+                # PRE-BUILD PURGE: Remove old version files
                 self.repo_manager.pre_build_purge_old_versions(pkg_name, remote_version)
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
@@ -693,11 +598,8 @@ class PackageBuilder:
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            # CRITICAL FIX: Install dependencies with AUR fallback
-            print("Installing dependencies with AUR fallback...")
-            
-            # First attempt: Standard makepkg -si
-            print("Building package (first attempt)...")
+            # Build package
+            print("Building package...")
             build_result = self._run_cmd(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
@@ -715,7 +617,6 @@ class PackageBuilder:
                 error_output = build_result.stderr if build_result.stderr else build_result.stdout
                 missing_deps = []
                 
-                # Look for patterns like "error: target not found: <package>"
                 import re
                 missing_patterns = [
                     r"error: target not found: (\S+)",
@@ -728,17 +629,14 @@ class PackageBuilder:
                     if matches:
                         missing_deps.extend(matches)
                 
-                # Also look for specific makepkg dependency errors
                 if "makepkg: cannot find the" in error_output:
                     lines = error_output.split('\n')
                     for line in lines:
                         if "makepkg: cannot find the" in line:
-                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
                             dep_match = re.search(r"cannot find the '([^']+)'", line)
                             if dep_match:
                                 missing_deps.append(dep_match.group(1))
                 
-                # Remove duplicates
                 missing_deps = list(set(missing_deps))
                 
                 if missing_deps:
@@ -767,19 +665,23 @@ class PackageBuilder:
                         return False
             
             if build_result.returncode == 0:
-                moved = False
+                built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
-                    moved = True
+                    built_files.append(dest)
                 
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 
-                if moved:
+                if built_files:
                     self.built_packages.append(f"{pkg_name} ({version})")
-                    # ZERO-RESIDUE FIX: Register the target version for this built package
-                    self.repo_manager.register_package_target_version(pkg_name, version)
+                    
+                    # Update VPS state with new package
+                    self.repo_manager.update_package_state(
+                        pkg_name, version, built_files[0].name, built_files
+                    )
+                    
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -795,7 +697,7 @@ class PackageBuilder:
             return False
     
     def _build_local_package(self, pkg_name: str) -> bool:
-        """Build local package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
+        """Build local package with remote state verification"""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
@@ -806,20 +708,21 @@ class PackageBuilder:
             logger.error(f"No PKGBUILD found for {pkg_name}")
             return False
         
-        # Extract version info from SRCINFO (not regex)
+        # Extract version info from SRCINFO
         try:
             pkgver, pkgrel, epoch = self.build_engine.extract_version_from_srcinfo(pkg_dir)
             version = self.build_engine.get_full_version_string(pkgver, pkgrel, epoch)
             
-            # Get remote version for comparison
-            remote_version = self.get_remote_version(pkg_name)
+            # Check if package is up-to-date using remote state verification
+            is_up_to_date, remote_version = self.repo_manager.is_package_up_to_date(
+                pkg_name, version, pkgver, pkgrel, epoch
+            )
             
-            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
-            if remote_version and not self.build_engine.compare_versions(remote_version, pkgver, pkgrel, epoch):
+            if is_up_to_date:
                 logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
                 self.skipped_packages.append(f"{pkg_name} ({version})")
                 
-                # ZERO-RESIDUE FIX: Register the target version for this skipped package
+                # Register the skipped package
                 self.repo_manager.register_skipped_package(pkg_name, remote_version)
                 
                 return False
@@ -827,7 +730,7 @@ class PackageBuilder:
             if remote_version:
                 logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
                 
-                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
+                # PRE-BUILD PURGE: Remove old version files
                 self.repo_manager.pre_build_purge_old_versions(pkg_name, remote_version)
             else:
                 logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
@@ -850,16 +753,13 @@ class PackageBuilder:
                 logger.error(f"Failed to download sources for {pkg_name}")
                 return False
             
-            # CRITICAL FIX: Install dependencies with AUR fallback
-            print("Installing dependencies with AUR fallback...")
-            
-            # First attempt: Standard makepkg with appropriate flags
+            # Build package with appropriate flags
             makepkg_flags = "-si --noconfirm --clean"
             if pkg_name == "gtk2":
                 makepkg_flags += " --nocheck"
                 logger.info("GTK2: Skipping check step (long)")
             
-            print("Building package (first attempt)...")
+            print("Building package...")
             build_result = self._run_cmd(
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
@@ -873,11 +773,9 @@ class PackageBuilder:
             if build_result.returncode != 0:
                 logger.warning(f"First build attempt failed for {pkg_name}, trying AUR dependency fallback...")
                 
-                # Extract missing dependencies from error output
                 error_output = build_result.stderr if build_result.stderr else build_result.stdout
                 missing_deps = []
                 
-                # Look for patterns like "error: target not found: <package>"
                 import re
                 missing_patterns = [
                     r"error: target not found: (\S+)",
@@ -890,17 +788,14 @@ class PackageBuilder:
                     if matches:
                         missing_deps.extend(matches)
                 
-                # Also look for specific makepkg dependency errors
                 if "makepkg: cannot find the" in error_output:
                     lines = error_output.split('\n')
                     for line in lines:
                         if "makepkg: cannot find the" in line:
-                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
                             dep_match = re.search(r"cannot find the '([^']+)'", line)
                             if dep_match:
                                 missing_deps.append(dep_match.group(1))
                 
-                # Remove duplicates
                 missing_deps = list(set(missing_deps))
                 
                 if missing_deps:
@@ -928,26 +823,24 @@ class PackageBuilder:
                         return False
             
             if build_result.returncode == 0:
-                moved = False
                 built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
-                    moved = True
-                    built_files.append(str(dest))
+                    built_files.append(dest)
                 
-                if moved:
+                if built_files:
                     self.built_packages.append(f"{pkg_name} ({version})")
                     self.rebuilt_local_packages.append(pkg_name)
                     
-                    # ZERO-RESIDUE FIX: Register the target version for this built package
-                    self.repo_manager.register_package_target_version(pkg_name, version)
+                    # Update VPS state with new package
+                    self.repo_manager.update_package_state(
+                        pkg_name, version, built_files[0].name, built_files
+                    )
                     
                     # Collect metadata for hokibot
                     if built_files:
-                        # Simplified metadata extraction
-                        filename = os.path.basename(built_files[0])
                         self.build_engine.hokibot_data.append({
                             'name': pkg_name,
                             'built_version': version,
@@ -981,7 +874,7 @@ class PackageBuilder:
     def build_packages(self) -> int:
         """Build packages"""
         print("\n" + "=" * 60)
-        print("Building packages")
+        print("Building packages with Remote State Verification")
         print("=" * 60)
         
         local_packages, aur_packages = self.get_package_lists()
@@ -1024,6 +917,7 @@ class PackageBuilder:
         self.vps_client.ensure_remote_directory()
         
         # Collect files using glob patterns
+        import glob
         file_patterns = [
             str(self.output_dir / "*.pkg.tar.*"),
             str(self.output_dir / f"{self.repo_name}.*")
@@ -1047,9 +941,9 @@ class PackageBuilder:
         return upload_success
     
     def run(self):
-        """Main execution with simplified repository discovery and proper GPG integration"""
+        """Main execution with remote state verification"""
         print("\n" + "=" * 60)
-        print("🚀 MANJARO PACKAGE BUILDER (MODULAR ARCHITECTURE)")
+        print("🚀 MANJARO PACKAGE BUILDER (REMOTE STATE VERIFICATION)")
         print("=" * 60)
         
         try:
@@ -1059,7 +953,7 @@ class PackageBuilder:
             print(f"Output directory: {self.output_dir}")
             print(f"PACKAGER identity: {self.packager_id}")
             
-            # STEP 0: Initialize GPG FIRST if enabled
+            # STEP 0: Initialize GPG if enabled
             print("\n" + "=" * 60)
             print("STEP 0: GPG INITIALIZATION")
             print("=" * 60)
@@ -1071,9 +965,9 @@ class PackageBuilder:
             else:
                 logger.info("ℹ️ GPG signing disabled (no key provided)")
             
-            # STEP 1: SIMPLIFIED REPOSITORY DISCOVERY
+            # STEP 1: REPOSITORY DISCOVERY
             print("\n" + "=" * 60)
-            print("STEP 1: SIMPLIFIED REPOSITORY STATE DISCOVERY")
+            print("STEP 1: REMOTE REPOSITORY STATE DISCOVERY")
             print("=" * 60)
             
             # Check if repository exists on VPS
@@ -1085,22 +979,18 @@ class PackageBuilder:
             # Ensure remote directory exists
             self.vps_client.ensure_remote_directory()
             
-            # STEP 2: List remote packages for version comparison
+            # Test SSH connection
+            if not self.vps_client.test_ssh_connection():
+                logger.warning("⚠️ SSH connection test failed, but continuing...")
+            
+            # STEP 2: List remote packages for initial reference
             remote_packages = self.vps_client.list_remote_packages()
             self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
             
-            # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
             if remote_packages:
-                print("\n" + "=" * 60)
-                print("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                print("=" * 60)
-                
-                if not self.vps_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir):
-                    logger.error("❌ FAILED to mirror remote packages locally")
-                    logger.error("Cannot proceed without local package mirror")
-                    return 1
+                logger.info(f"ℹ️ Found {len(remote_packages)} packages on remote server")
             else:
-                logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
+                logger.info("ℹ️ No packages found on remote server (first run or empty repository)")
             
             # STEP 3: Check existing database files
             existing_db_files, missing_db_files = self.repo_manager.check_database_files()
@@ -1111,20 +1001,20 @@ class PackageBuilder:
             
             # Build packages
             print("\n" + "=" * 60)
-            print("STEP 5: PACKAGE BUILDING (SRCINFO VERSIONING)")
+            print("STEP 4: PACKAGE BUILDING (REMOTE STATE VERIFICATION)")
             print("=" * 60)
             
             total_built = self.build_packages()
             
-            # Check if we have any packages locally (mirrored + newly built)
+            # Check if we have any packages locally
             local_packages = self.repo_manager._get_all_local_packages()
             
             if local_packages or remote_packages:
                 print("\n" + "=" * 60)
-                print("STEP 6: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
+                print("STEP 5: REPOSITORY DATABASE HANDLING")
                 print("=" * 60)
                 
-                # ZERO-RESIDUE FIX: Perform server cleanup BEFORE database generation
+                # ZERO-RESIDUE: Perform server cleanup BEFORE database generation
                 print("\n" + "=" * 60)
                 print("🚨 PRE-DATABASE CLEANUP: Removing zombie packages from server")
                 print("=" * 60)
@@ -1138,13 +1028,9 @@ class PackageBuilder:
                             logger.warning("⚠️ Failed to sign repository files, continuing anyway")
                     
                     # Upload regenerated database and packages
-                    if not self.vps_client.test_ssh_connection():
-                        logger.warning("SSH test failed, but trying upload anyway...")
-                    
-                    # Upload everything (packages + database + signatures)
                     upload_success = self.upload_packages()
                     
-                    # ZERO-RESIDUE FIX: Perform final server cleanup AFTER upload
+                    # ZERO-RESIDUE: Perform final server cleanup AFTER upload
                     if upload_success:
                         print("\n" + "=" * 60)
                         print("🚨 POST-UPLOAD CLEANUP: Final zombie package removal")
@@ -1155,12 +1041,12 @@ class PackageBuilder:
                     self.gpg_handler.cleanup()
                     
                     if upload_success:
-                        # STEP 7: Update repository state and sync pacman
+                        # STEP 6: Update repository state and sync pacman
                         print("\n" + "=" * 60)
-                        print("STEP 7: FINAL REPOSITORY STATE UPDATE")
+                        print("STEP 6: FINAL REPOSITORY STATE UPDATE")
                         print("=" * 60)
                         
-                        # Re-check repository state (it should exist now)
+                        # Re-check repository state
                         repo_exists, has_packages = self.vps_client.check_repository_exists_on_vps()
                         self._apply_repository_state(repo_exists, has_packages)
                         
@@ -1188,6 +1074,17 @@ class PackageBuilder:
                 # Clean up GPG even if no packages built
                 self.gpg_handler.cleanup()
             
+            # STEP 7: Commit VPS state changes to git
+            print("\n" + "=" * 60)
+            print("STEP 7: COMMITTING VPS STATE TO GIT")
+            print("=" * 60)
+            
+            if self.repo_manager.get_state_changed():
+                self.repo_manager.commit_vps_state_to_git()
+                self.repo_manager.reset_state_changed()
+            else:
+                logger.info("ℹ️ No changes to VPS state, skipping git commit")
+            
             elapsed = time.time() - self.stats["start_time"]
             
             print("\n" + "=" * 60)
@@ -1200,9 +1097,8 @@ class PackageBuilder:
             print(f"Skipped:         {len(self.skipped_packages)}")
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             print(f"PACKAGER:        {self.packager_id}")
-            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-            print(f"Target Version:  ✅ Package target versions registered: {len(self.repo_manager._package_target_versions)}")
-            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.repo_manager._skipped_packages)}")
+            print(f"Remote State:    ✅ JSON-based verification active")
+            print(f"Bandwidth:       ✅ No bulk package downloads")
             print("=" * 60)
             
             if self.built_packages:
