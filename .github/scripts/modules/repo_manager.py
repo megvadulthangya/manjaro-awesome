@@ -29,15 +29,17 @@ class RepoManager:
                 - remote_dir: Remote directory on VPS
                 - vps_user: VPS username
                 - vps_host: VPS hostname
+                - repo_root: Repository root directory
         """
         self.repo_name = config['repo_name']
         self.output_dir = Path(config['output_dir'])
         self.remote_dir = config['remote_dir']
         self.vps_user = config['vps_user']
         self.vps_host = config['vps_host']
+        self.repo_root = Path(config['repo_root'])
         
-        # Build tracking directory
-        self.build_tracking_dir = Path(".build_tracking")
+        # Build tracking directory - use existing .build_tracking folder in repo root
+        self.build_tracking_dir = self.repo_root / ".build_tracking"
         self.build_tracking_dir.mkdir(exist_ok=True)
         
         # VPS state file
@@ -865,8 +867,23 @@ class RepoManager:
             return
         
         try:
+            # Save current directory
+            original_cwd = os.getcwd()
+            
+            # Change to repository root where git is available
+            os.chdir(self.repo_root)
+            
+            # Check if we're in a git repository
+            check_git = subprocess.run(["git", "rev-parse", "--git-dir"], 
+                                     capture_output=True, text=True, check=False)
+            
+            if check_git.returncode != 0:
+                logger.warning("⚠️ Not in a git repository, skipping git commit")
+                return
+            
             # Add VPS state file to git
-            add_cmd = ["git", "add", str(self.vps_state_file)]
+            vps_state_relative = self.vps_state_file.relative_to(self.repo_root)
+            add_cmd = ["git", "add", str(vps_state_relative)]
             result = subprocess.run(add_cmd, capture_output=True, text=True, check=False)
             
             if result.returncode != 0:
@@ -874,27 +891,37 @@ class RepoManager:
                 return
             
             # Commit changes
-            commit_cmd = ["git", "commit", "-m", "Update VPS package state"]
+            commit_msg = f"Update VPS package state - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            commit_cmd = ["git", "commit", "-m", commit_msg]
             result = subprocess.run(commit_cmd, capture_output=True, text=True, check=False)
             
             if result.returncode != 0:
-                logger.warning(f"Git commit failed or no changes: {result.stderr[:200]}")
+                # Check if there were actually changes to commit
+                if "nothing to commit" in result.stderr or "no changes added to commit" in result.stderr:
+                    logger.info("ℹ️ No changes to commit in VPS state")
+                else:
+                    logger.warning(f"Git commit warning: {result.stderr[:200]}")
                 return
             
             # Push changes (using GitHub token from environment)
             github_token = os.getenv('GITHUB_TOKEN')
-            if github_token:
+            github_repo = os.getenv('GITHUB_REPOSITORY')
+            
+            if github_token and github_repo:
                 # Configure git with token
-                repo_url = f"https://{github_token}@github.com/{os.getenv('GITHUB_REPOSITORY', '')}.git"
+                repo_url = f"https://x-access-token:{github_token}@github.com/{github_repo}.git"
                 push_cmd = ["git", "push", repo_url, "HEAD"]
                 result = subprocess.run(push_cmd, capture_output=True, text=True, check=False)
                 
                 if result.returncode == 0:
                     logger.info("✅ Pushed VPS state changes to repository")
                 else:
-                    logger.error(f"Failed to push VPS state: {result.stderr}")
+                    logger.error(f"Failed to push VPS state: {result.stderr[:500]}")
             else:
-                logger.warning("⚠️ GITHUB_TOKEN not available, cannot push VPS state")
+                logger.warning("⚠️ GITHUB_TOKEN or GITHUB_REPOSITORY not available, cannot push VPS state")
                 
         except Exception as e:
             logger.error(f"Error committing VPS state to git: {e}")
+        finally:
+            # Restore original directory
+            os.chdir(original_cwd)

@@ -13,9 +13,7 @@ import subprocess
 import shutil
 import tempfile
 import time
-import hashlib
 import logging
-import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -77,7 +75,8 @@ class PackageBuilder:
         
         # Setup directories from config
         self.output_dir = self.repo_root / (getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else "built_packages")
-        self.build_tracking_dir = self.repo_root / (getattr(config, 'BUILD_TRACKING_DIR', '.build_tracking') if HAS_CONFIG_FILES else ".build_tracking")
+        # Use existing .build_tracking folder in repo root
+        self.build_tracking_dir = self.repo_root / ".build_tracking"
         
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
@@ -201,13 +200,14 @@ class PackageBuilder:
             self.vps_client = VPSClient(vps_config)
             self.vps_client.setup_ssh_config(self.ssh_key)
             
-            # Repository Manager configuration
+            # Repository Manager configuration - pass repo_root
             repo_config = {
                 'repo_name': self.repo_name,
                 'output_dir': self.output_dir,
                 'remote_dir': self.remote_dir,
                 'vps_user': self.vps_user,
                 'vps_host': self.vps_host,
+                'repo_root': self.repo_root,  # Pass repository root
             }
             self.repo_manager = RepoManager(repo_config)
             
