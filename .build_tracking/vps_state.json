@@ -1,0 +1,403 @@
+{
+  "version": "1.0",
+  "created": "2026-01-24T20:02:31.799308",
+  "last_updated": "2026-01-24T20:51:09.796132",
+  "packages": {
+    "gghelper": {
+      "type": "local",
+      "current_version": "2.0.0-1",
+      "current_hash": "42a6b5f3278c1b612f56b0a9461a67cf42da3e935695ef90bf1fe43ac8943dac",
+      "remote_file": "gghelper-2.1.3-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:45:24.478474",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:45:24.478481"
+    },
+    "gtk2": {
+      "type": "local",
+      "current_version": "2.24.33-5",
+      "current_hash": "7c91b3c5cc253fb509948b9adf19cef43e8d136cf2cd0b6c406ffa5d80a44e85",
+      "remote_file": "gtk2-2.24.33-5-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:02:46.843180",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "awesome-freedesktop-git": {
+      "type": "local",
+      "current_version": "r118.c82ad29-1",
+      "current_hash": "37bf5ffbc022a7e0489eb3976af9c4a9a8bce3a4bafe204afa2b9f86510569f5",
+      "remote_file": "awesome-freedesktop-git-118.c82ad29-6-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:45:39.262046",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:45:39.262054"
+    },
+    "lain-git": {
+      "type": "local",
+      "current_version": "1:r1797.88f5a8a-1",
+      "current_hash": "c79ca23c5ad30ffae17c6b5452f6cb5dab72fd19e6ecad301ab6676dc63d8412",
+      "remote_file": "lain-git-1:r1797.88f5a8a-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:02:55.040849",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "awesome-rofi": {
+      "type": "local",
+      "current_version": "r154.056cb99-1",
+      "current_hash": "a52be8e1babd6d574c66ec38d9e0276852f0b23204d740685035aa6829b9cdd0",
+      "remote_file": "awesome-rofi-r157.83dee18-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:45:58.051528",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:45:58.051538"
+    },
+    "awesome-git": {
+      "type": "local",
+      "current_version": "4.3.1711.gcab3e81dc-1",
+      "current_hash": "4f96589ec1e09e01605202ddedda16daa1265eeb4c39e61081f3fd1ceea4633c",
+      "remote_file": "awesome-git-4.3.1711.gcab3e81dc-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:03.321146",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "awesome-welcome": {
+      "type": "local",
+      "current_version": "r2.c2f8b02-1",
+      "current_hash": "377334c29493ed943dde2b91c0ba6f99fce26efbcb4ffa98a333b25ea5b0d8c9",
+      "remote_file": "awesome-welcome-r2.c2f8b02-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:07.350695",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "tilix-git": {
+      "type": "local",
+      "current_version": "1.9.6.r63.g3d2b9b7-1",
+      "current_hash": "d8299ff8457e7f5f31244742ff0b01f799284602464a5c26f28bcfcfcefe497a",
+      "remote_file": "tilix-git-1.9.6.r65.g05b68f6-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:47:11.723011",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:47:11.723019"
+    },
+    "nordic-backgrounds": {
+      "type": "local",
+      "current_version": "r161.e6670ac-1",
+      "current_hash": "0fd749732cc3865c0478b97b0d40eea537b63ccae4a8de2149f7c94985a6d87a",
+      "remote_file": "nordic-backgrounds-r161.e6670ac-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:18.023404",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "awesome-copycats-manjaro": {
+      "type": "local",
+      "current_version": "r1063.863da47-1",
+      "current_hash": "b0062e9f37e6ecca45cdaee1298366f687c35624d83ff34545bbf6b722d6f51b",
+      "remote_file": "awesome-copycats-manjaro-r1064.247b081-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:47:41.278587",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:47:41.278597"
+    },
+    "i3lock-fancy-git": {
+      "type": "local",
+      "current_version": "r194.4659b6f-1",
+      "current_hash": "8138a49871f03f1cbaf31e0b76e703c2b905482c190f6bb8ef81899566dfb782",
+      "remote_file": "i3lock-fancy-git-r194.4659b6f-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:26.358995",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "ttf-font-awesome-5": {
+      "type": "local",
+      "current_version": "5.15.4-1",
+      "current_hash": "85152f38f695955b2ade105296eae6aea07239fc00c8f44d2886889ea14e40ab",
+      "remote_file": "ttf-font-awesome-5-5.15.4-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:30.531915",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "nvidia-driver-assistant": {
+      "type": "local",
+      "current_version": "2026.01.05.1-3",
+      "current_hash": "aa2914e7d7b9e15f5c461a616c8ba1e2fcd27099a6cae28c41bc49e4d2d772ed",
+      "remote_file": "nvidia-driver-assistant-2026.01.05.1-3-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:34.647021",
+      "adopted": true,
+      "needs_rebuild": false,
+      "skipped": true
+    },
+    "grayjay-bin": {
+      "type": "local",
+      "current_version": "13-1",
+      "current_hash": "ad6e0c7d34a51d831c985691909df7c114d44b34f4cf97020829d1edf0ee633a",
+      "remote_file": "grayjay-bin-13-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:51:09.796021",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:51:09.796030"
+    },
+    "libinput-gestures": {
+      "type": "aur",
+      "current_version": "2.81-1",
+      "current_hash": "02f826f641463d534b6c885c8895d4742481091b86d3deb0ec2c6c1810f02b23",
+      "remote_file": "libinput-gestures-2.81-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:03:48.882994",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:03:48.883002"
+    },
+    "gtkd": {
+      "type": "aur",
+      "current_version": "3.11.0-4",
+      "current_hash": "cab8aca823818bf1673f1262c4f2ddad1699bae9a35f6141ac98c7fba8331c67",
+      "remote_file": "gtkd-3.11.0-4-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:13:33.572361",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:13:33.572372"
+    },
+    "urxvt-resize-font-git": {
+      "type": "aur",
+      "current_version": "10.2bbde29-1",
+      "current_hash": "b86f57f7c68717454cc8c1a7ca32221c83168c397d7475470e9d44052acdaa1a",
+      "remote_file": "urxvt-resize-font-git-27.b593580-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:13:45.793257",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:13:45.793267"
+    },
+    "i3lock-color": {
+      "type": "aur",
+      "current_version": "2.13.c.5-3",
+      "current_hash": "1f8a844440624e7853ba56c149e9733aceff5cf5d9e11f27a772ee2101d3ac7f",
+      "remote_file": "i3lock-color-2.13.c.5-3-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:14:03.013364",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:14:03.013372"
+    },
+    "raw-thumbnailer": {
+      "type": "aur",
+      "current_version": "48.0.0-1",
+      "current_hash": "1b9cdcdfb0daa23691177ad885eddfcfc7f6f5fc4be85f67d5bec3360a592b7e",
+      "remote_file": "raw-thumbnailer-48.0.0-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:15:32.503531",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:15:32.503540"
+    },
+    "gsconnect": {
+      "type": "aur",
+      "current_version": "71-1",
+      "current_hash": "b28d489b8fbd04064e134fbaec02f987831b01006bc033af768412e208838acd",
+      "remote_file": "gsconnect-71-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:15:52.849384",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:15:52.849394"
+    },
+    "betterlockscreen": {
+      "type": "aur",
+      "current_version": "4.4.0-1",
+      "current_hash": "c09d62bec203fb23c5d549b410d88c0ed6d8037d74d09815d2a6605ed72dfd1f",
+      "remote_file": "betterlockscreen-4.4.0-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:16:03.545825",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:16:03.545832"
+    },
+    "nordic-theme": {
+      "type": "aur",
+      "current_version": "2.2.0-1",
+      "current_hash": "f1faba2b2e5b4723e31f990bbe4a54b1e7cd97798b214efe0cdb13fe52ddd23e",
+      "remote_file": "nordic-bluish-accent-theme-2.2.0-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:16:57.695221",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:16:57.695225"
+    },
+    "nordic-darker-theme": {
+      "type": "aur",
+      "current_version": "2.1.0-2",
+      "current_hash": "0c9fb543ffd072169de876a39edcdb5e2741ef54f414613062bcee314245b2f4",
+      "remote_file": "nordic-darker-theme-2.1.0-2-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:17:08.390885",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:17:08.390893"
+    },
+    "geany-nord-theme": {
+      "type": "aur",
+      "current_version": "r15+96f85bd-1",
+      "current_hash": "a3659f307437ec8df7607a3bec57a2b551fba5d792e21f557273dc95f614a886",
+      "remote_file": "geany-nord-theme-r15+96f85bd-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:17:14.814577",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:17:14.814585"
+    },
+    "nordzy-icon-theme": {
+      "type": "aur",
+      "current_version": "1.8.7-1",
+      "current_hash": "0d01f23fa2d035bf700290c41432e012ef9e1977e2f1b6773cfb54bbbfbab822",
+      "remote_file": "nordzy-icon-theme-1.8.7-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:24:51.040308",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:24:51.040316"
+    },
+    "oh-my-posh-bin": {
+      "type": "aur",
+      "current_version": "29.1.0-1",
+      "current_hash": "e52911a9927fbbac360199d100c2223bea6e5f4914bfe2d951a7130be4fcc368",
+      "remote_file": "oh-my-posh-bin-29.1.0-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:25:06.860794",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:25:06.860803"
+    },
+    "fish-done": {
+      "type": "aur",
+      "current_version": "1.21.1-1",
+      "current_hash": "c376b930f6cff048df2f85129e10ca4859ccfb7861e567161af4ab4754eb17db",
+      "remote_file": "fish-done-1.21.1-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:25:12.778634",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:25:12.778641"
+    },
+    "find-the-command": {
+      "type": "aur",
+      "current_version": "2.0.1-1",
+      "current_hash": "2ede21b2e2953e778fe6bdf9a12152c5665460a7b0cf98ec74ced03633b011bd",
+      "remote_file": "find-the-command-2.0.1-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:25:17.656087",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:25:17.656094"
+    },
+    "p7zip-gui": {
+      "type": "aur",
+      "current_version": "16.02-11",
+      "current_hash": "d6bee9d568905d7556220f055e20d55ae3ae1d72c0cc9c6d531423ecee156c37",
+      "remote_file": "p7zip-gui-16.02-11-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:29:46.521354",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:29:46.521363"
+    },
+    "qownnotes": {
+      "type": "aur",
+      "current_version": "26.1.11-1",
+      "current_hash": "3d9cc35b65ea0018418a7d3fdf55a7b6ee778ed7016c8ec772b7e3184b563c23",
+      "remote_file": "qownnotes-26.1.11-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:39:54.392133",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:39:54.392144"
+    },
+    "xorg-font-utils": {
+      "type": "aur",
+      "current_version": "7.6-6",
+      "current_hash": "43ccc4cafffad223515d317ff8299d7ffa6ffb38957941e2059fc43a052c0b57",
+      "remote_file": "xorg-font-utils-7.6-6-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:39:59.518098",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:39:59.518106"
+    },
+    "xnviewmp": {
+      "type": "aur",
+      "current_version": "1.9.10-1",
+      "current_hash": "454d47859c2717e0c226dc3c11fbbcafa809f5189bac60bb6a01453628b8a723",
+      "remote_file": "xnviewmp-1.9.10-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:41:15.684523",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:41:15.684532"
+    },
+    "simplescreenrecorder": {
+      "type": "aur",
+      "current_version": "0.4.4-4",
+      "current_hash": "549d4b56d9033be90514061f397bc8cef8b42d9059b56d91ffdfe4bd594b7f40",
+      "remote_file": "simplescreenrecorder-0.4.4-4-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:44:01.365191",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:44:01.365199"
+    },
+    "gtkhash-thunar": {
+      "type": "aur",
+      "current_version": "1.5-3",
+      "current_hash": "7a83412a246f2ca0200afa2720ff120cf9ea87f15f267a1b30f71509fdb996eb",
+      "remote_file": "gtkhash-thunar-1.5-3-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:44:17.049233",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:44:17.049241"
+    },
+    "a4tech-bloody-driver-git": {
+      "type": "aur",
+      "current_version": "r18.5a19d1f0-1",
+      "current_hash": "19e8b0d8485cfe091c0ee1308a63d579264b22d048bdb40d24104b4768eb378e",
+      "remote_file": "a4tech-bloody-driver-git-r161.7c7070e-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:44:31.340406",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:44:31.340539"
+    },
+    "nordic-bluish-accent-theme": {
+      "type": "aur",
+      "current_version": "2.0.0-1",
+      "current_hash": "b448ba611ff1c2b7210ddb806c6cdcac5c46e4da47ec375d7e07bbf8a3d70817",
+      "remote_file": "nordic-bluish-accent-theme-2.0.0-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:44:42.276608",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:44:42.276617"
+    },
+    "nordic-bluish-accent-standard-buttons-theme": {
+      "type": "aur",
+      "current_version": "2.0.0-1",
+      "current_hash": "1124983edec2d0257675c8508fa4d7a27905362306c2b11d30f3eaffbd14080f",
+      "remote_file": "nordic-bluish-accent-standard-buttons-theme-2.0.0-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:44:53.370369",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:44:53.370378"
+    },
+    "nordic-standard-buttons-theme": {
+      "type": "aur",
+      "current_version": "2.0.0-1",
+      "current_hash": "cf6d7009ca76b7250e2a0e9b36b4b462773a6aaa676a2d861d2847e62704e364",
+      "remote_file": "nordic-standard-buttons-theme-2.0.0-1-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:45:06.071183",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:45:06.071192"
+    },
+    "nordic-darker-standard-buttons-theme": {
+      "type": "aur",
+      "current_version": "2.1.0-1",
+      "current_hash": "715d7fcae0fcf6a155d8eb7b8126ce2e71416687c60d0fa6bbdc661a62eff123",
+      "remote_file": "nordic-darker-standard-buttons-theme-2.1.0-1-any.pkg.tar.zst",
+      "last_verified": "2026-01-24T20:45:16.630171",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-24T20:45:16.630179"
+    }
+  },
+  "repository": {
+    "name": "manjaro-awesome",
+    "remote_dir": "/var/www/repo/manjaro-awesome/x86_64/",
+    "exists_on_vps": true,
+    "has_packages": true
+  }
+}
