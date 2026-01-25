@@ -148,7 +148,8 @@ class VPSClient:
         Returns:
             True if file exists, False otherwise
         """
-        remote_cmd = f"test -f {path} && echo 'EXISTS' || echo 'MISSING'"
+        # Use raw string to avoid escape sequence warnings
+        remote_cmd = rf'test -f "{path}" && echo "EXISTS" || echo "MISSING"'
         
         returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
         if returncode == 0 and "EXISTS" in stdout:
@@ -165,7 +166,8 @@ class VPSClient:
         Returns:
             SHA256 hash string or None if file doesn't exist or error
         """
-        remote_cmd = f"""
+        # Use raw string for shell command
+        remote_cmd = rf"""
         if [ -f "{path}" ]; then
             sha256sum "{path}" | cut -d' ' -f1
         else
@@ -187,10 +189,8 @@ class VPSClient:
         """
         logger.info("📋 Listing remote packages...")
         
-        # Use find command to get all package files in one go
-        remote_cmd = f"""
-        find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \) -printf "%f\\n" 2>/dev/null
-        """
+        # Use raw string for find command with proper escaping
+        remote_cmd = rf'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.pkg.tar.gz" -o -name "*.pkg.tar.bz2" \) -printf "%f\\n" 2>/dev/null'
         
         returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
         if returncode == 0 and stdout:
@@ -198,6 +198,8 @@ class VPSClient:
             logger.info(f"✅ Found {len(packages)} remote packages")
             return packages
         else:
+            if stderr and "No such file or directory" not in stderr:
+                logger.warning(f"⚠️ Error listing packages: {stderr[:200]}")
             logger.info("ℹ️ No remote packages found or error listing")
             return []
     
@@ -211,7 +213,8 @@ class VPSClient:
         
         # Check for database files
         db_exists = False
-        for db_file in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz"]:
+        for db_file in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
+                       f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
             if self.check_remote_file_exists(f"{self.remote_dir}/{db_file}"):
                 db_exists = True
                 break
@@ -245,14 +248,16 @@ class VPSClient:
             return False
         
         # Build RSYNC command WITHOUT --delete
-        rsync_cmd = f"""
+        # Use raw string and proper quoting
+        files_str = ' '.join([rf"'{f}'" for f in files_to_upload])
+        rsync_cmd = rf'''
         rsync -avz \
           --progress \
           --stats \
           -e "ssh {self.ssh_options_str}" \
-          {" ".join(f"'{f}'" for f in files_to_upload)} \
+          {files_str} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
-        """
+        '''
         
         logger.info(f"📤 Uploading {len(files_to_upload)} files to VPS...")
         
@@ -340,7 +345,8 @@ class VPSClient:
             return False
         
         # Ensure remote .build_tracking directory exists
-        ensure_cmd = f"mkdir -p {self.remote_dir}/.build_tracking"
+        # Use raw string for command
+        ensure_cmd = rf'mkdir -p "{self.remote_dir}/.build_tracking"'
         returncode, stdout, stderr = self._run_ssh_command(ensure_cmd)
         if returncode != 0:
             logger.error(f"❌ Failed to create remote .build_tracking directory: {stderr}")

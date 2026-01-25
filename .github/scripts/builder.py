@@ -83,7 +83,7 @@ class PackageBuilder:
         self.aur_urls = getattr(config, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]) if HAS_CONFIG_FILES else ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]
         self.aur_build_dir = self.repo_root / (getattr(config, 'AUR_BUILD_DIR', 'build_aur') if HAS_CONFIG_FILES else "build_aur")
         self.ssh_options = getattr(config, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]) if HAS_CONFIG_FILES else ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]
-        self.github_repo = os.getenv('GITHUB_REPO', getattr(config, 'GITHUB_REPO', 'megvadulthangya/manjaro-awesome.git') if HAS_CONFIG_FILES else 'megvadulthangya/manjaro-awesome.git')
+        self.ssh_repo_url = getattr(config, 'SSH_REPO_URL', '') if HAS_CONFIG_FILES else ''
         
         # Get PACKAGER_ID from config
         self.packager_id = getattr(config, 'PACKAGER_ID', 'Maintainer <no-reply@gshoots.hu>') if HAS_CONFIG_FILES else 'Maintainer <no-reply@gshoots.hu>'
@@ -97,6 +97,11 @@ class PackageBuilder:
         self.skipped_packages = []
         self.adopted_packages = []
         self.packages_to_build = []
+        self.failed_packages = []
+        
+        # Dependency tracking
+        self.dependency_map = {}
+        self.build_order = []
         
         # Statistics
         self.stats = {
@@ -105,6 +110,8 @@ class PackageBuilder:
             "local_success": 0,
             "aur_failed": 0,
             "local_failed": 0,
+            "dependency_checks": 0,
+            "pacman_syncs": 0,
         }
 
     def _validate_env(self) -> None:
@@ -243,13 +250,20 @@ class PackageBuilder:
             logger.error("Cannot load package lists from packages.py. Exiting.")
             sys.exit(1)
     
-    def _apply_repository_state(self, exists: bool, has_packages: bool):
-        """Apply repository state with proper SigLevel based on discovery"""
+    def _enable_custom_repository(self, exists: bool, has_packages: bool):
+        """
+        Enable custom repository in pacman.conf and SYNC databases
+        
+        CRITICAL FIX: After writing to pacman.conf, MUST run pacman -Sy
+        so makepkg can find dependencies from our custom repo
+        """
+        logger.info(f"\n🔧 Configuring custom repository: {self.repo_name}")
+        
         pacman_conf = Path("/etc/pacman.conf")
         
         if not pacman_conf.exists():
             logger.warning("pacman.conf not found")
-            return
+            return False
         
         try:
             with open(pacman_conf, 'r') as f:
@@ -281,7 +295,7 @@ class PackageBuilder:
                 new_lines.append(repo_section)
                 if has_packages:
                     new_lines.append("SigLevel = Optional TrustAll")
-                    logger.info("✅ Enabling repository with SigLevel = Optional TrustAll (build mode)")
+                    logger.info("✅ Enabling repository with SigLevel = Optional TrustAll")
                 else:
                     new_lines.append("# SigLevel = Optional TrustAll")
                     new_lines.append("# Repository exists but has no packages yet")
@@ -311,15 +325,140 @@ class PackageBuilder:
                 temp_file.write('\n'.join(new_lines))
                 temp_path = temp_file.name
             
-            # Copy to pacman.conf
+            # Copy to pacman.conf with sudo
             subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
             subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
             os.unlink(temp_path)
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
             
+            # CRITICAL FIX: SYNC PACMAN DATABASES AFTER ENABLING REPOSITORY
+            if exists and has_packages:
+                logger.info("🔄 Synchronizing pacman databases (pacman -Sy)...")
+                try:
+                    result = subprocess.run(
+                        ["sudo", "pacman", "-Sy", "--noconfirm"],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info("✅ Pacman databases synchronized successfully")
+                        self.stats["pacman_syncs"] += 1
+                        
+                        # Verify our repository is visible
+                        logger.info(f"🔍 Checking if {self.repo_name} is visible to pacman...")
+                        check_result = subprocess.run(
+                            ["pacman", "-Sl", self.repo_name],
+                            capture_output=True,
+                            text=True,
+                            check=False
+                        )
+                        
+                        if check_result.returncode == 0 and check_result.stdout.strip():
+                            logger.info(f"✅ Repository {self.repo_name} is visible to pacman")
+                            for line in check_result.stdout.strip().split('\n')[:5]:
+                                logger.info(f"  {line}")
+                        else:
+                            logger.warning(f"⚠️ Repository {self.repo_name} not visible to pacman (may be empty)")
+                    else:
+                        logger.error(f"❌ Pacman sync failed: {result.stderr[:200]}")
+                        return False
+                        
+                except subprocess.TimeoutExpired:
+                    logger.error("❌ Pacman sync timed out")
+                    return False
+                except Exception as e:
+                    logger.error(f"❌ Pacman sync error: {e}")
+                    return False
+            
+            return True
+            
         except Exception as e:
-            logger.error(f"Failed to apply repository state: {e}")
+            logger.error(f"Failed to configure repository: {e}")
+            return False
+    
+    def _check_dependency_satisfaction(self, pkg_name: str, pkg_dir: Path, is_aur: bool) -> Tuple[bool, List[str]]:
+        """
+        Check if all dependencies for a package are satisfied
+        
+        Returns:
+            Tuple of (all_satisfied, missing_deps)
+        """
+        try:
+            # Extract dependencies from PKGBUILD or .SRCINFO
+            deps = []
+            makedeps = []
+            
+            srcinfo_path = pkg_dir / ".SRCINFO"
+            if srcinfo_path.exists():
+                with open(srcinfo_path, 'r') as f:
+                    content = f.read()
+                
+                in_depends = False
+                in_makedepends = False
+                
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if line.startswith('depends ='):
+                        deps.append(line.split('=', 1)[1].strip())
+                    elif line.startswith('makedepends ='):
+                        makedeps.append(line.split('=', 1)[1].strip())
+            
+            all_deps = deps + makedeps
+            if not all_deps:
+                return True, []
+            
+            # Clean dependency names (remove version constraints)
+            clean_deps = []
+            for dep in all_deps:
+                # Remove version constraints like >=, <=, =
+                dep_clean = re.sub(r'[<=>].*', '', dep).strip()
+                # Remove any arch specifiers
+                dep_clean = re.sub(r':.*$', '', dep_clean).strip()
+                if dep_clean:
+                    clean_deps.append(dep_clean)
+            
+            # Check which dependencies are available
+            missing_deps = []
+            
+            for dep in clean_deps:
+                self.stats["dependency_checks"] += 1
+                
+                # Check if dependency is in our custom repository
+                if dep in self.dependency_map:
+                    logger.debug(f"✅ Dependency {dep} is provided by {self.dependency_map[dep]} in our repo")
+                    continue
+                
+                # Check if dependency is available in pacman
+                check_cmd = ["pacman", "-Si", dep]
+                result = subprocess.run(check_cmd, capture_output=True, text=True, check=False)
+                
+                if result.returncode != 0:
+                    # Check if it's a group
+                    check_group = ["pacman", "-Sg", dep]
+                    group_result = subprocess.run(check_group, capture_output=True, text=True, check=False)
+                    
+                    if group_result.returncode != 0:
+                        missing_deps.append(dep)
+                    else:
+                        logger.debug(f"✅ Dependency {dep} is a package group")
+            
+            if missing_deps:
+                logger.warning(f"⚠️ {pkg_name}: Missing {len(missing_deps)} dependencies: {', '.join(missing_deps[:5])}")
+                if len(missing_deps) > 5:
+                    logger.warning(f"   ... and {len(missing_deps) - 5} more")
+                return False, missing_deps
+            else:
+                logger.debug(f"✅ {pkg_name}: All dependencies satisfied")
+                return True, []
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check dependencies for {pkg_name}: {e}")
+            # If we can't check, assume they're satisfied (makepkg will fail if not)
+            return True, []
     
     def _run_cmd(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, 
                  log_cmd=False, timeout=1800, extra_env=None):
@@ -464,8 +603,8 @@ class PackageBuilder:
         logger.info(f"📊 AUR fetch results: {success_count} successful, {failure_count} failed")
         return failure_count == 0
     
-    def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
-        """Build a single package"""
+    def _build_single_package(self, pkg_name: str, is_aur: bool, attempt: int = 1) -> bool:
+        """Build a single package with dependency checking"""
         logger.info(f"\n--- Processing: {pkg_name} ({'AUR' if is_aur else 'Local'}) ---")
         
         # Determine package directory
@@ -476,11 +615,13 @@ class PackageBuilder:
         
         if not pkg_dir.exists():
             logger.error(f"Package directory not found: {pkg_name}")
+            self.failed_packages.append(pkg_name)
             return False
         
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"No PKGBUILD found for {pkg_name}")
+            self.failed_packages.append(pkg_name)
             return False
         
         # Extract version info from SRCINFO
@@ -506,12 +647,21 @@ class PackageBuilder:
             version = "unknown"
         
         try:
+            # PRE-BUILD: Check dependency satisfaction
+            logger.info(f"🔍 Checking dependencies for {pkg_name}...")
+            deps_satisfied, missing_deps = self._check_dependency_satisfaction(pkg_name, pkg_dir, is_aur)
+            
+            if not deps_satisfied and attempt == 1:
+                logger.warning(f"⚠️ {pkg_name}: Missing dependencies, will try again later")
+                # Return False but don't mark as failed yet
+                return False
+            
             logger.info(f"Building {pkg_name} ({version})...")
             
             # Clean workspace before building
             self.build_engine.clean_workspace(pkg_dir)
             
-            # Build package
+            # Build package with dependency installation
             build_result = self._run_cmd(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
@@ -525,16 +675,22 @@ class PackageBuilder:
             if build_result.returncode == 0:
                 # Move built packages to output directory
                 moved = False
+                built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
+                    built_files.append(pkg_file.name)
                     
                     # Update state
                     self.repo_manager.update_package_state(pkg_name, version, pkg_file.name, self.vps_client)
+                    
+                    # Add to dependency map for other packages
+                    self.dependency_map[pkg_name] = version
                     moved = True
                 
                 if is_aur:
+                    # Clean up AUR directory after successful build
                     shutil.rmtree(pkg_dir, ignore_errors=True)
                 
                 if moved:
@@ -543,6 +699,11 @@ class PackageBuilder:
                         self.stats["aur_success"] += 1
                     else:
                         self.stats["local_success"] += 1
+                    
+                    # Update local database immediately for inter-package dependencies
+                    if built_files:
+                        self._update_local_database()
+                    
                     return True
                 else:
                     logger.error(f"No package files created for {pkg_name}")
@@ -550,13 +711,16 @@ class PackageBuilder:
                         self.stats["aur_failed"] += 1
                     else:
                         self.stats["local_failed"] += 1
+                    self.failed_packages.append(pkg_name)
                     return False
             else:
-                logger.error(f"Failed to build {pkg_name}: {build_result.stderr[:500]}")
+                error_msg = build_result.stderr[:500] if build_result.stderr else build_result.stdout[:500] if build_result.stdout else "Unknown error"
+                logger.error(f"Failed to build {pkg_name}: {error_msg}")
                 if is_aur:
                     self.stats["aur_failed"] += 1
                 else:
                     self.stats["local_failed"] += 1
+                self.failed_packages.append(pkg_name)
                 return False
                 
         except Exception as e:
@@ -565,11 +729,41 @@ class PackageBuilder:
                 self.stats["aur_failed"] += 1
             else:
                 self.stats["local_failed"] += 1
+            self.failed_packages.append(pkg_name)
             return False
     
-    def _sync_git_state(self):
+    def _update_local_database(self):
+        """Update local database after each build for inter-package dependencies"""
+        try:
+            # Create a simple local database for dependencies
+            old_cwd = os.getcwd()
+            os.chdir(self.output_dir)
+            
+            # Generate temporary database
+            db_file = f"{self.repo_name}.db.tar.gz"
+            cmd = f"repo-add {db_file} *.pkg.tar.* 2>/dev/null || true"
+            
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            os.chdir(old_cwd)
+            
+            if result.returncode == 0:
+                logger.debug("✅ Updated local package database")
+            else:
+                logger.debug("ℹ️ Local database update skipped (no packages or error)")
+                
+        except Exception as e:
+            logger.debug(f"Local database update error (non-critical): {e}")
+    
+    def _sync_state_to_git(self):
         """
-        Git Sync Phase (The Sandbox Push)
+        Git Sync Phase (The Sandbox Push) - FIXED VERSION
         
         If vps_state.json changed, push it to the repository from a clean clone
         to avoid detached HEAD or dirty tree issues.
@@ -584,19 +778,73 @@ class PackageBuilder:
             logger.info("ℹ️ No state file to sync")
             return
         
+        # Determine which repository URL to use
+        repo_url = self.ssh_repo_url if self.ssh_repo_url else os.getenv('GITHUB_REPO', '')
+        if not repo_url:
+            logger.warning("⚠️ No repository URL configured, skipping git sync")
+            return
+        
+        logger.info(f"Using repository URL: {repo_url}")
+        
         # Create temporary directory for clean clone
         temp_dir = Path("/tmp/state_sync")
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
-        temp_dir.mkdir(parents=True)
         
         try:
-            # Clone the repository
-            clone_cmd = f"git clone --depth 1 {self.github_repo} {temp_dir}"
-            result = self._run_cmd(clone_cmd, check=False, timeout=300)
-            if result.returncode != 0:
-                logger.error(f"❌ Failed to clone repository: {result.stderr[:200]}")
-                return
+            temp_dir.mkdir(parents=True)
+            
+            # Setup SSH environment for git
+            env = os.environ.copy()
+            ssh_key_path = "/home/builder/.ssh/id_ed25519"
+            
+            if os.path.exists(ssh_key_path):
+                # Set GIT_SSH_COMMAND to use our SSH key
+                env['GIT_SSH_COMMAND'] = f'ssh -i {ssh_key_path} -o StrictHostKeyChecking=no'
+                logger.info(f"🔑 Using SSH key: {ssh_key_path}")
+            else:
+                logger.warning("⚠️ SSH key not found, trying without explicit key")
+            
+            # Clone the repository with depth 1 for speed
+            logger.info(f"📥 Cloning repository: {repo_url}")
+            clone_cmd = ["git", "clone", "--depth", "1", repo_url, str(temp_dir)]
+            
+            clone_result = subprocess.run(
+                clone_cmd,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=300,
+                check=False,
+                cwd="/tmp"
+            )
+            
+            if clone_result.returncode != 0:
+                logger.error(f"❌ Failed to clone repository: {clone_result.stderr[:200]}")
+                
+                # Try alternative approach with git URL conversion
+                if "github.com" in repo_url and repo_url.startswith("git@"):
+                    # Convert SSH URL to HTTPS
+                    https_url = repo_url.replace("git@github.com:", "https://github.com/")
+                    logger.info(f"🔄 Trying HTTPS URL: {https_url}")
+                    
+                    clone_cmd = ["git", "clone", "--depth", "1", https_url, str(temp_dir)]
+                    clone_result = subprocess.run(
+                        clone_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                        cwd="/tmp"
+                    )
+                    
+                    if clone_result.returncode != 0:
+                        logger.error(f"❌ HTTPS clone also failed: {clone_result.stderr[:200]}")
+                        return
+                else:
+                    return
+            
+            logger.info("✅ Repository cloned successfully")
             
             # Copy the state file
             dest_state_dir = temp_dir / ".build_tracking"
@@ -604,28 +852,63 @@ class PackageBuilder:
             shutil.copy2(state_file, dest_state_dir / "vps_state.json")
             
             # Configure git
-            self._run_cmd("git config user.email 'builder@github-actions.com'", cwd=temp_dir)
-            self._run_cmd("git config user.name 'GitHub Actions Builder'", cwd=temp_dir)
+            subprocess.run(["git", "config", "user.email", "builder@github-actions.com"], 
+                         cwd=temp_dir, check=False)
+            subprocess.run(["git", "config", "user.name", "GitHub Actions Builder"], 
+                         cwd=temp_dir, check=False)
             
-            # Commit and push
-            self._run_cmd("git add .build_tracking/vps_state.json", cwd=temp_dir)
-            commit_result = self._run_cmd(
-                "git commit -m 'Update VPS package state JSON'",
+            # Add and commit
+            subprocess.run(["git", "add", ".build_tracking/vps_state.json"], 
+                         cwd=temp_dir, check=False)
+            
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", "Update VPS package state JSON"],
                 cwd=temp_dir,
+                capture_output=True,
+                text=True,
                 check=False
             )
             
             if commit_result.returncode == 0:
-                push_result = self._run_cmd("git push", cwd=temp_dir, check=False)
+                logger.info("✅ Changes committed")
+                
+                # Push with SSH environment
+                push_result = subprocess.run(
+                    ["git", "push"],
+                    cwd=temp_dir,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False
+                )
+                
                 if push_result.returncode == 0:
-                    logger.info("✅ State file synchronized to repository")
+                    logger.info("✅ State file pushed to repository")
                 else:
                     logger.error(f"❌ Failed to push: {push_result.stderr[:200]}")
+                    
+                    # Try with force if it's a simple fast-forward issue
+                    if "non-fast-forward" in push_result.stderr:
+                        logger.info("🔄 Trying with --force-with-lease")
+                        force_result = subprocess.run(
+                            ["git", "push", "--force-with-lease"],
+                            cwd=temp_dir,
+                            capture_output=True,
+                            text=True,
+                            env=env,
+                            check=False
+                        )
+                        if force_result.returncode == 0:
+                            logger.info("✅ Force push successful")
+                        else:
+                            logger.error(f"❌ Force push failed: {force_result.stderr[:200]}")
             else:
-                logger.info("ℹ️ No changes to commit")
+                logger.info("ℹ️ No changes to commit (state file unchanged)")
                 
         except Exception as e:
             logger.error(f"❌ Git sync error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # Clean up
             if temp_dir.exists():
@@ -662,7 +945,9 @@ class PackageBuilder:
             logger.info("=" * 60)
             
             repo_exists, has_packages = self.vps_client.check_repository_exists_on_vps()
-            self._apply_repository_state(repo_exists, has_packages)
+            
+            # CRITICAL FIX: Enable repository AND sync pacman databases
+            self._enable_custom_repository(repo_exists, has_packages)
             
             # Ensure remote directory exists
             self.vps_client.ensure_remote_directory()
@@ -695,9 +980,9 @@ class PackageBuilder:
             self.adopted_packages = migration_results["adopted"]
             self.packages_to_build = migration_results["to_build"]
             
-            # STEP 5: Build Phase
+            # STEP 5: Build Phase with dependency handling
             logger.info("\n" + "=" * 60)
-            logger.info("STEP 4: BUILD PHASE")
+            logger.info("STEP 4: BUILD PHASE WITH DEPENDENCY CHECKING")
             logger.info("=" * 60)
             
             logger.info(f"📦 Package statistics:")
@@ -706,15 +991,43 @@ class PackageBuilder:
             logger.info(f"   Adopted packages: {len(self.adopted_packages)}")
             logger.info(f"   Packages to build: {len(self.packages_to_build)}")
             
-            # Build AUR packages
-            logger.info(f"\n🔨 Building {len(aur_packages)} AUR packages")
-            for pkg in aur_packages:
-                self._build_single_package(pkg, is_aur=True)
+            # Build packages in multiple passes to handle dependencies
+            max_passes = 3
+            remaining_packages = aur_packages + local_packages
             
-            # Build local packages
-            logger.info(f"\n🔨 Building {len(local_packages)} local packages")
-            for pkg in local_packages:
-                self._build_single_package(pkg, is_aur=False)
+            for pass_num in range(1, max_passes + 1):
+                if not remaining_packages:
+                    break
+                
+                logger.info(f"\n🔄 Build pass {pass_num}/{max_passes}")
+                successful_this_pass = []
+                
+                for pkg in list(remaining_packages):
+                    is_aur = pkg in aur_packages
+                    success = self._build_single_package(pkg, is_aur, attempt=pass_num)
+                    
+                    if success:
+                        successful_this_pass.append(pkg)
+                
+                # Remove successfully built packages
+                for pkg in successful_this_pass:
+                    if pkg in remaining_packages:
+                        remaining_packages.remove(pkg)
+                
+                logger.info(f"Pass {pass_num}: Built {len(successful_this_pass)} packages, {len(remaining_packages)} remaining")
+                
+                # Sync pacman databases between passes
+                if remaining_packages and pass_num < max_passes:
+                    logger.info("🔄 Syncing pacman databases between passes...")
+                    subprocess.run(["sudo", "pacman", "-Sy", "--noconfirm"], 
+                                 capture_output=True, timeout=60, check=False)
+                    self.stats["pacman_syncs"] += 1
+            
+            # Report any still-failed packages
+            if self.failed_packages:
+                logger.warning(f"\n⚠️ {len(self.failed_packages)} packages failed to build:")
+                for pkg in self.failed_packages:
+                    logger.warning(f"  - {pkg}")
             
             # Check if we have any built packages
             built_files = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -723,7 +1036,7 @@ class PackageBuilder:
                 logger.info("STEP 5: REPOSITORY DATABASE GENERATION")
                 logger.info("=" * 60)
                 
-                # Generate database
+                # Generate final database
                 if self.repo_manager.generate_full_database():
                     # Sign repository database files if GPG is enabled
                     if self.gpg_handler.gpg_enabled:
@@ -733,21 +1046,24 @@ class PackageBuilder:
                     # Upload packages and database
                     files_to_upload = [str(f) for f in self.output_dir.glob("*")]
                     if files_to_upload:
+                        logger.info(f"📤 Uploading {len(files_to_upload)} files to VPS...")
                         upload_success = self.vps_client.upload_files(files_to_upload, self.output_dir)
+                        
                         if upload_success:
                             # Upload state file to VPS
                             self.vps_client.upload_state_file(self.repo_manager.state_file)
                             
-                            # Sync pacman databases
+                            # Final pacman sync
                             logger.info("\n" + "=" * 60)
-                            logger.info("STEP 6: PACMAN DATABASE SYNC")
+                            logger.info("STEP 6: FINAL PACMAN DATABASE SYNC")
                             logger.info("=" * 60)
                             
-                            self._apply_repository_state(True, True)
-                            self._run_cmd("sudo pacman -Sy --noconfirm", timeout=300, check=False)
+                            subprocess.run(["sudo", "pacman", "-Sy", "--noconfirm"], 
+                                         capture_output=True, timeout=120, check=False)
+                            self.stats["pacman_syncs"] += 1
                             
                             # STEP 7: Git Sync Phase
-                            self._sync_git_state()
+                            self._sync_state_to_git()
                             
                             logger.info("\n✅ Build completed successfully!")
                         else:
@@ -757,18 +1073,21 @@ class PackageBuilder:
                 else:
                     logger.error("❌ Database generation failed!")
             else:
-                logger.info("\n📊 Build summary:")
-                logger.info(f"   AUR packages built: {self.stats['aur_success']}")
-                logger.info(f"   AUR packages failed: {self.stats['aur_failed']}")
-                logger.info(f"   Local packages built: {self.stats['local_success']}")
-                logger.info(f"   Local packages failed: {self.stats['local_failed']}")
-                logger.info(f"   Total skipped: {len(self.skipped_packages)}")
-                logger.info(f"   Adopted packages: {len(self.adopted_packages)}")
-                
-                if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
-                    logger.warning("⚠️ Some packages failed to build")
+                if not self.failed_packages:
+                    logger.info("\n📊 Build summary:")
+                    logger.info(f"   AUR packages built: {self.stats['aur_success']}")
+                    logger.info(f"   AUR packages failed: {self.stats['aur_failed']}")
+                    logger.info(f"   Local packages built: {self.stats['local_success']}")
+                    logger.info(f"   Local packages failed: {self.stats['local_failed']}")
+                    logger.info(f"   Total skipped: {len(self.skipped_packages)}")
+                    logger.info(f"   Adopted packages: {len(self.adopted_packages)}")
+                    
+                    if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
+                        logger.warning("⚠️ Some packages failed to build")
+                    else:
+                        logger.info("✅ All packages are up to date!")
                 else:
-                    logger.info("✅ All packages are up to date!")
+                    logger.error("\n❌ Build failed with errors!")
             
             # Clean up GPG
             self.gpg_handler.cleanup()
@@ -784,8 +1103,12 @@ class PackageBuilder:
             logger.info(f"Total built:     {self.stats['aur_success'] + self.stats['local_success']}")
             logger.info(f"Skipped:         {len(self.skipped_packages)}")
             logger.info(f"Adopted:         {len(self.adopted_packages)}")
+            logger.info(f"Failed:          {len(self.failed_packages)}")
+            logger.info(f"Dependency checks: {self.stats['dependency_checks']}")
+            logger.info(f"Pacman syncs:    {self.stats['pacman_syncs']}")
             logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             logger.info(f"JSON State:      ✅ Efficient tracking active")
+            logger.info(f"Dependency handling: ✅ Multi-pass build system")
             logger.info("=" * 60)
             
             if self.built_packages:
@@ -793,7 +1116,8 @@ class PackageBuilder:
                 for pkg in self.built_packages:
                     logger.info(f"  - {pkg}")
             
-            return 0
+            # Return success if no critical failures
+            return 0 if len(self.failed_packages) == 0 else 1
             
         except Exception as e:
             logger.error(f"\n❌ Build failed: {e}")

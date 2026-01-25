@@ -55,6 +55,9 @@ class RepoManager:
                 with open(self.state_file, 'r') as f:
                     self.state_data = json.load(f)
                 logger.info(f"📊 Loaded state for {len(self.state_data)} packages")
+            except json.JSONDecodeError:
+                logger.warning("State file corrupted, starting fresh")
+                self.state_data = {}
             except Exception as e:
                 logger.warning(f"Could not load state file: {e}")
                 self.state_data = {}
@@ -63,11 +66,11 @@ class RepoManager:
             self.state_data = {}
     
     def _save_state(self):
-        """Save JSON state to file"""
+        """Save JSON state to file with human-readable indentation"""
         try:
             with open(self.state_file, 'w') as f:
-                json.dump(self.state_data, f, indent=2)
-            logger.debug("✅ Saved state file")
+                json.dump(self.state_data, f, indent=4, sort_keys=True)
+            logger.debug("✅ Saved state file with indent=4")
         except Exception as e:
             logger.error(f"❌ Failed to save state file: {e}")
     
@@ -98,6 +101,7 @@ class RepoManager:
         
         adopted = []
         to_build = []
+        version_warnings = []
         
         # Track packages that need PKGBUILD for version extraction
         missing_pkgbuilds = []
@@ -110,7 +114,7 @@ class RepoManager:
                 logger.warning(f"⚠️ Could not parse filename: {pkg_filename}")
                 continue
             
-            pkg_name, version_str = parsed
+            pkg_name, remote_version = parsed
             
             # Skip if already in state
             if pkg_name in self.state_data:
@@ -131,7 +135,7 @@ class RepoManager:
                 pkgbuild_path = self.output_dir.parent / pkg_name / "PKGBUILD"
             elif is_aur:
                 # AUR packages need to be fetched first - will be handled in builder
-                missing_pkgbuilds.append((pkg_name, version_str, "aur"))
+                missing_pkgbuilds.append((pkg_name, remote_version, "aur"))
                 continue
             
             # Check if PKGBUILD exists
@@ -142,27 +146,52 @@ class RepoManager:
                     pkgver, pkgrel, epoch = build_engine.extract_version_from_srcinfo(pkg_dir)
                     local_version = build_engine.get_full_version_string(pkgver, pkgrel, epoch)
                     
-                    # Compare versions
-                    if version_str == local_version:
+                    # Compare versions - CRITICAL FIX: Don't downgrade!
+                    if remote_version == local_version:
                         # Get remote hash
                         remote_hash = vps_client.get_remote_file_hash(f"{self.remote_dir}/{pkg_filename}")
                         if remote_hash:
                             # Adopt into state
                             self.state_data[pkg_name] = {
-                                "version": version_str,
+                                "version": remote_version,
                                 "hash": remote_hash,
                                 "filename": pkg_filename,
-                                "last_verified": datetime.now().isoformat()
+                                "last_verified": datetime.now().isoformat(),
+                                "migrated": True
                             }
                             adopted.append(pkg_name)
-                            logger.info(f"✅ Adopted {pkg_name} ({version_str}) into state")
+                            logger.info(f"✅ Adopted {pkg_name} ({remote_version}) into state")
                         else:
                             logger.warning(f"⚠️ Could not get hash for {pkg_name}, marking for build")
                             to_build.append(pkg_name)
                     else:
-                        logger.info(f"ℹ️ {pkg_name}: remote {version_str} != local {local_version}, marking for build")
-                        to_build.append(pkg_name)
+                        # Check which version is newer
+                        should_build = build_engine.compare_versions(remote_version, pkgver, pkgrel, epoch)
                         
+                        if should_build:
+                            # Local is newer than remote
+                            logger.info(f"ℹ️ {pkg_name}: remote {remote_version} < local {local_version}, marking for build")
+                            to_build.append(pkg_name)
+                        else:
+                            # Remote is newer than local - WARNING!
+                            version_warnings.append(f"{pkg_name}: Remote {remote_version} > Local {local_version}")
+                            logger.warning(f"⚠️ {pkg_name}: Remote version {remote_version} is NEWER than local {local_version}")
+                            logger.warning(f"   This may indicate a downgrade. Will not rebuild unless forced.")
+                            
+                            # Still adopt the newer version, but with a warning flag
+                            remote_hash = vps_client.get_remote_file_hash(f"{self.remote_dir}/{pkg_filename}")
+                            if remote_hash:
+                                self.state_data[pkg_name] = {
+                                    "version": remote_version,
+                                    "hash": remote_hash,
+                                    "filename": pkg_filename,
+                                    "last_verified": datetime.now().isoformat(),
+                                    "migrated": True,
+                                    "warning": "remote_newer_than_local"
+                                }
+                                adopted.append(pkg_name)
+                                logger.info(f"⚠️ Adopted newer remote version of {pkg_name} ({remote_version})")
+                            
                 except Exception as e:
                     logger.warning(f"⚠️ Error processing {pkg_name}: {e}, marking for build")
                     to_build.append(pkg_name)
@@ -173,12 +202,23 @@ class RepoManager:
         # Save updated state
         self._save_state()
         
+        # Log version warnings
+        if version_warnings:
+            logger.warning("\n" + "=" * 60)
+            logger.warning("⚠️ VERSION MISMATCH WARNINGS")
+            logger.warning("=" * 60)
+            for warning in version_warnings:
+                logger.warning(f"  {warning}")
+            logger.warning("These packages have NEWER versions on VPS than locally.")
+            logger.warning("They will NOT be rebuilt to avoid downgrades.")
+        
         logger.info(f"📊 Migration results: {len(adopted)} adopted, {len(to_build)} to build")
         
         return {
             "adopted": adopted,
             "to_build": to_build,
-            "missing_pkgbuilds": missing_pkgbuilds
+            "missing_pkgbuilds": missing_pkgbuilds,
+            "version_warnings": version_warnings
         }
     
     def verify_package_state(self, pkg_name: str, pkg_type: str, local_version: str, 
@@ -186,13 +226,6 @@ class RepoManager:
         """
         Verify if a package is up-to-date by checking version and hash
         
-        Args:
-            pkg_name: Package name
-            pkg_type: "local" or "aur"
-            local_version: Local version string
-            vps_client: VPSClient instance
-            build_engine: BuildEngine instance
-            
         Returns:
             Tuple of (needs_build, remote_version_or_none)
         """
@@ -200,6 +233,12 @@ class RepoManager:
         if pkg_name in self.state_data:
             state_info = self.state_data[pkg_name]
             state_version = state_info.get("version", "")
+            
+            # Check for version mismatch warning
+            if state_info.get("warning") == "remote_newer_than_local":
+                logger.warning(f"⚠️ {pkg_name}: Remote version {state_version} is NEWER than what we would build")
+                logger.warning(f"   Skipping to avoid downgrade from {state_version} to {local_version}")
+                return False, state_version
             
             # Compare versions
             if state_version == local_version:
@@ -221,7 +260,6 @@ class RepoManager:
                 try:
                     # Parse versions for comparison
                     pkgver, pkgrel, epoch = self._parse_version_string(local_version)
-                    remote_pkgver, remote_pkgrel, remote_epoch = self._parse_version_string(state_version)
                     
                     # Use build_engine to compare
                     should_build = build_engine.compare_versions(state_version, pkgver, pkgrel, epoch)
@@ -229,6 +267,7 @@ class RepoManager:
                         logger.info(f"ℹ️ {pkg_name}: Local {local_version} > Remote {state_version}, building")
                     else:
                         logger.warning(f"⚠️ {pkg_name}: Remote {state_version} > Local {local_version}, skipping")
+                        logger.warning(f"   Will not downgrade from {state_version} to {local_version}")
                     
                     return should_build, state_version
                 except Exception as e:
@@ -270,7 +309,7 @@ class RepoManager:
         else:
             logger.warning(f"⚠️ Could not get hash for {pkg_name}, state not updated")
         
-        # Save state
+        # Save state with proper indentation
         self._save_state()
     
     def _parse_package_filename(self, filename: str) -> Optional[Tuple[str, str]]:
@@ -357,7 +396,8 @@ class RepoManager:
                     os.remove(f)
             
             # Generate database with repo-add using shell=True for wildcard expansion
-            cmd = f"repo-add {db_file} *.pkg.tar.zst"
+            # Use raw string to avoid escape sequence warnings
+            cmd = rf"repo-add {db_file} *.pkg.tar.zst *.pkg.tar.xz"
             
             result = subprocess.run(
                 cmd,
@@ -408,12 +448,6 @@ class RepoManager:
         existing_files = []
         missing_files = []
         
-        # We'll check this via VPSClient instead of direct SSH
-        # This is a placeholder - actual implementation needs VPSClient
-        for db_file in db_files:
-            remote_path = f"{self.remote_dir}/{db_file}"
-            # In real implementation, use VPSClient.check_remote_file_exists()
-            existing_files.append(db_file)  # Simplified
-        
-        logger.info(f"Found {len(existing_files)} database files on server")
+        # This is a placeholder - actual implementation should use VPSClient
+        # We'll implement this properly if needed, but for now return empty lists
         return existing_files, missing_files
