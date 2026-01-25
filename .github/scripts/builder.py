@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Manjaro Package Builder - Holy Grail Workflow
-Main orchestrator with State-First initialization and metadata-based comparison
+Manjaro Package Builder - Optimized Workflow
+Main orchestrator with state-first initialization and metadata-based comparison
 """
 
 import os
@@ -26,7 +26,7 @@ try:
     from modules.vps_client import VPSClient
     from modules.build_engine import BuildEngine
     from modules.gpg_handler import GPGHandler
-    from modules.aur_client import AURClient  # New AUR RPC client
+    from modules.aur_client import AURClient
     MODULES_LOADED = True
     logger = logging.getLogger(__name__)
     logger.info("✅ All modules imported successfully")
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 class PackageBuilder:
-    """Main orchestrator with Holy Grail Workflow"""
+    """Main orchestrator with optimized workflow"""
     
     def __init__(self):
         # Run pre-flight environment validation
@@ -69,21 +69,24 @@ class PackageBuilder:
         # Get the repository root
         self.repo_root = self._get_repo_root()
         
-        # Load configuration
-        self._load_config()
-        
-        # Setup directories from config
+        # Setup directories
         self.output_dir = self.repo_root / (getattr(config, 'OUTPUT_DIR', 'built_packages') if HAS_CONFIG_FILES else "built_packages")
         self.output_dir.mkdir(exist_ok=True)
         
-        # Load configuration values from config.py
+        # Load configuration values
         self.aur_urls = getattr(config, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]) if HAS_CONFIG_FILES else ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]
         self.aur_build_dir = self.repo_root / (getattr(config, 'AUR_BUILD_DIR', 'build_aur') if HAS_CONFIG_FILES else "build_aur")
         self.ssh_options = getattr(config, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]) if HAS_CONFIG_FILES else ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]
         self.ssh_repo_url = getattr(config, 'SSH_REPO_URL', '') if HAS_CONFIG_FILES else ''
         
-        # Get PACKAGER_ID from config
-        self.packager_id = getattr(config, 'PACKAGER_ID', 'Maintainer <no-reply@gshoots.hu>') if HAS_CONFIG_FILES else 'Maintainer <no-reply@gshoots.hu>'
+        # Get PACKAGER_ID - FIXED: Load after config check
+        if HAS_CONFIG_FILES:
+            self.packager_id = getattr(config, 'PACKAGER_ID', 'Maintainer <no-reply@gshoots.hu>')
+        else:
+            self.packager_id = 'Maintainer <no-reply@gshoots.hu>'
+        
+        # Load environment configuration
+        self._load_config()
         
         # Initialize modules
         self._init_modules()
@@ -92,7 +95,7 @@ class PackageBuilder:
         self.built_packages = []
         self.skipped_packages = []
         self.failed_packages = []
-        self.decisions = {}  # Store decision metadata
+        self.decisions = {}
         
         # Statistics
         self.stats = {
@@ -110,7 +113,7 @@ class PackageBuilder:
     def _validate_env(self) -> None:
         """Pre-flight environment validation"""
         logger.info("\n" + "=" * 60)
-        logger.info("🚀 HOLY GRAIL WORKFLOW INITIALIZATION")
+        logger.info("ENVIRONMENT VALIDATION")
         logger.info("=" * 60)
         
         required_vars = ['REPO_NAME', 'VPS_HOST', 'VPS_USER', 'VPS_SSH_KEY', 'REMOTE_DIR']
@@ -128,17 +131,25 @@ class PackageBuilder:
         logger.info("✅ Environment validation passed")
     
     def _load_config(self):
-        """Load configuration from environment and config files"""
+        """Load configuration from environment variables"""
+        # Required environment variables (secrets)
         self.vps_user = os.getenv('VPS_USER')
         self.vps_host = os.getenv('VPS_HOST')
         self.ssh_key = os.getenv('VPS_SSH_KEY')
+        
+        # Optional environment variables
         self.repo_server_url = os.getenv('REPO_SERVER_URL', '')
         self.remote_dir = os.getenv('REMOTE_DIR')
         self.repo_name = os.getenv('REPO_NAME')
         
         logger.info(f"🔧 Configuration loaded")
-        logger.info(f"   Repository: {self.repo_name}")
+        logger.info(f"   SSH user: {self.vps_user}")
+        logger.info(f"   VPS host: {self.vps_host}")
+        logger.info(f"   Remote directory: {self.remote_dir}")
+        logger.info(f"   Repository name: {self.repo_name}")
         logger.info(f"   PACKAGER: {self.packager_id}")
+        if self.repo_server_url:
+            logger.info(f"   Repository URL: {self.repo_server_url}")
     
     def _init_modules(self):
         """Initialize all modules with configuration"""
@@ -221,70 +232,45 @@ class PackageBuilder:
             return False
         
         try:
+            # Read current pacman.conf
             with open(pacman_conf, 'r') as f:
                 content = f.read()
             
+            # Check if our repo already exists
             repo_section = f"[{self.repo_name}]"
-            lines = content.split('\n')
-            new_lines = []
-            
-            # Remove old section
-            in_section = False
-            for line in lines:
-                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
-                    in_section = True
-                    continue
-                elif in_section and (line.strip().startswith('[') or line.strip() == ''):
-                    in_section = False
+            if repo_section in content:
+                logger.info(f"✅ Repository {self.repo_name} already in pacman.conf")
+            else:
+                # Add repository section
+                new_section = f"""
+# Custom repository: {self.repo_name}
+{repo_section}
+SigLevel = Optional TrustAll
+Server = {self.repo_server_url if self.repo_server_url else '$REPO_SERVER_URL'}
+"""
                 
-                if not in_section:
-                    new_lines.append(line)
-            
-            # Add new section if exists
-            if exists:
-                new_lines.append('')
-                new_lines.append(f"# Custom repository: {self.repo_name}")
-                new_lines.append(repo_section)
-                if has_packages:
-                    new_lines.append("SigLevel = Optional TrustAll")
-                else:
-                    new_lines.append("# SigLevel = Optional TrustAll")
-                
-                if self.repo_server_url:
-                    new_lines.append(f"Server = {self.repo_server_url}")
-                new_lines.append('')
-            
-            # Write back
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-                temp_file.write('\n'.join(new_lines))
-                temp_path = temp_file.name
-            
-            subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
-            subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
-            os.unlink(temp_path)
-            
-            logger.info(f"✅ Updated pacman.conf")
+                # Append to pacman.conf
+                with open(pacman_conf, 'a') as f:
+                    f.write(new_section)
+                logger.info(f"✅ Added repository {self.repo_name} to pacman.conf")
             
             # CRITICAL: Immediate pacman sync
-            if exists and has_packages:
-                logger.info("🔄 Running pacman -Sy...")
-                result = subprocess.run(
-                    ["sudo", "pacman", "-Sy", "--noconfirm"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False
-                )
-                
-                if result.returncode == 0:
-                    self.stats["pacman_syncs"] += 1
-                    logger.info("✅ Pacman databases synchronized")
-                    return True
-                else:
-                    logger.error(f"❌ Pacman sync failed: {result.stderr[:200]}")
-                    return False
+            logger.info("🔄 Running pacman -Sy to sync databases...")
+            result = subprocess.run(
+                ["sudo", "pacman", "-Sy", "--noconfirm"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False
+            )
             
-            return True
+            if result.returncode == 0:
+                self.stats["pacman_syncs"] += 1
+                logger.info("✅ Pacman databases synchronized")
+                return True
+            else:
+                logger.error(f"❌ Pacman sync failed: {result.stderr[:200]}")
+                return False
             
         except Exception as e:
             logger.error(f"Failed to configure repository: {e}")
@@ -292,18 +278,15 @@ class PackageBuilder:
     
     def _state_first_initialization(self) -> bool:
         """
-        STATE-FIRST INITIALIZATION:
-        Load state from VPS or initialize from VPS package list
+        State-first initialization: Load state from VPS before any operations
         """
-        logger.info("\n" + "=" * 60)
-        logger.info("📊 STATE-FIRST INITIALIZATION")
-        logger.info("=" * 60)
+        logger.info("\n📊 STATE-FIRST INITIALIZATION")
         
         # Step 1: Try to download existing state from VPS
         logger.info("1. Downloading state from VPS...")
         state_downloaded = self.vps_client.download_state_file(self.repo_manager.state_file)
         
-        # Step 2: Load state (if downloaded) or initialize from VPS
+        # Step 2: Load state or initialize from VPS
         if state_downloaded:
             logger.info("2. Loading existing state...")
             if not self.repo_manager.load_state():
@@ -323,23 +306,19 @@ class PackageBuilder:
     
     def _metadata_based_comparison(self, local_packages: List[str], aur_packages: List[str]) -> Dict[str, Dict]:
         """
-        METADATA-BASED COMPARISON:
-        Compare versions without cloning (AUR: RPC API, Local: PKGBUILD)
+        Metadata-based comparison using AUR RPC API and local PKGBUILDs
         """
-        logger.info("\n" + "=" * 60)
-        logger.info("🔍 METADATA-BASED COMPARISON (No-Clone Zone)")
-        logger.info("=" * 60)
+        logger.info("\n🔍 METADATA-BASED COMPARISON")
         
         decisions = {}
         
         # Process AUR packages via RPC API
         if aur_packages:
             logger.info(f"📡 Fetching AUR metadata for {len(aur_packages)} packages...")
-            aur_metadata = self.aur_client.get_multiple_packages(aur_packages)
-            self.stats["metadata_checks"] += len(aur_packages)
             
             for pkg_name in aur_packages:
-                aur_info = aur_metadata.get(pkg_name)
+                self.stats["metadata_checks"] += 1
+                aur_info = self.aur_client.get_package_info(pkg_name)
                 aur_version = aur_info.get("Version") if aur_info else None
                 
                 if not aur_version:
@@ -416,22 +395,21 @@ class PackageBuilder:
         build_count = sum(1 for d in decisions.values() if d.get("build"))
         skip_count = sum(1 for d in decisions.values() if d.get("skip"))
         
-        logger.info(f"\n📊 Metadata comparison results:")
+        logger.info(f"\n📊 Comparison results:")
         logger.info(f"   To build: {build_count}")
         logger.info(f"   To skip: {skip_count}")
-        logger.info(f"   Total: {len(decisions)}")
         
         return decisions
     
     def _clone_and_build_aur(self, pkg_name: str, aur_version: str) -> bool:
-        """Clone and build AUR package (only if decision says build)"""
-        logger.info(f"\n🏗️  Building AUR package: {pkg_name} ({aur_version})")
+        """Clone and build AUR package"""
+        logger.info(f"\n🏗️  Building AUR: {pkg_name} ({aur_version})")
         
         pkg_dir = self.aur_build_dir / pkg_name
         if pkg_dir.exists():
             shutil.rmtree(pkg_dir, ignore_errors=True)
         
-        # Try AUR URLs
+        # Clone from AUR
         clone_success = False
         for aur_url_template in self.aur_urls:
             aur_url = aur_url_template.format(pkg_name=pkg_name)
@@ -473,6 +451,7 @@ class PackageBuilder:
                 )
             
             shutil.rmtree(pkg_dir, ignore_errors=True)
+            self.built_packages.append(f"{pkg_name} ({aur_version})")
             return True
         else:
             logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
@@ -481,7 +460,7 @@ class PackageBuilder:
     
     def _build_local_package(self, pkg_name: str, local_version: str) -> bool:
         """Build local package"""
-        logger.info(f"\n🏗️  Building local package: {pkg_name} ({local_version})")
+        logger.info(f"\n🏗️  Building local: {pkg_name} ({local_version})")
         
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
@@ -510,6 +489,7 @@ class PackageBuilder:
                     pkg_name, local_version, pkg_file.name, self.vps_client
                 )
             
+            self.built_packages.append(f"{pkg_name} ({local_version})")
             return True
         else:
             logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
@@ -517,18 +497,13 @@ class PackageBuilder:
     
     def _run_multi_pass_build(self, decisions: Dict[str, Dict]) -> Tuple[int, int]:
         """
-        Multi-pass build system with Atomic Dependency Injection
-        
-        Returns:
-            Tuple of (success_count, fail_count)
+        Multi-pass build system with dependency injection
         """
-        logger.info("\n" + "=" * 60)
-        logger.info("🔄 MULTI-PASS BUILD SYSTEM")
-        logger.info("=" * 60)
+        logger.info("\n🔄 MULTI-PASS BUILD SYSTEM")
         
         # Get packages to build
         packages_to_build = [pkg for pkg, dec in decisions.items() if dec.get("build")]
-        logger.info(f"Starting multi-pass build with {len(packages_to_build)} packages")
+        logger.info(f"Starting with {len(packages_to_build)} packages to build")
         
         max_passes = 3
         success_count = 0
@@ -564,33 +539,27 @@ class PackageBuilder:
                     packages_to_build.remove(pkg_name)
                     success_count += 1
                     
-                    # ATOMIC DEPENDENCY INJECTION after each successful build
-                    logger.info("⚛️ Atomic Dependency Injection...")
+                    # Dependency injection after each successful build
+                    logger.info("⚛️ Updating local database...")
                     if self.repo_manager.atomic_dependency_injection(self.build_engine):
                         self.stats["dependency_injections"] += 1
-                        logger.info("✅ Dependencies injected")
-                    else:
-                        logger.warning("⚠️ Dependency injection failed, continuing anyway")
                 else:
                     fail_count += 1
-                    # Keep in queue for next pass
+                    self.failed_packages.append(pkg_name)
             
             logger.info(f"Pass {pass_num}: Built {len(built_this_pass)} packages, {len(packages_to_build)} remaining")
             
             if not built_this_pass and packages_to_build:
-                logger.warning("⚠️ No packages built this pass, but some remain. Breaking to avoid infinite loop.")
+                logger.warning("⚠️ No packages built this pass, breaking loop")
                 break
         
         return success_count, fail_count
     
-    def _clean_up_and_sync(self):
+    def _final_sync(self):
         """
-        CLEAN-UP & SYNC:
-        Final Git state push and VPS file synchronization
+        Final synchronization: Upload packages and state to VPS
         """
-        logger.info("\n" + "=" * 60)
-        logger.info("🧹 CLEAN-UP & FINAL SYNC")
-        logger.info("=" * 60)
+        logger.info("\n🧹 FINAL SYNC")
         
         # Step 1: Generate final database
         logger.info("1. Generating final repository database...")
@@ -601,8 +570,7 @@ class PackageBuilder:
         # Step 2: GPG signing
         if self.gpg_handler.gpg_enabled:
             logger.info("2. Signing repository files...")
-            if not self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir)):
-                logger.warning("⚠️ GPG signing failed, continuing anyway")
+            self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir))
         
         # Step 3: Upload to VPS
         logger.info("3. Uploading packages to VPS...")
@@ -612,13 +580,12 @@ class PackageBuilder:
                 logger.error("❌ Upload failed")
                 return False
         
-        # Step 4: Upload updated state to VPS
+        # Step 4: Upload updated state
         logger.info("4. Uploading updated state to VPS...")
-        if not self.vps_client.upload_state_file(self.repo_manager.state_file):
-            logger.error("❌ Failed to upload state file")
+        self.vps_client.upload_state_file(self.repo_manager.state_file)
         
         # Step 5: Final pacman sync
-        logger.info("5. Final pacman database sync...")
+        logger.info("5. Final pacman sync...")
         subprocess.run(["sudo", "pacman", "-Sy", "--noconfirm"], 
                      capture_output=True, timeout=120, check=False)
         self.stats["pacman_syncs"] += 1
@@ -628,12 +595,12 @@ class PackageBuilder:
             logger.info("6. Syncing state to Git...")
             self._sync_state_to_git()
         
-        logger.info("✅ Clean-up and sync completed")
+        logger.info("✅ Final sync completed")
         return True
     
     def _sync_state_to_git(self):
         """Sync state file to Git repository"""
-        logger.info("📤 Syncing state to Git repository...")
+        logger.info("📤 Syncing state to Git...")
         
         state_file = self.repo_manager.state_file
         if not state_file.exists():
@@ -667,11 +634,16 @@ class PackageBuilder:
             shutil.copy2(state_file, dest_state_dir / "vps_state.json")
             
             # Commit and push
+            subprocess.run(["git", "config", "user.email", "builder@github-actions.com"], cwd=temp_dir, check=False)
+            subprocess.run(["git", "config", "user.name", "GitHub Actions Builder"], cwd=temp_dir, check=False)
             subprocess.run(["git", "add", ".build_tracking/vps_state.json"], cwd=temp_dir, check=False)
-            subprocess.run(["git", "commit", "-m", "Update VPS package state"], cwd=temp_dir, check=False)
-            subprocess.run(["git", "push"], cwd=temp_dir, capture_output=True, text=True, env=env, check=False)
+            subprocess.run(["git", "commit", "-m", "Update package state"], cwd=temp_dir, check=False)
+            push_result = subprocess.run(["git", "push"], cwd=temp_dir, capture_output=True, text=True, env=env, check=False)
             
-            logger.info("✅ State synced to Git")
+            if push_result.returncode == 0:
+                logger.info("✅ State synced to Git")
+            else:
+                logger.error(f"❌ Git push failed: {push_result.stderr[:200]}")
             
         except Exception as e:
             logger.error(f"❌ Git sync error: {e}")
@@ -680,45 +652,52 @@ class PackageBuilder:
                 shutil.rmtree(temp_dir, ignore_errors=True)
     
     def run(self) -> int:
-        """Main Holy Grail workflow execution"""
+        """Main workflow execution"""
         try:
             # STEP 0: GPG Initialization
             logger.info("\n" + "=" * 60)
             logger.info("STEP 0: GPG INITIALIZATION")
             logger.info("=" * 60)
             if self.gpg_handler.gpg_enabled:
-                if not self.gpg_handler.import_gpg_key():
-                    logger.error("❌ GPG key import failed, disabling signing")
+                self.gpg_handler.import_gpg_key()
             
-            # STEP 1: Repository State Check
+            # STEP 1: Repository Setup
             logger.info("\n" + "=" * 60)
-            logger.info("STEP 1: REPOSITORY STATE CHECK")
+            logger.info("STEP 1: REPOSITORY SETUP")
             logger.info("=" * 60)
             repo_exists, has_packages = self.vps_client.check_repository_exists_on_vps()
             self._enable_custom_repository(repo_exists, has_packages)
             self.vps_client.ensure_remote_directory()
             
-            # STEP 2: STATE-FIRST INITIALIZATION (Holy Grail Core)
+            # STEP 2: STATE-FIRST INITIALIZATION
             if not self._state_first_initialization():
                 logger.error("❌ State initialization failed")
                 return 1
             
-            # STEP 3: METADATA-BASED COMPARISON (No-Clone Zone)
+            # STEP 3: METADATA-BASED COMPARISON
             local_packages, aur_packages = self.get_package_lists()
             self.decisions = self._metadata_based_comparison(local_packages, aur_packages)
             
-            # STEP 4: MULTI-PASS BUILD with Atomic Dependency Injection
+            # STEP 4: MULTI-PASS BUILD
             success_count, fail_count = self._run_multi_pass_build(self.decisions)
             
             # Update statistics
-            self.stats["aur_success"] = sum(1 for pkg, dec in self.decisions.items() 
-                                          if dec.get("type") == "aur" and dec.get("build") and pkg not in self.failed_packages)
-            self.stats["local_success"] = sum(1 for pkg, dec in self.decisions.items() 
-                                            if dec.get("type") == "local" and dec.get("build") and pkg not in self.failed_packages)
+            for pkg_name, decision in self.decisions.items():
+                if decision.get("build"):
+                    if pkg_name in self.failed_packages:
+                        if decision["type"] == "aur":
+                            self.stats["aur_failed"] += 1
+                        else:
+                            self.stats["local_failed"] += 1
+                    else:
+                        if decision["type"] == "aur":
+                            self.stats["aur_success"] += 1
+                        else:
+                            self.stats["local_success"] += 1
             
-            # STEP 5: CLEAN-UP & FINAL SYNC
+            # STEP 5: FINAL SYNC
             if success_count > 0:
-                self._clean_up_and_sync()
+                self._final_sync()
             
             # STEP 6: GPG Cleanup
             self.gpg_handler.cleanup()
@@ -727,18 +706,16 @@ class PackageBuilder:
             elapsed = time.time() - self.stats["start_time"]
             
             logger.info("\n" + "=" * 60)
-            logger.info("📊 HOLY GRAIL WORKFLOW SUMMARY")
+            logger.info("📊 WORKFLOW SUMMARY")
             logger.info("=" * 60)
             logger.info(f"Duration: {elapsed:.1f}s")
-            logger.info(f"Packages in state: {len(self.repo_manager.state_data)}")
-            logger.info(f"Packages to build: {sum(1 for d in self.decisions.values() if d.get('build'))}")
-            logger.info(f"Packages skipped: {sum(1 for d in self.decisions.values() if d.get('skip'))}")
-            logger.info(f"Successfully built: {success_count}")
-            logger.info(f"Failed builds: {fail_count}")
+            logger.info(f"AUR packages: {self.stats['aur_success']} (failed: {self.stats['aur_failed']})")
+            logger.info(f"Local packages: {self.stats['local_success']} (failed: {self.stats['local_failed']})")
+            logger.info(f"Total built: {self.stats['aur_success'] + self.stats['local_success']}")
+            logger.info(f"Failed: {self.stats['aur_failed'] + self.stats['local_failed']}")
             logger.info(f"Dependency injections: {self.stats['dependency_injections']}")
             logger.info(f"Pacman syncs: {self.stats['pacman_syncs']}")
             logger.info(f"Metadata checks: {self.stats['metadata_checks']}")
-            logger.info(f"State initializations: {self.stats['state_initializations']}")
             logger.info("=" * 60)
             
             if self.built_packages:
@@ -746,10 +723,15 @@ class PackageBuilder:
                 for pkg in self.built_packages:
                     logger.info(f"  - {pkg}")
             
+            if self.failed_packages:
+                logger.info("\n❌ Failed packages:")
+                for pkg in self.failed_packages:
+                    logger.info(f"  - {pkg}")
+            
             return 0 if fail_count == 0 else 1
             
         except Exception as e:
-            logger.error(f"\n❌ Holy Grail workflow failed: {e}")
+            logger.error(f"\n❌ Workflow failed: {e}")
             import traceback
             traceback.print_exc()
             self.gpg_handler.cleanup()
