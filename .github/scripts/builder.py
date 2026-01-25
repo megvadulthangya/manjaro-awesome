@@ -11,18 +11,37 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Add script directory to path for imports
-script_dir = Path(__file__).parent
-sys.path.insert(0, str(script_dir))
+# ============================================================================
+# ROBUST PATH INJECTION: Boilerplate-free module discovery
+# ============================================================================
 
-# Try to import our modules
+# Get the absolute path of the current script
+SCRIPT_DIR = Path(__file__).resolve().parent
+# Add script directory to sys.path for imports
+sys.path.insert(0, str(SCRIPT_DIR))
+
+# ENVIRONMENT VALIDATION: Check required module files exist
+REQUIRED_MODULES = ['vps_client.py', 'repo_manager.py']
+missing_modules = []
+
+for module_file in REQUIRED_MODULES:
+    module_path = SCRIPT_DIR / module_file
+    if not module_path.exists():
+        missing_modules.append(module_file)
+
+if missing_modules:
+    print(f"❌ CRITICAL: Missing module files: {', '.join(missing_modules)}")
+    print(f"Expected in: {SCRIPT_DIR}")
+    sys.exit(1)
+
+# EXPLICIT IMPORTS: Import modules now that path is set
 try:
     from vps_client import VPSClient
     from repo_manager import RepoManager
     MODULES_LOADED = True
 except ImportError as e:
     print(f"❌ CRITICAL: Failed to import modules: {e}")
-    print("Please ensure vps_client.py and repo_manager.py are in the same directory")
+    print(f"sys.path: {sys.path}")
     MODULES_LOADED = False
     sys.exit(1)
 
