@@ -1,5 +1,5 @@
 """
-VPS Client Module - Handles SSH, remote operations, and JSON state tracking
+VPS Client Module - State-First Initialization
 """
 
 import os
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class VPSClient:
-    """Handles SSH, remote VPS operations, and JSON state tracking"""
+    """Handles SSH, remote VPS operations, and State-First initialization"""
     
     def __init__(self, config: dict):
         """
@@ -102,21 +102,12 @@ class VPSClient:
     
     def test_ssh_connection(self) -> bool:
         """Test SSH connection to VPS"""
-        logger.info("🔍 Testing SSH connection to VPS...")
-        
         returncode, stdout, stderr = self._run_ssh_command("echo SSH_TEST_SUCCESS")
-        if returncode == 0 and "SSH_TEST_SUCCESS" in stdout:
-            logger.info("✅ SSH connection successful")
-            return True
-        else:
-            logger.warning(f"⚠️ SSH connection failed: {stderr[:100]}")
-            return False
+        return returncode == 0 and "SSH_TEST_SUCCESS" in stdout
     
     def ensure_remote_directory(self) -> bool:
         """Ensure remote directory exists and has correct permissions"""
-        logger.info("🔧 Ensuring remote directory exists...")
-        
-        remote_cmd = f"""
+        remote_cmd = rf"""
         if [ ! -d "{self.remote_dir}" ]; then
             sudo mkdir -p "{self.remote_dir}"
             sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
@@ -128,181 +119,103 @@ class VPSClient:
         """
         
         returncode, stdout, stderr = self._run_ssh_command(remote_cmd, timeout=60)
-        if returncode == 0:
-            if "DIRECTORY_CREATED" in stdout:
-                logger.info("✅ Remote directory created with permissions")
-            else:
-                logger.info("✅ Remote directory exists")
-            return True
-        else:
-            logger.warning(f"⚠️ Could not ensure remote directory: {stderr[:200]}")
-            return False
+        return returncode == 0
     
     def check_remote_file_exists(self, path: str) -> bool:
-        """
-        Check if a file exists on the remote server
-        
-        Args:
-            path: Remote path to check
-            
-        Returns:
-            True if file exists, False otherwise
-        """
-        # Use raw string to avoid escape sequence warnings
+        """Check if a file exists on the remote server"""
         remote_cmd = rf'test -f "{path}" && echo "EXISTS" || echo "MISSING"'
-        
         returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
-        if returncode == 0 and "EXISTS" in stdout:
-            return True
-        return False
+        return returncode == 0 and "EXISTS" in stdout
     
     def get_remote_file_hash(self, path: str) -> Optional[str]:
-        """
-        Get SHA256 hash of a remote file
-        
-        Args:
-            path: Remote file path
-            
-        Returns:
-            SHA256 hash string or None if file doesn't exist or error
-        """
-        # Use raw string for shell command
-        remote_cmd = rf"""
+        """Get SHA256 hash of a remote file"""
+        remote_cmd = rf'''
         if [ -f "{path}" ]; then
             sha256sum "{path}" | cut -d' ' -f1
         else
             echo "FILE_NOT_FOUND"
         fi
-        """
+        '''
         
         returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
         if returncode == 0 and stdout and "FILE_NOT_FOUND" not in stdout:
             return stdout.strip()
         return None
     
-    def list_remote_packages(self) -> List[str]:
+    def get_remote_package_list_for_state(self) -> Dict[str, Dict[str, str]]:
         """
-        List all package files on the remote server in a single SSH command
+        Get ALL remote packages for initial state creation
         
         Returns:
-            List of package filenames (without path)
+            Dictionary mapping package_name -> {version, hash, filename}
         """
-        logger.info("📋 Listing remote packages...")
+        logger.info("📋 Fetching remote package list for state initialization...")
         
-        # Use raw string for find command with proper escaping
-        remote_cmd = rf'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.pkg.tar.gz" -o -name "*.pkg.tar.bz2" \) -printf "%f\\n" 2>/dev/null'
-        
-        returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
-        if returncode == 0 and stdout:
-            packages = [pkg.strip() for pkg in stdout.split('\n') if pkg.strip()]
-            logger.info(f"✅ Found {len(packages)} remote packages")
-            return packages
-        else:
-            if stderr and "No such file or directory" not in stderr:
-                logger.warning(f"⚠️ Error listing packages: {stderr[:200]}")
-            logger.info("ℹ️ No remote packages found or error listing")
-            return []
-    
-    def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
-        """Check if repository exists on VPS via SSH"""
-        logger.info("🔍 Checking if repository exists on VPS...")
-        
-        # First check for package files
-        packages = self.list_remote_packages()
-        has_packages = len(packages) > 0
-        
-        # Check for database files
-        db_exists = False
-        for db_file in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz", 
-                       f"{self.repo_name}.files", f"{self.repo_name}.files.tar.gz"]:
-            if self.check_remote_file_exists(f"{self.remote_dir}/{db_file}"):
-                db_exists = True
-                break
-        
-        repo_exists = has_packages or db_exists
-        
-        if repo_exists:
-            if has_packages:
-                logger.info(f"✅ Repository exists on VPS with {len(packages)} packages")
-            else:
-                logger.info("✅ Repository exists on VPS (database only)")
-        else:
-            logger.info("ℹ️ Repository does not exist on VPS (first run)")
-        
-        return repo_exists, has_packages
-    
-    def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
-        """
-        Upload files to server using rsync WITHOUT --delete flag
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        # Ensure remote directory exists first
-        if not self.ensure_remote_directory():
-            logger.error("❌ Failed to ensure remote directory exists")
-            return False
-        
-        if not files_to_upload:
-            logger.warning("No files to upload")
-            return False
-        
-        # Build RSYNC command WITHOUT --delete
-        # Use raw string and proper quoting
-        files_str = ' '.join([rf"'{f}'" for f in files_to_upload])
-        rsync_cmd = rf'''
-        rsync -avz \
-          --progress \
-          --stats \
-          -e "ssh {self.ssh_options_str}" \
-          {files_str} \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+        remote_cmd = rf'''
+        cd "{self.remote_dir}" 2>/dev/null || exit 1
+        for pkg in *.pkg.tar.*; do
+            if [ -f "$pkg" ]; then
+                # Extract package name and version
+                pkg_base=$(echo "$pkg" | sed 's/\.pkg\.tar\..*$//')
+                # Get hash
+                hash=$(sha256sum "$pkg" 2>/dev/null | cut -d' ' -f1)
+                if [ -n "$hash" ]; then
+                    echo "$pkg_base:$hash:$pkg"
+                fi
+            fi
+        done
         '''
         
-        logger.info(f"📤 Uploading {len(files_to_upload)} files to VPS...")
+        returncode, stdout, stderr = self._run_ssh_command(remote_cmd, timeout=60)
+        if returncode != 0 or not stdout:
+            logger.info("ℹ️ No remote packages found or error fetching")
+            return {}
         
-        try:
-            result = subprocess.run(
-                rsync_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False
-            )
+        packages = {}
+        for line in stdout.split('\n'):
+            if not line.strip():
+                continue
             
-            if result.returncode == 0:
-                logger.info("✅ Files uploaded successfully")
-                return True
-            else:
-                logger.error(f"❌ Upload failed: {result.stderr[:500]}")
-                return False
+            try:
+                pkg_base, pkg_hash, pkg_file = line.split(':', 2)
                 
-        except subprocess.TimeoutExpired:
-            logger.error("❌ Upload timed out")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Upload error: {e}")
-            return False
+                # Parse package name and version from pkg_base
+                # Format: name-version-release-arch
+                parts = pkg_base.split('-')
+                if len(parts) >= 3:
+                    # Find where version starts
+                    for i in range(len(parts) - 2, 0, -1):
+                        potential_name = '-'.join(parts[:i])
+                        remaining = parts[i:]
+                        
+                        if len(remaining) >= 2:
+                            # Handle epoch:version-release
+                            if ':' in remaining[0]:
+                                version = f"{remaining[0]}-{remaining[1]}"
+                            else:
+                                version = f"{remaining[0]}-{remaining[1]}"
+                            
+                            packages[potential_name] = {
+                                "version": version,
+                                "hash": pkg_hash,
+                                "filename": pkg_file,
+                                "last_verified": None
+                            }
+                            break
+            except Exception as e:
+                logger.debug(f"Could not parse package line: {line} - {e}")
+        
+        logger.info(f"✅ Found {len(packages)} remote packages for state")
+        return packages
     
     def download_state_file(self, local_path: Path) -> bool:
-        """
-        Download the JSON state file from VPS
-        
-        Args:
-            local_path: Local path to save the state file
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Download the JSON state file from VPS"""
         remote_state_path = f"{self.remote_dir}/.build_tracking/vps_state.json"
         
-        # Check if state file exists on VPS
         if not self.check_remote_file_exists(remote_state_path):
             logger.info("ℹ️ No state file exists on VPS (first run or reset)")
             return False
         
-        # Download using scp
         scp_cmd = [
             "scp",
             *self.ssh_options,
@@ -331,28 +244,17 @@ class VPSClient:
             return False
     
     def upload_state_file(self, local_path: Path) -> bool:
-        """
-        Upload the JSON state file to VPS
-        
-        Args:
-            local_path: Local path of the state file
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Upload the JSON state file to VPS"""
         if not local_path.exists():
             logger.error("❌ Local state file doesn't exist")
             return False
         
-        # Ensure remote .build_tracking directory exists
-        # Use raw string for command
         ensure_cmd = rf'mkdir -p "{self.remote_dir}/.build_tracking"'
         returncode, stdout, stderr = self._run_ssh_command(ensure_cmd)
         if returncode != 0:
             logger.error(f"❌ Failed to create remote .build_tracking directory: {stderr}")
             return False
         
-        # Upload using scp
         scp_cmd = [
             "scp",
             *self.ssh_options,
@@ -378,4 +280,62 @@ class VPSClient:
                 
         except Exception as e:
             logger.error(f"❌ Upload state file error: {e}")
+            return False
+    
+    def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
+        """Check if repository exists on VPS via SSH"""
+        # Check for package files
+        remote_cmd = rf'find "{self.remote_dir}" -maxdepth 1 -name "*.pkg.tar.*" -type f 2>/dev/null | head -1'
+        returncode, stdout, stderr = self._run_ssh_command(remote_cmd)
+        has_packages = returncode == 0 and bool(stdout.strip())
+        
+        # Check for database files
+        db_exists = False
+        for db_file in [f"{self.repo_name}.db", f"{self.repo_name}.db.tar.gz"]:
+            if self.check_remote_file_exists(f"{self.remote_dir}/{db_file}"):
+                db_exists = True
+                break
+        
+        repo_exists = has_packages or db_exists
+        return repo_exists, has_packages
+    
+    def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
+        """Upload files to server using rsync WITHOUT --delete flag"""
+        if not self.ensure_remote_directory():
+            logger.error("❌ Failed to ensure remote directory exists")
+            return False
+        
+        if not files_to_upload:
+            logger.warning("No files to upload")
+            return False
+        
+        files_str = ' '.join([rf"'{f}'" for f in files_to_upload])
+        rsync_cmd = rf'''
+        rsync -avz \
+          --progress \
+          --stats \
+          -e "ssh {self.ssh_options_str}" \
+          {files_str} \
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+        '''
+        
+        try:
+            result = subprocess.run(
+                rsync_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("✅ Files uploaded successfully")
+                return True
+            else:
+                logger.error(f"❌ Upload failed: {result.stderr[:500]}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Upload error: {e}")
             return False
