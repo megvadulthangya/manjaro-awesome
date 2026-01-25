@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "created": "2026-01-24T20:02:31.799308",
-  "last_updated": "2026-01-24T20:51:09.796132",
+  "last_updated": "2026-01-25T05:38:42.637134",
   "packages": {
     "gghelper": {
       "type": "local",
@@ -11,7 +11,8 @@
       "last_verified": "2026-01-24T20:45:24.478474",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:45:24.478481"
+      "last_built": "2026-01-24T20:45:24.478481",
+      "skipped": true
     },
     "gtk2": {
       "type": "local",
@@ -31,7 +32,8 @@
       "last_verified": "2026-01-24T20:45:39.262046",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:45:39.262054"
+      "last_built": "2026-01-24T20:45:39.262054",
+      "skipped": true
     },
     "lain-git": {
       "type": "local",
@@ -51,7 +53,8 @@
       "last_verified": "2026-01-24T20:45:58.051528",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:45:58.051538"
+      "last_built": "2026-01-24T20:45:58.051538",
+      "skipped": true
     },
     "awesome-git": {
       "type": "local",
@@ -81,7 +84,8 @@
       "last_verified": "2026-01-24T20:47:11.723011",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:47:11.723019"
+      "last_built": "2026-01-24T20:47:11.723019",
+      "skipped": true
     },
     "nordic-backgrounds": {
       "type": "local",
@@ -101,7 +105,8 @@
       "last_verified": "2026-01-24T20:47:41.278587",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:47:41.278597"
+      "last_built": "2026-01-24T20:47:41.278597",
+      "skipped": true
     },
     "i3lock-fancy-git": {
       "type": "local",
@@ -141,7 +146,8 @@
       "last_verified": "2026-01-24T20:51:09.796021",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:51:09.796030"
+      "last_built": "2026-01-24T20:51:09.796030",
+      "skipped": true
     },
     "libinput-gestures": {
       "type": "aur",
@@ -151,7 +157,8 @@
       "last_verified": "2026-01-24T20:03:48.882994",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:03:48.883002"
+      "last_built": "2026-01-24T20:03:48.883002",
+      "skipped": true
     },
     "gtkd": {
       "type": "aur",
@@ -161,7 +168,8 @@
       "last_verified": "2026-01-24T20:13:33.572361",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:13:33.572372"
+      "last_built": "2026-01-24T20:13:33.572372",
+      "skipped": true
     },
     "urxvt-resize-font-git": {
       "type": "aur",
@@ -171,7 +179,8 @@
       "last_verified": "2026-01-24T20:13:45.793257",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:13:45.793267"
+      "last_built": "2026-01-24T20:13:45.793267",
+      "skipped": true
     },
     "i3lock-color": {
       "type": "aur",
@@ -181,7 +190,8 @@
       "last_verified": "2026-01-24T20:14:03.013364",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:14:03.013372"
+      "last_built": "2026-01-24T20:14:03.013372",
+      "skipped": true
     },
     "raw-thumbnailer": {
       "type": "aur",
@@ -191,7 +201,8 @@
       "last_verified": "2026-01-24T20:15:32.503531",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:15:32.503540"
+      "last_built": "2026-01-24T20:15:32.503540",
+      "skipped": true
     },
     "gsconnect": {
       "type": "aur",
@@ -201,7 +212,8 @@
       "last_verified": "2026-01-24T20:15:52.849384",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:15:52.849394"
+      "last_built": "2026-01-24T20:15:52.849394",
+      "skipped": true
     },
     "betterlockscreen": {
       "type": "aur",
@@ -211,7 +223,8 @@
       "last_verified": "2026-01-24T20:16:03.545825",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:16:03.545832"
+      "last_built": "2026-01-24T20:16:03.545832",
+      "skipped": true
     },
     "nordic-theme": {
       "type": "aur",
@@ -221,7 +234,8 @@
       "last_verified": "2026-01-24T20:16:57.695221",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:16:57.695225"
+      "last_built": "2026-01-24T20:16:57.695225",
+      "skipped": true
     },
     "nordic-darker-theme": {
       "type": "aur",
@@ -231,7 +245,8 @@
       "last_verified": "2026-01-24T20:17:08.390885",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:17:08.390893"
+      "last_built": "2026-01-24T20:17:08.390893",
+      "skipped": true
     },
     "geany-nord-theme": {
       "type": "aur",
@@ -241,7 +256,8 @@
       "last_verified": "2026-01-24T20:17:14.814577",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:17:14.814585"
+      "last_built": "2026-01-24T20:17:14.814585",
+      "skipped": true
     },
     "nordzy-icon-theme": {
       "type": "aur",
@@ -251,7 +267,8 @@
       "last_verified": "2026-01-24T20:24:51.040308",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:24:51.040316"
+      "last_built": "2026-01-24T20:24:51.040316",
+      "skipped": true
     },
     "oh-my-posh-bin": {
       "type": "aur",
@@ -261,7 +278,8 @@
       "last_verified": "2026-01-24T20:25:06.860794",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:25:06.860803"
+      "last_built": "2026-01-24T20:25:06.860803",
+      "skipped": true
     },
     "fish-done": {
       "type": "aur",
@@ -271,7 +289,8 @@
       "last_verified": "2026-01-24T20:25:12.778634",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:25:12.778641"
+      "last_built": "2026-01-24T20:25:12.778641",
+      "skipped": true
     },
     "find-the-command": {
       "type": "aur",
@@ -281,7 +300,8 @@
       "last_verified": "2026-01-24T20:25:17.656087",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:25:17.656094"
+      "last_built": "2026-01-24T20:25:17.656094",
+      "skipped": true
     },
     "p7zip-gui": {
       "type": "aur",
@@ -291,7 +311,8 @@
       "last_verified": "2026-01-24T20:29:46.521354",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:29:46.521363"
+      "last_built": "2026-01-24T20:29:46.521363",
+      "skipped": true
     },
     "qownnotes": {
       "type": "aur",
@@ -301,7 +322,8 @@
       "last_verified": "2026-01-24T20:39:54.392133",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:39:54.392144"
+      "last_built": "2026-01-24T20:39:54.392144",
+      "skipped": true
     },
     "xorg-font-utils": {
       "type": "aur",
@@ -311,7 +333,8 @@
       "last_verified": "2026-01-24T20:39:59.518098",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:39:59.518106"
+      "last_built": "2026-01-24T20:39:59.518106",
+      "skipped": true
     },
     "xnviewmp": {
       "type": "aur",
@@ -321,7 +344,8 @@
       "last_verified": "2026-01-24T20:41:15.684523",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:41:15.684532"
+      "last_built": "2026-01-24T20:41:15.684532",
+      "skipped": true
     },
     "simplescreenrecorder": {
       "type": "aur",
@@ -331,7 +355,8 @@
       "last_verified": "2026-01-24T20:44:01.365191",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:44:01.365199"
+      "last_built": "2026-01-24T20:44:01.365199",
+      "skipped": true
     },
     "gtkhash-thunar": {
       "type": "aur",
@@ -341,7 +366,8 @@
       "last_verified": "2026-01-24T20:44:17.049233",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:44:17.049241"
+      "last_built": "2026-01-24T20:44:17.049241",
+      "skipped": true
     },
     "a4tech-bloody-driver-git": {
       "type": "aur",
@@ -351,7 +377,8 @@
       "last_verified": "2026-01-24T20:44:31.340406",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:44:31.340539"
+      "last_built": "2026-01-24T20:44:31.340539",
+      "skipped": true
     },
     "nordic-bluish-accent-theme": {
       "type": "aur",
@@ -361,7 +388,8 @@
       "last_verified": "2026-01-24T20:44:42.276608",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:44:42.276617"
+      "last_built": "2026-01-24T20:44:42.276617",
+      "skipped": true
     },
     "nordic-bluish-accent-standard-buttons-theme": {
       "type": "aur",
@@ -371,7 +399,8 @@
       "last_verified": "2026-01-24T20:44:53.370369",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:44:53.370378"
+      "last_built": "2026-01-24T20:44:53.370378",
+      "skipped": true
     },
     "nordic-standard-buttons-theme": {
       "type": "aur",
@@ -381,7 +410,8 @@
       "last_verified": "2026-01-24T20:45:06.071183",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:45:06.071192"
+      "last_built": "2026-01-24T20:45:06.071192",
+      "skipped": true
     },
     "nordic-darker-standard-buttons-theme": {
       "type": "aur",
@@ -391,7 +421,18 @@
       "last_verified": "2026-01-24T20:45:16.630171",
       "adopted": false,
       "needs_rebuild": false,
-      "last_built": "2026-01-24T20:45:16.630179"
+      "last_built": "2026-01-24T20:45:16.630179",
+      "skipped": true
+    },
+    "qt5-styleplugins": {
+      "type": "aur",
+      "current_version": "5.0.0.20170311-35",
+      "current_hash": "bb71c80e021d4acb4e60ac0caa3a2ec25f3d14a7c69522446f32e898010fb980",
+      "remote_file": "qt5-styleplugins-5.0.0.20170311-35-x86_64.pkg.tar.zst",
+      "last_verified": "2026-01-25T05:35:50.230915",
+      "adopted": false,
+      "needs_rebuild": false,
+      "last_built": "2026-01-25T05:35:50.230923"
     }
   },
   "repository": {
