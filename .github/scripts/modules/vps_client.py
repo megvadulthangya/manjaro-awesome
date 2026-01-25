@@ -1,98 +1,66 @@
 #!/usr/bin/env python3
 """
-VPS Client Module - Handles SSH, remote execution, state syncing with Zero-Download Policy
-STRICT PATH COMPLIANCE: Uses /tmp/{repo_name}_build_temp/.build_tracking for state files
+VPS Client Module - Handles SSH, Rsync, and remote operations
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Add scripts directory to path for imports
+SCRIPT_DIR = Path(__file__).parent.parent.absolute()
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 import subprocess
-import json
 import shutil
+import time
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple, Optional
+
+# Try to import config from the scripts directory
+try:
+    import config
+    HAS_CONFIG = True
+except ImportError:
+    HAS_CONFIG = False
 
 logger = logging.getLogger(__name__)
 
 
 class VPSClient:
-    """Handles SSH, Rsync, and remote VPS operations with Zero-Download Policy"""
+    """Handles SSH, Rsync, and remote VPS operations"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config_dict: dict):
         """
         Initialize VPSClient with configuration
         
         Args:
-            config: Dictionary containing:
+            config_dict: Dictionary containing:
                 - vps_user: VPS username
                 - vps_host: VPS hostname
-                - ssh_key: SSH private key content
                 - remote_dir: Remote directory on VPS
                 - ssh_options: SSH options list
-                - state_tracking_dir: Path to state tracking directory (MANDATORY)
+                - repo_name: Repository name
+                - ssh_key: SSH private key content
         """
-        self.vps_user = config['vps_user']
-        self.vps_host = config['vps_host']
-        self.ssh_key = config.get('ssh_key')
-        self.remote_dir = config['remote_dir']
-        self.ssh_options = config.get('ssh_options', [])
-        self.state_tracking_dir = Path(config['state_tracking_dir'])
+        self.vps_user = config_dict['vps_user']
+        self.vps_host = config_dict['vps_host']
+        self.remote_dir = config_dict['remote_dir']
+        self.ssh_options = config_dict.get('ssh_options', [])
+        self.repo_name = config_dict.get('repo_name', '')
+        self.ssh_key = config_dict.get('ssh_key')
         
-        # State file location (STRICT REQUIREMENT)
-        self.state_file = self.state_tracking_dir / "vps_state.json"
-        
-        # Ensure state tracking directory exists
-        self.state_tracking_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Setup SSH
+        # Setup SSH configuration
         self.setup_ssh_config()
     
-    def extract_repo_name_from_url(self, ssh_repo_url: str) -> str:
-        """
-        Parse config.SSH_REPO_URL to extract repo name
-        
-        Args:
-            ssh_repo_url: Git SSH URL (e.g., git@github.com:user/my-repo.git)
-        
-        Returns:
-            Repository name (e.g., my-repo)
-        """
-        # Remove trailing slashes and .git suffix
-        url = ssh_repo_url.rstrip('/')
-        if url.endswith('.git'):
-            url = url[:-4]
-        
-        # Extract repo name after last slash
-        repo_name = url.split('/')[-1]
-        
-        # Handle git@github.com:user/repo format
-        if ':' in repo_name:
-            repo_name = repo_name.split(':')[-1]
-        
-        logger.info(f"Extracted repo name '{repo_name}' from URL '{ssh_repo_url}'")
-        return repo_name
-    
     def setup_ssh_config(self):
-        """Setup SSH config file for builder user"""
+        """Setup SSH config file for builder user - container invariant"""
         ssh_dir = Path("/home/builder/.ssh")
         ssh_dir.mkdir(exist_ok=True, mode=0o700)
         
-        # Write SSH key
-        if self.ssh_key:
-            key_path = ssh_dir / "id_ed25519"
-            with open(key_path, "w") as f:
-                f.write(self.ssh_key)
-            key_path.chmod(0o600)
-            
-            # Set ownership
-            try:
-                shutil.chown(ssh_dir, "builder", "builder")
-                for item in ssh_dir.iterdir():
-                    shutil.chown(item, "builder", "builder")
-            except Exception as e:
-                logger.warning(f"Could not change SSH dir ownership: {e}")
-        
-        # Write SSH config
+        # Write SSH config file using environment variables
         config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
@@ -106,114 +74,102 @@ class VPSClient:
         config_file = ssh_dir / "config"
         with open(config_file, "w") as f:
             f.write(config_content)
+        
         config_file.chmod(0o600)
+        
+        # Ensure SSH key exists and has correct permissions
+        if self.ssh_key:
+            ssh_key_path = ssh_dir / "id_ed25519"
+            if not ssh_key_path.exists():
+                with open(ssh_key_path, "w") as f:
+                    f.write(self.ssh_key)
+                ssh_key_path.chmod(0o600)
+        
+        # Set ownership to builder
+        try:
+            shutil.chown(ssh_dir, "builder", "builder")
+            for item in ssh_dir.iterdir():
+                shutil.chown(item, "builder", "builder")
+        except Exception as e:
+            logger.warning(f"Could not change SSH dir ownership: {e}")
     
     def test_ssh_connection(self) -> bool:
         """Test SSH connection to VPS"""
+        print("\n🔍 Testing SSH connection to VPS...")
+        
         ssh_test_cmd = [
-            "ssh", *self.ssh_options,
+            "ssh",
             f"{self.vps_user}@{self.vps_host}",
             "echo SSH_TEST_SUCCESS"
         ]
         
-        try:
-            result = subprocess.run(
-                ssh_test_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10
-            )
-            return result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout
-        except Exception as e:
-            logger.error(f"SSH connection test failed: {e}")
+        result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, check=False)
+        if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
+            print("✅ SSH connection successful")
+            return True
+        else:
+            print(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
             return False
     
     def ensure_remote_directory(self):
-        """Ensure remote directory exists with correct permissions"""
+        """Ensure remote directory exists and has correct permissions"""
+        print("\n🔧 Ensuring remote directory exists...")
+        
         remote_cmd = f"""
+        # Check if directory exists
         if [ ! -d "{self.remote_dir}" ]; then
+            echo "Creating directory {self.remote_dir}"
             sudo mkdir -p "{self.remote_dir}"
             sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
             sudo chmod -R 755 "{self.remote_dir}"
+            echo "✅ Directory created and permissions set"
         else
+            echo "✅ Directory exists"
+            # Ensure correct permissions
             sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
             sudo chmod -R 755 "{self.remote_dir}"
+            echo "✅ Permissions verified"
         fi
         """
         
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
         try:
-            subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
-            logger.info("✅ Remote directory verified")
-        except Exception as e:
-            logger.error(f"❌ Could not ensure remote directory: {e}")
-    
-    def download_state_file(self) -> Optional[Dict]:
-        """
-        ZERO-DOWNLOAD POLICY: Step 1 - Try to download vps_state.json
-        
-        Returns:
-            State dict if downloaded, None if file doesn't exist on VPS
-        """
-        logger.info("🔍 Step 1: Trying to download vps_state.json from VPS...")
-        
-        remote_state_path = f"{self.remote_dir}/vps_state.json"
-        
-        # Check if file exists on VPS
-        check_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", 
-                    f"test -f {remote_state_path} && echo 'EXISTS' || echo 'NOT_EXISTS'"]
-        
-        try:
             result = subprocess.run(
-                check_cmd,
+                ssh_cmd,
                 capture_output=True,
                 text=True,
-                check=False,
-                timeout=10
+                check=False
             )
             
-            if result.returncode == 0 and "EXISTS" in result.stdout:
-                # File exists, download it
-                logger.info("✅ vps_state.json exists on VPS, downloading...")
-                scp_cmd = [
-                    "scp", *self.ssh_options,
-                    f"{self.vps_user}@{self.vps_host}:{remote_state_path}",
-                    str(self.state_file)
-                ]
-                
-                subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
-                
-                if self.state_file.exists():
-                    with open(self.state_file, 'r') as f:
-                        state = json.load(f)
-                    logger.info(f"✅ Downloaded state file with {len(state.get('packages', []))} packages")
-                    return state
-                else:
-                    logger.error("❌ Downloaded file not found locally")
-                    return None
+            if result.returncode == 0:
+                logger.info("✅ Remote directory verified")
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"REMOTE DIR: {line}")
             else:
-                # ZERO-DOWNLOAD POLICY: File doesn't exist, DO NOT download .pkg files
-                logger.info("ℹ️ vps_state.json not found on VPS (first run or reset)")
-                return None
+                logger.warning(f"⚠️ Could not ensure remote directory: {result.stderr[:200]}")
                 
         except Exception as e:
-            logger.error(f"❌ Error checking/downloading state file: {e}")
-            return None
+            logger.warning(f"Could not ensure remote directory: {e}")
     
-    def generate_new_state_file(self) -> Dict:
+    def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
+        """Check if repository exists on VPS via SSH"""
+        print("\n🔍 Checking if repository exists on VPS...")
+        
+        remote_cmd = f"""
+        # Check for package files
+        if find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | head -1 >/dev/null; then
+            echo "REPO_EXISTS_WITH_PACKAGES"
+        # Check for database files
+        elif [ -f "{self.remote_dir}/{self.repo_name}.db.tar.gz" ] || [ -f "{self.remote_dir}/{self.repo_name}.db" ]; then
+            echo "REPO_EXISTS_WITH_DB"
+        else
+            echo "REPO_NOT_FOUND"
+        fi
         """
-        ZERO-DOWNLOAD POLICY: Step 2 - Generate new state file without downloading .pkg files
         
-        Executes remote SSH command to list packages and creates state file locally
-        """
-        logger.info("🔧 Step 2: Generating new state file from remote package list...")
-        
-        # Execute remote find command to get package list (NO DOWNLOAD)
-        find_cmd = f'find "{self.remote_dir}" -maxdepth 1 -type f -name "*.pkg.tar.zst" -exec basename {{}} \\; 2>/dev/null'
-        
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", find_cmd]
+        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
         try:
             result = subprocess.run(
@@ -224,182 +180,301 @@ class VPSClient:
                 timeout=30
             )
             
-            packages = []
             if result.returncode == 0:
-                package_files = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-                logger.info(f"Found {len(package_files)} package files on VPS")
+                if "REPO_EXISTS_WITH_PACKAGES" in result.stdout:
+                    logger.info("✅ Repository exists on VPS (has package files)")
+                    return True, True
+                elif "REPO_EXISTS_WITH_DB" in result.stdout:
+                    logger.info("✅ Repository exists on VPS (has database)")
+                    return True, False
+                else:
+                    logger.info("ℹ️ Repository does not exist on VPS (first run)")
+                    return False, False
+            else:
+                logger.warning(f"⚠️ Could not check repository existence: {result.stderr[:200]}")
+                return False, False
                 
-                # Create state data
-                for pkg_file in package_files:
-                    # Extract package name and version from filename
-                    # Format: package-name-version-release-arch.pkg.tar.zst
-                    parts = pkg_file.replace('.pkg.tar.zst', '').split('-')
-                    if len(parts) >= 4:
-                        # Find where version starts (package name can have hyphens)
-                        for i in range(len(parts) - 3, 0, -1):
-                            potential_name = '-'.join(parts[:i])
-                            version_part = parts[i]
-                            release_part = parts[i+1]
-                            
-                            # Check if this looks like a version
-                            if any(c.isdigit() for c in version_part) and release_part.isdigit():
-                                packages.append({
-                                    "filename": pkg_file,
-                                    "name": potential_name,
-                                    "version": f"{version_part}-{release_part}",
-                                    "remote_path": f"{self.remote_dir}/{pkg_file}"
-                                })
-                                break
-            
-            state = {
-                "generated_at": str(subprocess.check_output(["date", "-Iseconds"]).decode().strip()),
-                "vps_host": self.vps_host,
-                "remote_dir": self.remote_dir,
-                "packages": packages
-            }
-            
-            # Save locally to State Tracking Directory (STRICT REQUIREMENT)
-            with open(self.state_file, 'w') as f:
-                json.dump(state, f, indent=2)
-            
-            logger.info(f"✅ Created new state file with {len(packages)} packages")
-            return state
-            
+        except subprocess.TimeoutExpired:
+            logger.error("❌ SSH timeout checking repository existence")
+            return False, False
         except Exception as e:
-            logger.error(f"❌ Error generating state file: {e}")
-            # Return empty state on error
-            return {"generated_at": "error", "packages": []}
+            logger.error(f"❌ Error checking repository: {e}")
+            return False, False
     
-    def upload_state_file(self) -> bool:
-        """Upload the locally created state file to VPS"""
-        if not self.state_file.exists():
-            logger.error("❌ No local state file to upload")
-            return False
+    def list_remote_packages(self) -> List[str]:
+        """List all *.pkg.tar.zst files in the remote repository directory"""
+        print("\n" + "=" * 60)
+        print("STEP 1: Listing remote repository packages (SSH find)")
+        print("=" * 60)
         
-        scp_cmd = [
-            "scp", *self.ssh_options,
-            str(self.state_file),
-            f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/vps_state.json"
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found at {ssh_key_path}")
+            return []
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null || echo 'NO_FILES'"
         ]
         
-        try:
-            result = subprocess.run(
-                scp_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30
-            )
-            
-            if result.returncode == 0:
-                logger.info("✅ Uploaded vps_state.json to VPS")
-                return True
-            else:
-                logger.error(f"❌ Failed to upload state file: {result.stderr}")
-                return False
-        except Exception as e:
-            logger.error(f"❌ Error uploading state file: {e}")
-            return False
-    
-    def get_vps_state(self) -> Dict:
-        """
-        ZERO-DOWNLOAD POLICY: Complete workflow for getting VPS state
-        
-        Returns:
-            State dictionary (either downloaded or newly generated)
-        """
-        # Step 1: Try to download existing state
-        state = self.download_state_file()
-        
-        if state is not None:
-            return state
-        
-        # Step 2: Generate new state from remote package list (NO .pkg download)
-        state = self.generate_new_state_file()
-        
-        # Step 3: Upload new state to establish baseline
-        if self.upload_state_file():
-            logger.info("✅ Baseline state established on VPS")
-        else:
-            logger.warning("⚠️ Could not upload state file to VPS")
-        
-        return state
-    
-    def execute_remote_command(self, command: str, timeout: int = 60) -> Tuple[bool, str]:
-        """Execute a command on the remote VPS via SSH"""
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", command]
+        logger.info(f"RUNNING SSH COMMAND: {' '.join(ssh_cmd)}")
         
         try:
             result = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
                 text=True,
-                check=False,
-                timeout=timeout
+                check=False
             )
             
-            success = result.returncode == 0
-            output = result.stdout if success else result.stderr
+            logger.info(f"EXIT CODE: {result.returncode}")
+            if result.stdout:
+                logger.info(f"STDOUT (first 1000 chars): {result.stdout[:1000]}")
+            if result.stderr:
+                logger.info(f"STDERR: {result.stderr[:500]}")
             
-            return success, output
-        except subprocess.TimeoutExpired:
-            return False, "Command timed out"
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                file_count = len(files)
+                logger.info(f"✅ SSH find returned {file_count} package files")
+                if file_count > 0:
+                    print(f"Sample files: {files[:5]}")
+                else:
+                    logger.info("ℹ️ No package files found on remote server")
+                return files
+            else:
+                logger.warning(f"⚠️ SSH find returned error: {result.stderr[:200]}")
+                return []
+                
         except Exception as e:
-            return False, str(e)
+            logger.error(f"SSH command failed: {e}")
+            return []
     
-    def upload_files(self, files: List[str], local_base_dir: Path) -> bool:
-        """Upload files to VPS using rsync (without --delete)"""
-        if not files:
-            logger.warning("No files to upload")
-            return False
+    def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path) -> bool:
+        """
+        Download ALL remote package files to local directory
         
-        # Ensure remote directory exists
+        Returns:
+            True if successful, False otherwise
+        """
+        print("\n" + "=" * 60)
+        print("MANDATORY STEP: Mirroring remote packages locally")
+        print("=" * 60)
+        
+        # Ensure remote directory exists first
         self.ensure_remote_directory()
         
-        # Build file list for rsync
-        file_args = []
-        for file_path in files:
-            file_path_obj = Path(file_path)
-            if file_path_obj.is_absolute():
-                file_args.append(str(file_path_obj))
-            else:
-                file_args.append(str(local_base_dir / file_path))
+        # Create a temporary local repository directory
+        if mirror_temp_dir.exists():
+            shutil.rmtree(mirror_temp_dir, ignore_errors=True)
+        mirror_temp_dir.mkdir(parents=True, exist_ok=True)
         
-        # Rsync command WITHOUT --delete
-        rsync_cmd = [
-            "rsync", "-avz",
-            "--progress",
-            *file_args,
-            f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
-        ]
+        logger.info(f"Created local mirror directory: {mirror_temp_dir}")
         
-        logger.info(f"Uploading {len(files)} files to VPS...")
+        # Use rsync to download ALL package files from server
+        print("📥 Downloading ALL remote package files to local mirror...")
+        
+        rsync_cmd = f"""
+        rsync -avz \
+          --progress \
+          --stats \
+          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/*.pkg.tar.*' \
+          '{mirror_temp_dir}/' 2>/dev/null || true
+        """
+        
+        logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
+        logger.info(rsync_cmd.strip())
+        
+        start_time = time.time()
         
         try:
             result = subprocess.run(
                 rsync_cmd,
+                shell=True,
                 capture_output=True,
                 text=True,
-                check=False,
-                timeout=300
+                check=False
             )
             
-            if result.returncode == 0:
-                logger.info("✅ Files uploaded successfully")
+            end_time = time.time()
+            duration = int(end_time - start_time)
+            
+            logger.info(f"EXIT CODE: {result.returncode}")
+            if result.stdout:
+                for line in result.stdout.splitlines()[-20:]:
+                    if line.strip():
+                        logger.info(f"RSYNC MIRROR: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip() and "No such file or directory" not in line:
+                        logger.error(f"RSYNC MIRROR ERR: {line}")
+            
+            # List downloaded files
+            downloaded_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
+            file_count = len(downloaded_files)
+            
+            if file_count > 0:
+                logger.info(f"✅ Successfully mirrored {file_count} package files ({duration} seconds)")
+                logger.info(f"Sample mirrored files: {[f.name for f in downloaded_files[:5]]}")
+                
+                # Verify file integrity and copy to output directory
+                valid_files = []
+                for pkg_file in downloaded_files:
+                    if pkg_file.stat().st_size > 0:
+                        valid_files.append(pkg_file)
+                    else:
+                        logger.warning(f"⚠️ Empty file: {pkg_file.name}")
+                
+                logger.info(f"Valid mirrored packages: {len(valid_files)}/{file_count}")
+                
+                # Copy mirrored packages to output directory
+                print(f"📋 Copying {len(valid_files)} mirrored packages to output directory...")
+                copied_count = 0
+                for pkg_file in valid_files:
+                    dest = output_dir / pkg_file.name
+                    if not dest.exists():  # Don't overwrite newly built packages
+                        shutil.copy2(pkg_file, dest)
+                        copied_count += 1
+                
+                logger.info(f"Copied {copied_count} mirrored packages to output directory")
+                
+                # Clean up mirror directory
+                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
+                
                 return True
             else:
-                logger.error(f"❌ Rsync failed: {result.stderr[:500]}")
-                return False
+                logger.info("ℹ️ No package files were mirrored (repository is empty or permission issue)")
+                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
+                return True
+                
         except Exception as e:
-            logger.error(f"❌ Upload failed: {e}")
+            logger.error(f"RSYNC mirror execution error: {e}")
+            if mirror_temp_dir.exists():
+                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
             return False
     
-    def list_remote_packages(self) -> List[str]:
-        """List package files on remote VPS"""
-        find_cmd = f'find "{self.remote_dir}" -maxdepth 1 -type f \\( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \\) -exec basename {{}} \\; 2>/dev/null'
+    def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
+        """
+        Upload files to server using RSYNC WITHOUT --delete flag
         
-        success, output = self.execute_remote_command(find_cmd)
+        Returns:
+            True if successful, False otherwise
+        """
+        # Ensure remote directory exists first
+        self.ensure_remote_directory()
         
-        if success and output:
-            return [line.strip() for line in output.split('\n') if line.strip()]
-        return []
+        if not files_to_upload:
+            logger.warning("No files to upload")
+            return False
+        
+        # Log files to upload (safe - only filenames, not paths)
+        logger.info(f"Files to upload ({len(files_to_upload)}):")
+        for f in files_to_upload:
+            try:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                filename = os.path.basename(f)
+                file_type = "PACKAGE"
+                if self.repo_name in filename:
+                    file_type = "DATABASE" if not f.endswith('.sig') else "SIGNATURE"
+                logger.info(f"  - {filename} ({size_mb:.1f}MB) [{file_type}]")
+            except Exception:
+                logger.info(f"  - {os.path.basename(f)} [UNKNOWN SIZE]")
+        
+        # Build RSYNC command WITHOUT --delete
+        rsync_cmd = f"""
+        rsync -avz \
+          --progress \
+          --stats \
+          {" ".join(f"'{f}'" for f in files_to_upload)} \
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+        """
+        
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete:")
+        logger.info(rsync_cmd.strip())
+        
+        # FIRST ATTEMPT
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(
+                rsync_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            end_time = time.time()
+            duration = int(end_time - start_time)
+            
+            logger.info(f"EXIT CODE (attempt 1): {result.returncode}")
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"RSYNC: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip() and "No such file or directory" not in line:
+                        logger.error(f"RSYNC ERR: {line}")
+            
+            if result.returncode == 0:
+                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
+                return True
+            else:
+                logger.warning(f"⚠️ First RSYNC attempt failed (code: {result.returncode})")
+                
+        except Exception as e:
+            logger.error(f"RSYNC execution error: {e}")
+        
+        # SECOND ATTEMPT (with different SSH options)
+        logger.info("⚠️ Retrying with different SSH options...")
+        time.sleep(5)
+        
+        rsync_cmd_retry = f"""
+        rsync -avz \
+          --progress \
+          --stats \
+          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
+          {" ".join(f"'{f}'" for f in files_to_upload)} \
+          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+        """
+        
+        logger.info(f"RUNNING RSYNC RETRY COMMAND WITHOUT --delete:")
+        logger.info(rsync_cmd_retry.strip())
+        
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(
+                rsync_cmd_retry,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            end_time = time.time()
+            duration = int(end_time - start_time)
+            
+            logger.info(f"EXIT CODE (attempt 2): {result.returncode}")
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    if line.strip():
+                        logger.info(f"RSYNC RETRY: {line}")
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    if line.strip() and "No such file or directory" not in line:
+                        logger.error(f"RSYNC RETRY ERR: {line}")
+            
+            if result.returncode == 0:
+                logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
+                return True
+            else:
+                logger.error(f"❌ RSYNC upload failed on both attempts!")
+                return False
+                
+        except Exception as e:
+            logger.error(f"RSYNC retry execution error: {e}")
+            return False
