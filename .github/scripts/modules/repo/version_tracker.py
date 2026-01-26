@@ -1,0 +1,258 @@
+"""
+Version tracking for Zero-Residue cleanup policy
+Tracks target versions and remote inventory for precise package management
+"""
+
+import re
+import logging
+from typing import Dict, List, Optional, Tuple, Set
+from pathlib import Path
+
+
+class VersionTracker:
+    """
+    Tracks package versions for Zero-Residue cleanup
+    Maintains source of truth for what versions should exist on server
+    """
+    
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initialize VersionTracker
+        
+        Args:
+            logger: Optional logger instance
+        """
+        self.logger = logger or logging.getLogger(__name__)
+        
+        # Target versions: {pkg_name: target_version} - versions we want to keep
+        self._target_versions: Dict[str, str] = {}
+        
+        # Skipped packages: {pkg_name: remote_version} - packages skipped as up-to-date
+        self._skipped_packages: Dict[str, str] = {}
+        
+        # Built packages: {pkg_name: built_version} - packages we just built
+        self._built_packages: Dict[str, str] = {}
+        
+        # Remote inventory cache: {filename: full_path} from VPS
+        self._remote_inventory: Dict[str, str] = {}
+    
+    def register_target_version(self, pkg_name: str, target_version: str) -> None:
+        """
+        Register the target version for a package
+        
+        Args:
+            pkg_name: Package name
+            target_version: The version we want to keep (either built or latest from server)
+        """
+        self._target_versions[pkg_name] = target_version
+        self.logger.info(f"📝 Registered target version for {pkg_name}: {target_version}")
+    
+    def register_skipped_package(self, pkg_name: str, remote_version: str) -> None:
+        """
+        Register a package that was skipped because it's up-to-date
+        
+        Args:
+            pkg_name: Package name
+            remote_version: The remote version that should be kept (not deleted)
+        """
+        # Store in skipped registry
+        self._skipped_packages[pkg_name] = remote_version
+        
+        # 🚨 CRITICAL: Explicitly set target version to remote version
+        self._target_versions[pkg_name] = remote_version
+        
+        self.logger.info(f"📝 Registered SKIPPED package: {pkg_name} (remote: {remote_version}, target: {remote_version})")
+    
+    def register_built_package(self, pkg_name: str, built_version: str) -> None:
+        """
+        Register a package that was just built
+        
+        Args:
+            pkg_name: Package name
+            built_version: The version that was just built
+        """
+        self._built_packages[pkg_name] = built_version
+        self._target_versions[pkg_name] = built_version
+        self.logger.info(f"📝 Registered BUILT package: {pkg_name} ({built_version})")
+    
+    def get_target_version(self, pkg_name: str) -> Optional[str]:
+        """
+        Get target version for a package
+        
+        Args:
+            pkg_name: Package name
+        
+        Returns:
+            Target version or None if not registered
+        """
+        return self._target_versions.get(pkg_name)
+    
+    def has_target_version(self, pkg_name: str) -> bool:
+        """
+        Check if a package has a registered target version
+        
+        Args:
+            pkg_name: Package name
+        
+        Returns:
+            True if target version exists
+        """
+        return pkg_name in self._target_versions
+    
+    def is_skipped(self, pkg_name: str) -> bool:
+        """
+        Check if a package was skipped
+        
+        Args:
+            pkg_name: Package name
+        
+        Returns:
+            True if package was skipped
+        """
+        return pkg_name in self._skipped_packages
+    
+    def is_built(self, pkg_name: str) -> bool:
+        """
+        Check if a package was built in this run
+        
+        Args:
+            pkg_name: Package name
+        
+        Returns:
+            True if package was built
+        """
+        return pkg_name in self._built_packages
+    
+    def set_remote_inventory(self, remote_files: Dict[str, str]) -> None:
+        """
+        Set remote inventory from VPS
+        
+        Args:
+            remote_files: Dictionary of {filename: full_path} from VPS
+        """
+        self._remote_inventory = remote_files
+        self.logger.info(f"📋 Remote inventory updated: {len(remote_files)} files")
+    
+    def get_remote_inventory(self) -> Dict[str, str]:
+        """
+        Get current remote inventory
+        
+        Returns:
+            Dictionary of {filename: full_path}
+        """
+        return self._remote_inventory.copy()
+    
+    def get_files_to_keep(self) -> Set[str]:
+        """
+        Determine which files should be kept based on target versions
+        
+        Returns:
+            Set of filenames that match target versions
+        """
+        files_to_keep = set()
+        
+        for filename in self._remote_inventory:
+            # Parse filename to extract package name and version
+            parsed = self._parse_package_filename(filename)
+            if not parsed:
+                # Can't parse, keep it to be safe
+                files_to_keep.add(filename)
+                continue
+            
+            pkg_name, version_str = parsed
+            
+            # Check if this package has a target version
+            if pkg_name in self._target_versions:
+                target_version = self._target_versions[pkg_name]
+                if version_str == target_version:
+                    # This is the version we want to keep
+                    files_to_keep.add(filename)
+                    self.logger.debug(f"✅ Keeping {filename} (matches target version {target_version})")
+                else:
+                    self.logger.debug(f"🗑️ Marking for deletion: {filename} (target is {target_version})")
+            else:
+                # No target version registered - keep to be safe
+                files_to_keep.add(filename)
+                self.logger.debug(f"⚠️ Keeping unknown package: {filename} (not in target versions)")
+        
+        return files_to_keep
+    
+    def get_files_to_delete(self) -> List[str]:
+        """
+        Determine which files should be deleted based on target versions
+        
+        Returns:
+            List of full paths to delete
+        """
+        files_to_delete = []
+        files_to_keep = self.get_files_to_keep()
+        
+        for filename, full_path in self._remote_inventory.items():
+            if filename not in files_to_keep:
+                files_to_delete.append(full_path)
+        
+        return files_to_delete
+    
+    def _parse_package_filename(self, filename: str) -> Optional[Tuple[str, str]]:
+        """
+        Parse package filename to extract name and version
+        
+        Args:
+            filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
+        
+        Returns:
+            Tuple of (package_name, version_string) or None if cannot parse
+        """
+        try:
+            # Remove extensions
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            if len(parts) < 4:
+                return None
+            
+            # Try to find where package name ends
+            for i in range(len(parts) - 3, 0, -1):
+                potential_name = '-'.join(parts[:i])
+                remaining = parts[i:]
+                
+                if len(remaining) >= 3:
+                    # Check for epoch format (e.g., "2-26.1.9-1")
+                    if remaining[0].isdigit() and '-' in '-'.join(remaining[1:]):
+                        epoch = remaining[0]
+                        version_part = remaining[1]
+                        release_part = remaining[2]
+                        version_str = f"{epoch}:{version_part}-{release_part}"
+                        return potential_name, version_str
+                    # Standard format (e.g., "26.1.9-1")
+                    elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
+                        version_part = remaining[0]
+                        release_part = remaining[1]
+                        version_str = f"{version_part}-{release_part}"
+                        return potential_name, version_str
+        
+        except Exception as e:
+            self.logger.debug(f"Could not parse filename {filename}: {e}")
+        
+        return None
+    
+    def clear_remote_inventory(self) -> None:
+        """Clear remote inventory cache"""
+        self._remote_inventory.clear()
+        self.logger.debug("Cleared remote inventory cache")
+    
+    def get_target_packages(self) -> Dict[str, str]:
+        """Get all target packages"""
+        return self._target_versions.copy()
+    
+    def get_skipped_packages_dict(self) -> Dict[str, str]:
+        """Get all skipped packages"""
+        return self._skipped_packages.copy()
+    
+    def get_built_packages_dict(self) -> Dict[str, str]:
+        """Get all built packages"""
+        return self._built_packages.copy()
+    
+    def has_packages(self) -> bool:
+        """Check if any packages are registered"""
+        return bool(self._target_versions)
