@@ -103,19 +103,15 @@ class SSHClient:
         """
         self.logger.info("🔍 Testing SSH connection to VPS...")
         
-        ssh_test_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,
-            f"{self.vps_user}@{self.vps_host}",
-            "echo SSH_TEST_SUCCESS"
-        ]
+        # Use string command with shell=True for SSH test
+        ssh_test_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"cd {self.remote_dir} && echo SSH_TEST_SUCCESS\""
         
         try:
             result = self.shell_executor.run(
                 ssh_test_cmd,
                 capture=True,
                 check=False,
-                shell=False,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -141,21 +137,21 @@ class SSHClient:
         Returns:
             True if file exists
         """
-        remote_cmd = f"test -f \"{remote_path}\" && echo EXISTS || echo NOT_EXISTS"
+        # Extract filename from path
+        filename = Path(remote_path).name
         
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
+        # Use cd into remote_dir and check file
+        remote_cmd = f"cd {self.remote_dir} && test -f \"{filename}\" && echo EXISTS || echo NOT_EXISTS"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         try:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=False,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -176,21 +172,21 @@ class SSHClient:
         Returns:
             SHA256 hash string or None if failed
         """
-        remote_cmd = f"sha256sum \"{remote_path}\" 2>/dev/null | cut -d' ' -f1"
+        # Extract filename from path
+        filename = Path(remote_path).name
         
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
+        # Use cd into remote_dir and run sha256sum
+        remote_cmd = f"cd {self.remote_dir} && sha256sum \"{filename}\" 2>/dev/null | cut -d' ' -f1"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         try:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=False,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -231,13 +227,15 @@ class SSHClient:
         fi
         """
         
-        ssh_cmd = ["ssh", *self.ssh_options_with_quiet, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         try:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
                 check=False,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -266,17 +264,18 @@ class SSHClient:
         
         remote_cmd = f"""
         # Check for package files
-        if find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | head -1 >/dev/null; then
+        if cd "{self.remote_dir}" && find . -maxdepth 1 -name "*.pkg.tar.*" -type f 2>/dev/null | head -1 >/dev/null; then
             echo "REPO_EXISTS_WITH_PACKAGES"
         # Check for database files
-        elif [ -f "{self.remote_dir}/{self.repo_name}.db.tar.gz" ] || [ -f "{self.remote_dir}/{self.repo_name}.db" ]; then
+        elif cd "{self.remote_dir}" && ([ -f "{self.repo_name}.db.tar.gz" ] || [ -f "{self.repo_name}.db" ]); then
             echo "REPO_EXISTS_WITH_DB"
         else
             echo "REPO_NOT_FOUND"
         fi
         """
         
-        ssh_cmd = ["ssh", *self.ssh_options_with_quiet, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         try:
             result = self.shell_executor.run(
@@ -284,6 +283,7 @@ class SSHClient:
                 capture=True,
                 check=False,
                 timeout=30,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -316,14 +316,11 @@ class SSHClient:
         Returns:
             List of remote file paths
         """
-        remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '{pattern}' 2>/dev/null"
+        # Use cd into remote_dir and find files
+        remote_cmd = f"cd {self.remote_dir} && find . -maxdepth 1 -type f -name '{pattern}' 2>/dev/null | sed 's|^\./||'"
         
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         self.logger.info(f"Listing remote files with pattern: {pattern}")
         
@@ -332,6 +329,7 @@ class SSHClient:
                 ssh_cmd,
                 capture=True,
                 check=False,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             
@@ -341,7 +339,9 @@ class SSHClient:
                 for line in result.stdout.strip().splitlines():
                     line = line.strip()
                     if line and not line.startswith("Welcome") and not line.startswith("Last login"):
-                        files.append(line)
+                        # Construct full path
+                        full_path = f"{self.remote_dir}/{line}"
+                        files.append(full_path)
                 
                 self.logger.info(f"✅ Found {len(files)} remote files")
                 return files
@@ -364,12 +364,11 @@ class SSHClient:
         Returns:
             Tuple of (success, output)
         """
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,
-            f"{self.vps_user}@{self.vps_host}",
-            command
-        ]
+        # Prepend cd to remote_dir
+        remote_cmd = f"cd {self.remote_dir} && {command}"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
         
         try:
             result = self.shell_executor.run(
@@ -377,6 +376,7 @@ class SSHClient:
                 capture=True,
                 check=False,
                 timeout=timeout,
+                shell=True,  # Use shell=True for string command
                 log_cmd=False
             )
             

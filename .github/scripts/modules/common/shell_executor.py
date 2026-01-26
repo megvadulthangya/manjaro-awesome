@@ -67,7 +67,16 @@ class ShellExecutor:
             timeout = self.default_timeout
         
         # Convert cmd to string if it's a list (for logging)
-        cmd_str = cmd if isinstance(cmd, str) else ' '.join(cmd)
+        if isinstance(cmd, list):
+            cmd_str = ' '.join(cmd)
+            # For list commands, use shell=False unless explicitly overridden
+            if 'shell' not in kwargs:
+                shell = False
+        else:
+            cmd_str = cmd
+            # For string commands, use shell=True by default
+            if 'shell' not in kwargs:
+                shell = True
         
         # Log command if requested
         if log_cmd or self.debug_mode:
@@ -110,9 +119,9 @@ class ShellExecutor:
         
         # Prepare command based on user
         if user:
-            return self._run_as_user(cmd_str, user, subprocess_kwargs, log_cmd)
+            return self._run_as_user(cmd, user, subprocess_kwargs, log_cmd)
         else:
-            return self._run_direct(cmd_str, subprocess_kwargs, log_cmd)
+            return self._run_direct(cmd, subprocess_kwargs, log_cmd)
     
     def _log_command(self, cmd: str, log_cmd: bool) -> None:
         """Log command execution details"""
@@ -177,7 +186,7 @@ class ShellExecutor:
     
     def _run_as_user(
         self,
-        cmd: str,
+        cmd: Union[str, List[str]],
         user: str,
         subprocess_kwargs: Dict[str, Any],
         log_cmd: bool
@@ -192,19 +201,17 @@ class ShellExecutor:
         try:
             # Build sudo command
             shell = subprocess_kwargs.get('shell', True)
-            cwd = subprocess_kwargs.get('cwd', Path.cwd())
             
-            if shell:
-                sudo_cmd = ['sudo', '-u', user, 'bash', '-c', f'cd "{cwd}" && {cmd}']
+            if isinstance(cmd, list):
+                # For list commands, build sudo command with list
+                sudo_cmd = ['sudo', '-u', user] + cmd
+                subprocess_kwargs['shell'] = False
             else:
-                sudo_cmd = ['sudo', '-u', user] + cmd.split() if isinstance(cmd, str) else ['sudo', '-u', user] + cmd
+                # For string commands, use shell execution
+                sudo_cmd = ['sudo', '-u', user, 'bash', '-c', cmd]
+                subprocess_kwargs['shell'] = True
             
-            # Remove shell and cwd from kwargs since we're handling them in sudo command
-            subprocess_kwargs_copy = subprocess_kwargs.copy()
-            subprocess_kwargs_copy.pop('shell', None)
-            subprocess_kwargs_copy.pop('cwd', None)
-            
-            result = subprocess.run(sudo_cmd, **subprocess_kwargs_copy)
+            result = subprocess.run(sudo_cmd, **subprocess_kwargs)
             
             # Ensure stdout/stderr are clean strings
             if hasattr(result, 'stdout') and result.stdout is not None:

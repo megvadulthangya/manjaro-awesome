@@ -76,8 +76,6 @@ class PackageBuilder:
         # Version tracker with JSON state
         self.version_tracker = VersionTracker(
             repo_root=self.repo_root,
-            ssh_client=self.ssh_client,
-            shell_executor=self.shell_executor,
             logger=self.logger
         )
         
@@ -154,14 +152,17 @@ class PackageBuilder:
         remote_version = None
         
         # Check if package is in local state
-        if pkg_name in self.version_tracker.state["packages"]:
-            stored_package = self.version_tracker.state["packages"][pkg_name]
+        state_packages = self.version_tracker.state.get("packages", {})
+        if pkg_name in state_packages:
+            stored_package = state_packages[pkg_name]
             stored_version = stored_package.get("version")
             
             if stored_version == local_version:
                 # Verify integrity via SSH
                 self.logger.debug(f"Version match for {pkg_name}, verifying integrity")
-                remote_file = self.version_tracker._get_remote_file_path(pkg_name, stored_version)
+                
+                # Get remote file path
+                remote_file = self._get_remote_file_path(pkg_name, stored_version)
                 
                 if remote_file and self.ssh_client.file_exists(remote_file):
                     current_hash = self.ssh_client.get_remote_hash(remote_file)
@@ -189,21 +190,14 @@ class PackageBuilder:
             # Found on VPS, adopt into state
             self.logger.info(f"📥 {pkg_name}: Found on VPS ({remote_version}), adopting into state")
             
-            remote_file = self.version_tracker._get_remote_file_path(pkg_name, remote_version)
+            remote_file = self._get_remote_file_path(pkg_name, remote_version)
             remote_hash = None
             if remote_file:
                 # Use SSH to get file hash
                 remote_hash = self.ssh_client.get_remote_hash(remote_file)
             
-            self.version_tracker.state["packages"][pkg_name] = {
-                "version": remote_version,
-                "hash": remote_hash,
-                "last_checked": self._get_timestamp(),
-                "source": "adopted"
-            }
-            
-            # Save state immediately after adoption
-            self.version_tracker.save_state()
+            # Register as built package (adopted)
+            self.version_tracker.register_built_package(pkg_name, remote_version, remote_hash)
             
             # Compare with local version
             if remote_version == local_version:
@@ -219,48 +213,77 @@ class PackageBuilder:
     
     def _get_remote_version_direct(self, pkg_name: str) -> Optional[str]:
         """Get version of package from VPS using SSH (direct method)"""
-        # List remote files for this package using string command with shell=True
-        remote_cmd = f"find {self.ssh_client.remote_dir} -maxdepth 1 -type f -name '{pkg_name}-*.pkg.tar.*' 2>/dev/null"
+        # List remote files for this package
+        remote_files = self.ssh_client.list_remote_files(f"{pkg_name}-*.pkg.tar.*")
         
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_client.ssh_options_with_quiet,
-            f"{self.ssh_client.vps_user}@{self.ssh_client.vps_host}",
-            remote_cmd
-        ]
+        if not remote_files:
+            return None
         
-        try:
-            # Execute SSH command as string with shell=True for proper escaping
-            result = self.shell_executor.run(
-                ssh_cmd,
-                capture=True,
-                check=False,
-                shell=False,  # Use list mode for SSH
-                log_cmd=False
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                # Parse first matching file for version
-                for line in result.stdout.strip().splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("Welcome") or line.startswith("Last login"):
-                        continue
-                    
-                    if '.pkg.tar.' in line:
-                        filename = Path(line).name
-                        parsed = self.version_tracker._parse_package_filename(filename)
-                        if parsed and parsed[0] == pkg_name:
-                            return parsed[1]
-            
-            return None
-        except Exception as e:
-            self.logger.warning(f"Could not get remote version for {pkg_name}: {e}")
-            return None
+        # Parse first matching file for version
+        for file_path in remote_files:
+            filename = Path(file_path).name
+            parsed = self._parse_package_filename(filename)
+            if parsed and parsed[0] == pkg_name:
+                return parsed[1]
+        
+        return None
     
-    def _get_timestamp(self) -> str:
-        """Get current timestamp in ISO format"""
-        from datetime import datetime
-        return datetime.now().isoformat()
+    def _get_remote_file_path(self, pkg_name: str, version: str) -> Optional[str]:
+        """Get full remote path for a package version"""
+        # Generate possible filename patterns
+        patterns = []
+        
+        if ':' in version:
+            # Version with epoch
+            epoch, rest = version.split(':', 1)
+            patterns.append(f"{pkg_name}-{epoch}-{rest}-*.pkg.tar.zst")
+            patterns.append(f"{pkg_name}-{epoch}-{rest}-*.pkg.tar.xz")
+        else:
+            # Standard version
+            patterns.append(f"{pkg_name}-{version}-*.pkg.tar.zst")
+            patterns.append(f"{pkg_name}-{version}-*.pkg.tar.xz")
+        
+        # Check each pattern
+        for pattern in patterns:
+            remote_files = self.ssh_client.list_remote_files(pattern)
+            if remote_files:
+                return remote_files[0]
+        
+        return None
+    
+    def _parse_package_filename(self, filename: str) -> Optional[Tuple[str, str]]:
+        """Parse package filename to extract name and version"""
+        try:
+            # Remove extensions
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            if len(parts) < 4:
+                return None
+            
+            # Try to find where package name ends
+            for i in range(len(parts) - 3, 0, -1):
+                potential_name = '-'.join(parts[:i])
+                remaining = parts[i:]
+                
+                if len(remaining) >= 3:
+                    # Check for epoch format
+                    if remaining[0].isdigit() and '-' in '-'.join(remaining[1:]):
+                        epoch = remaining[0]
+                        version_part = remaining[1]
+                        release_part = remaining[2]
+                        version_str = f"{epoch}:{version_part}-{release_part}"
+                        return potential_name, version_str
+                    # Standard format
+                    elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
+                        version_part = remaining[0]
+                        release_part = remaining[1]
+                        version_str = f"{version_part}-{release_part}"
+                        return potential_name, version_str
+        except Exception as e:
+            self.logger.debug(f"Could not parse filename {filename}: {e}")
+        
+        return None
     
     def _build_aur_packages(self) -> None:
         """Build all AUR packages using JSON state tracking with adoption"""
@@ -306,10 +329,8 @@ class PackageBuilder:
             success = self.aur_builder.build(pkg_name, remote_version)
             
             if success and local_version:
-                # Update state with built version
-                self.version_tracker.update_package_state(pkg_name, local_version)
-                # Save state immediately
-                self.version_tracker.save_state()
+                # Register built package in state
+                self.version_tracker.register_built_package(pkg_name, local_version)
             elif not success:
                 self.build_state.add_failed(
                     pkg_name,
@@ -367,10 +388,8 @@ class PackageBuilder:
             success = self.local_builder.build(pkg_name, remote_version)
             
             if success and local_version:
-                # Update state with built version
-                self.version_tracker.update_package_state(pkg_name, local_version)
-                # Save state immediately
-                self.version_tracker.save_state()
+                # Register built package in state
+                self.version_tracker.register_built_package(pkg_name, local_version)
             elif not success:
                 self.build_state.add_failed(
                     pkg_name,
@@ -386,7 +405,7 @@ class PackageBuilder:
         self.logger.info("=" * 60)
         
         # Check repository state
-        exists, has_packages = self.ssh_client.check_repository_exists()
+        exists, has_packages = self._check_repository_state()
         
         # Apply repository state to pacman.conf
         self._apply_repository_state(exists, has_packages)
@@ -402,35 +421,11 @@ class PackageBuilder:
             log_cmd=True,
             timeout=300,
             check=False,
-            shell=True  # Use shell=True for pacman command
+            shell=True  # Use shell=True for string command
         )
         
         if result.returncode == 0:
             self.logger.info("✅ Pacman databases synced successfully")
-            
-            # Debug: List packages in our custom repo
-            debug_cmd = f"sudo pacman -Sl {self.config.get('repo_name')}"
-            self.logger.info(f"🔍 DEBUG: Running command to see what packages pacman sees in our repo:")
-            self.logger.info(f"Command: {debug_cmd}")
-            
-            debug_result = self.shell_executor.run(
-                debug_cmd,
-                log_cmd=True,
-                timeout=30,
-                check=False,
-                shell=True
-            )
-            
-            if debug_result.returncode == 0:
-                if debug_result.stdout.strip():
-                    self.logger.info(f"Packages in {self.config.get('repo_name')} according to pacman:")
-                    for line in debug_result.stdout.splitlines():
-                        self.logger.info(f"  {line}")
-                else:
-                    self.logger.warning(f"⚠️ pacman -Sl returned no output (repo might be empty)")
-            else:
-                self.logger.warning(f"⚠️ pacman -Sl failed: {debug_result.stderr[:200]}")
-            
             return True
         else:
             self.logger.error("❌ Pacman sync failed")
@@ -521,16 +516,6 @@ class PackageBuilder:
             
             self.logger.info(f"✅ Updated pacman.conf for repository '{repo_name}'")
             
-            # CRITICAL FIX: Run pacman -Sy after enabling repository to synchronize databases
-            if exists and has_packages:
-                self.logger.info("🔄 Synchronizing pacman databases after enabling repository...")
-                cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-                result = self.shell_executor.run(cmd, log_cmd=True, timeout=300, check=False, shell=True)
-                if result.returncode == 0:
-                    self.logger.info("✅ Pacman databases synchronized successfully")
-                else:
-                    self.logger.warning(f"⚠️ Pacman sync warning: {result.stderr[:200]}")
-            
         except Exception as e:
             self.logger.error(f"Failed to apply repository state: {e}")
     
@@ -568,7 +553,24 @@ class PackageBuilder:
         self.logger.info("SYNCING JSON STATE TO GIT")
         self.logger.info("=" * 60)
         
-        return self.version_tracker.sync_state_to_git()
+        try:
+            # Save state first
+            self.version_tracker.save_state()
+            
+            # Add to git
+            rel_path = self.version_tracker.state_file.relative_to(self.repo_root)
+            add_cmd = f"git add {rel_path}"
+            self.shell_executor.run(add_cmd, check=True, log_cmd=True, shell=True)
+            
+            # Commit
+            commit_cmd = 'git commit -m "chore: update vps state [skip ci]"'
+            self.shell_executor.run(commit_cmd, check=True, log_cmd=True, shell=True)
+            
+            self.logger.info("✅ State synced to git")
+            return True
+        except Exception as e:
+            self.logger.error(f"Could not sync state to git: {e}")
+            return False
     
     def run(self) -> int:
         """
@@ -620,7 +622,7 @@ class PackageBuilder:
             # Ensure remote directory exists
             self.ssh_client.ensure_directory()
             
-            # STEP 2: Test SSH connection
+            # STEP 2: Test SSH connection with corrected execution
             self.logger.info("\n🔍 Testing SSH connection...")
             if not self.ssh_client.test_connection():
                 self.logger.warning("⚠️ SSH connection test failed, but continuing...")
@@ -731,15 +733,8 @@ class PackageBuilder:
             state_summary = self.version_tracker.get_state_summary()
             self.logger.info(f"JSON State:      {state_summary['total_packages']} packages tracked")
             self.logger.info(f"Remote Adoption: ✅ Packages automatically adopted from VPS")
-            self.logger.info(f"Zero-Download:   ✅ No rsync downloads, using JSON state")
+            self.logger.info(f"SSH Execution:   ✅ Fixed command execution with cd into remote_dir")
             self.logger.info("=" * 60)
-            
-            # List skipped packages (adopted ones)
-            skipped_packages = self.build_state.get_skipped_packages()
-            if skipped_packages:
-                self.logger.info("\n⏭️ Skipped packages (adopted from VPS):")
-                for pkg in skipped_packages:
-                    self.logger.info(f"  - {pkg['name']} ({pkg['version']})")
             
             return 0
             
