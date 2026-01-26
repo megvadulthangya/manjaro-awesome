@@ -39,8 +39,7 @@ class ShellExecutor:
         log_cmd: bool = False,
         timeout: Optional[int] = None,
         extra_env: Optional[Dict[str, str]] = None,
-        text: bool = True,  # Added to match subprocess.run signature
-        **kwargs  # Accept any additional kwargs for compatibility
+        **kwargs  # Accept any additional kwargs like 'text', 'capture_output', etc.
     ) -> subprocess.CompletedProcess:
         """
         Run command with comprehensive logging and timeout
@@ -48,15 +47,14 @@ class ShellExecutor:
         Args:
             cmd: Command to execute (string or list)
             cwd: Working directory
-            capture: Capture stdout/stderr
+            capture: Capture stdout/stderr (alias for capture_output)
             check: Raise CalledProcessError on non-zero exit code
             shell: Use shell execution
             user: Run as specified user (requires sudo)
             log_cmd: Log command details
             timeout: Command timeout in seconds (defaults to self.default_timeout)
             extra_env: Additional environment variables
-            text: Automatically decode stdout/stderr (default: True)
-            **kwargs: Additional arguments for compatibility
+            **kwargs: Additional arguments passed to subprocess.run (text, capture_output, etc.)
         
         Returns:
             subprocess.CompletedProcess
@@ -85,13 +83,27 @@ class ShellExecutor:
         if extra_env:
             env.update(extra_env)
         
+        # Handle capture_output parameter (Python 3.7+)
+        subprocess_kwargs = {
+            'cwd': cwd_path,
+            'shell': shell,
+            'check': check,
+            'env': env,
+            'timeout': timeout
+        }
+        
+        # Add any additional kwargs passed by caller
+        subprocess_kwargs.update(kwargs)
+        
+        # Handle capture parameter (map to capture_output)
+        if 'capture_output' not in subprocess_kwargs:
+            subprocess_kwargs['capture_output'] = capture
+        
         # Prepare command based on user
         if user:
-            return self._run_as_user(cmd_str, user, cwd_path, capture, check, shell, 
-                                    env, timeout, log_cmd, text)
+            return self._run_as_user(cmd_str, user, subprocess_kwargs, log_cmd)
         else:
-            return self._run_direct(cmd_str, cwd_path, capture, check, shell, 
-                                  env, timeout, log_cmd, text)
+            return self._run_direct(cmd_str, subprocess_kwargs, log_cmd)
     
     def _log_command(self, cmd: str, log_cmd: bool) -> None:
         """Log command execution details"""
@@ -100,8 +112,10 @@ class ShellExecutor:
         elif log_cmd:
             self.logger.info(f"RUNNING COMMAND: {cmd}")
     
-    def _log_output(self, result: subprocess.CompletedProcess, log_cmd: bool, text: bool) -> None:
+    def _log_output(self, result: subprocess.CompletedProcess, log_cmd: bool) -> None:
         """Log command output based on debug mode"""
+        text = getattr(result, 'text', True)  # Default to True if not specified
+        
         if self.debug_mode:
             if text and result.stdout:
                 print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
@@ -129,7 +143,7 @@ class ShellExecutor:
         
         # Critical: If command failed and we're in debug mode, print full output
         if result.returncode != 0 and self.debug_mode:
-            print(f"❌ [DEBUG] COMMAND FAILED: {cmd if hasattr(result, 'cmd') else 'unknown'}", flush=True)
+            print(f"❌ [DEBUG] COMMAND FAILED: {result.cmd if hasattr(result, 'cmd') else 'unknown'}", flush=True)
             if text and result.stdout and len(result.stdout) > 500:
                 print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
             elif result.stdout and len(result.stdout) > 500:
@@ -144,43 +158,40 @@ class ShellExecutor:
         self,
         cmd: str,
         user: str,
-        cwd: Path,
-        capture: bool,
-        check: bool,
-        shell: bool,
-        env: Dict[str, str],
-        timeout: int,
-        log_cmd: bool,
-        text: bool
+        subprocess_kwargs: Dict[str, Any],
+        log_cmd: bool
     ) -> subprocess.CompletedProcess:
         """Run command as specified user"""
         # Set up environment for the user
+        env = subprocess_kwargs.get('env', os.environ.copy())
         env['HOME'] = f'/home/{user}'
         env['USER'] = user
+        subprocess_kwargs['env'] = env
         
         try:
             # Build sudo command
+            shell = subprocess_kwargs.get('shell', True)
+            cwd = subprocess_kwargs.get('cwd', Path.cwd())
+            
             if shell:
                 sudo_cmd = ['sudo', '-u', user, 'bash', '-c', f'cd "{cwd}" && {cmd}']
             else:
                 sudo_cmd = ['sudo', '-u', user] + cmd.split() if isinstance(cmd, str) else ['sudo', '-u', user] + cmd
             
-            result = subprocess.run(
-                sudo_cmd,
-                capture_output=capture,
-                text=text,
-                check=check,
-                env=env,
-                timeout=timeout
-            )
+            # Remove shell and cwd from kwargs since we're handling them in sudo command
+            subprocess_kwargs_copy = subprocess_kwargs.copy()
+            subprocess_kwargs_copy.pop('shell', None)
+            subprocess_kwargs_copy.pop('cwd', None)
+            
+            result = subprocess.run(sudo_cmd, **subprocess_kwargs_copy)
             
             if log_cmd or self.debug_mode:
-                self._log_output(result, log_cmd, text)
+                self._log_output(result, log_cmd)
             
             return result
             
         except subprocess.TimeoutExpired as e:
-            error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+            error_msg = f"⚠️ Command timed out after {subprocess_kwargs.get('timeout', 1800)} seconds: {cmd}"
             if self.debug_mode:
                 print(f"❌ [DEBUG] {error_msg}", flush=True)
             self.logger.error(error_msg)
@@ -191,53 +202,40 @@ class ShellExecutor:
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
+                        text = getattr(e, 'text', True)
                         if text:
                             print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
                         else:
                             print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
+                        text = getattr(e, 'text', True)
                         if text:
                             print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                         else:
                             print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
                 else:
                     self.logger.error(error_msg)
-            if check:
+            if subprocess_kwargs.get('check', True):
                 raise
             return e
     
     def _run_direct(
         self,
         cmd: Union[str, List[str]],
-        cwd: Path,
-        capture: bool,
-        check: bool,
-        shell: bool,
-        env: Dict[str, str],
-        timeout: int,
-        log_cmd: bool,
-        text: bool
+        subprocess_kwargs: Dict[str, Any],
+        log_cmd: bool
     ) -> subprocess.CompletedProcess:
         """Run command directly (no user switch)"""
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=cwd,
-                shell=shell,
-                capture_output=capture,
-                text=text,
-                check=check,
-                env=env,
-                timeout=timeout
-            )
+            result = subprocess.run(cmd, **subprocess_kwargs)
             
             if log_cmd or self.debug_mode:
-                self._log_output(result, log_cmd, text)
+                self._log_output(result, log_cmd)
             
             return result
             
         except subprocess.TimeoutExpired as e:
-            error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+            error_msg = f"⚠️ Command timed out after {subprocess_kwargs.get('timeout', 1800)} seconds: {cmd}"
             if self.debug_mode:
                 print(f"❌ [DEBUG] {error_msg}", flush=True)
             self.logger.error(error_msg)
@@ -248,18 +246,20 @@ class ShellExecutor:
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
+                        text = getattr(e, 'text', True)
                         if text:
                             print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
                         else:
                             print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
+                        text = getattr(e, 'text', True)
                         if text:
                             print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                         else:
                             print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
                 else:
                     self.logger.error(error_msg)
-            if check:
+            if subprocess_kwargs.get('check', True):
                 raise
             return e
     
