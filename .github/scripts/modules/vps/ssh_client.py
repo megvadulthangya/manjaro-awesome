@@ -36,12 +36,11 @@ class SSHClient:
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
         
-        # Add quiet flag to suppress MOTD/banner messages
-        if '-q' not in self.ssh_options:
-            self.ssh_options = ['-q'] + self.ssh_options
-        
         # SSH key path
         self.ssh_key_path = Path("/home/builder/.ssh/id_ed25519")
+        
+        # Add quiet flag to SSH options to suppress MOTD
+        self.ssh_options_with_quiet = self.ssh_options + ["-q"]
     
     def setup_ssh_config(self, ssh_key: Optional[str] = None) -> bool:
         """
@@ -57,7 +56,7 @@ class SSHClient:
             ssh_dir = Path("/home/builder/.ssh")
             ssh_dir.mkdir(exist_ok=True, mode=0o700)
             
-            # Write SSH config file with LogLevel quiet
+            # Write SSH config file
             config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
@@ -66,7 +65,6 @@ class SSHClient:
   ConnectTimeout 30
   ServerAliveInterval 15
   ServerAliveCountMax 3
-  LogLevel QUIET
 """
             
             config_file = ssh_dir / "config"
@@ -107,7 +105,7 @@ class SSHClient:
         
         ssh_test_cmd = [
             "ssh",
-            *self.ssh_options,
+            *self.ssh_options_with_quiet,  # Use quiet mode
             f"{self.vps_user}@{self.vps_host}",
             "echo SSH_TEST_SUCCESS"
         ]
@@ -121,17 +119,13 @@ class SSHClient:
                 log_cmd=False
             )
             
-            # Filter out non-test output (MOTD, banners)
-            output = result.stdout.strip()
-            if "SSH_TEST_SUCCESS" in output:
-                # Extract just the test success line
-                for line in output.splitlines():
-                    if "SSH_TEST_SUCCESS" in line:
-                        self.logger.info("✅ SSH connection successful")
-                        return True
-            
-            self.logger.warning(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
-            return False
+            if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
+                self.logger.info("✅ SSH connection successful")
+                return True
+            else:
+                error_msg = result.stderr[:100] if result and result.stderr else 'No output'
+                self.logger.warning(f"⚠️ SSH connection failed: {error_msg}")
+                return False
                 
         except Exception as e:
             self.logger.error(f"❌ SSH test exception: {e}")
@@ -163,22 +157,20 @@ class SSHClient:
         fi
         """
         
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        ssh_cmd = ["ssh", *self.ssh_options_with_quiet, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
         try:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 log_cmd=False
             )
             
             if result.returncode == 0:
                 self.logger.info("✅ Remote directory verified")
-                # Filter out MOTD/banner messages
                 for line in result.stdout.splitlines():
-                    if line.strip() and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd']):
+                    if line.strip():
                         self.logger.debug(f"REMOTE DIR: {line}")
                 return True
             else:
@@ -210,34 +202,31 @@ class SSHClient:
         fi
         """
         
-        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", *self.ssh_options, remote_cmd]
+        ssh_cmd = ["ssh", *self.ssh_options_with_quiet, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
         try:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 timeout=30,
                 log_cmd=False
             )
             
-            # Filter output for our specific markers
-            output = result.stdout.strip()
-            for line in output.splitlines():
-                line = line.strip()
-                if "REPO_EXISTS_WITH_PACKAGES" in line:
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                if "REPO_EXISTS_WITH_PACKAGES" in output:
                     self.logger.info("✅ Repository exists on VPS (has package files)")
                     return True, True
-                elif "REPO_EXISTS_WITH_DB" in line:
+                elif "REPO_EXISTS_WITH_DB" in output:
                     self.logger.info("✅ Repository exists on VPS (has database)")
                     return True, False
-                elif "REPO_NOT_FOUND" in line:
+                else:
                     self.logger.info("ℹ️ Repository does not exist on VPS (first run)")
                     return False, False
-            
-            self.logger.warning(f"⚠️ Could not check repository existence: No valid response")
-            return False, False
+            else:
+                self.logger.warning(f"⚠️ Could not check repository existence: {result.stderr[:200]}")
+                return False, False
                 
         except Exception as e:
             self.logger.error(f"❌ Error checking repository: {e}")
@@ -251,13 +240,13 @@ class SSHClient:
             pattern: File pattern to match
         
         Returns:
-            List of remote file paths
+            List of remote file paths (filtered to remove MOTD and non-filename lines)
         """
-        remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '{pattern}' 2>/dev/null || echo 'NO_FILES'"
+        remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '{pattern}' 2>/dev/null"
         
         ssh_cmd = [
             "ssh",
-            *self.ssh_options,
+            *self.ssh_options_with_quiet,  # Use quiet mode
             f"{self.vps_user}@{self.vps_host}",
             remote_cmd
         ]
@@ -268,25 +257,32 @@ class SSHClient:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 log_cmd=False
             )
             
             if result.returncode == 0:
-                # Filter out MOTD/banner messages and only keep actual file paths
+                # Filter out non-filename lines (MOTD, warnings, etc.)
                 files = []
-                for line in result.stdout.split('\n'):
+                for line in result.stdout.splitlines():
                     line = line.strip()
-                    if line and line != 'NO_FILES':
-                        # Skip lines that look like MOTD/banner messages
-                        if any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
-                            continue
-                        # Only include lines that look like file paths
-                        if line.startswith(self.remote_dir) and any(ext in line for ext in ['.pkg.tar.', '.db', '.files', '.sig']):
-                            files.append(line)
+                    if not line:
+                        continue
+                    
+                    # Skip common non-filename patterns
+                    if any(x in line.lower() for x in [
+                        'welcome', 'last login', 'system information',
+                        'running', 'uptime', 'memory', 'disk', 'motd',
+                        'warnings', 'secrets', 'do not share'
+                    ]):
+                        self.logger.debug(f"Skipping non-filename line: {line[:50]}...")
+                        continue
+                    
+                    # Only include lines that look like file paths
+                    if '/' in line and (line.endswith('.pkg.tar.zst') or line.endswith('.pkg.tar.xz')):
+                        files.append(line)
                 
-                self.logger.info(f"✅ Found {len(files)} remote files (filtered)")
+                self.logger.info(f"✅ Found {len(files)} valid remote files (filtered)")
                 return files
             else:
                 self.logger.warning(f"⚠️ Failed to list remote files: {result.stderr[:200]}")
@@ -312,7 +308,7 @@ class SSHClient:
         
         ssh_cmd = [
             "ssh",
-            *self.ssh_options,
+            *self.ssh_options_with_quiet,  # Use quiet mode
             f"{self.vps_user}@{self.vps_host}",
             remote_cmd
         ]
@@ -321,7 +317,6 @@ class SSHClient:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 timeout=30,
                 log_cmd=False
@@ -336,23 +331,28 @@ class SSHClient:
                 self.logger.info("No files found on VPS")
                 return {}
             
-            # Filter out MOTD/banner messages
-            vps_files = []
-            for line in vps_files_raw.split('\n'):
+            # Filter out non-filename lines
+            valid_files = []
+            for line in vps_files_raw.splitlines():
                 line = line.strip()
-                if line:
-                    # Skip lines that look like MOTD/banner messages
-                    if any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
-                        continue
-                    # Only include lines that look like file paths
-                    if line.startswith(self.remote_dir):
-                        vps_files.append(line)
+                if not line:
+                    continue
+                
+                # Skip non-filename lines
+                if any(x in line.lower() for x in [
+                    'welcome', 'last login', 'system', 'uptime',
+                    'memory', 'disk', 'motd', 'warning', 'secret'
+                ]):
+                    continue
+                
+                if '/' in line and ('.pkg.tar.' in line or '.db' in line or '.sig' in line):
+                    valid_files.append(line)
             
-            self.logger.info(f"Found {len(vps_files)} files on VPS (filtered)")
+            self.logger.info(f"Found {len(valid_files)} valid files on VPS (filtered)")
             
             # Convert to filename: path dictionary
             inventory = {}
-            for file_path in vps_files:
+            for file_path in valid_files:
                 filename = Path(file_path).name
                 inventory[filename] = file_path
             
@@ -385,7 +385,7 @@ class SSHClient:
         
         ssh_cmd = [
             "ssh",
-            *self.ssh_options,
+            *self.ssh_options_with_quiet,  # Use quiet mode
             f"{self.vps_user}@{self.vps_host}",
             delete_cmd
         ]
@@ -394,7 +394,6 @@ class SSHClient:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 timeout=60,
                 log_cmd=True
@@ -402,7 +401,6 @@ class SSHClient:
             
             if result.returncode == 0:
                 self.logger.info(f"✅ Deletion successful for {len(files_to_delete)} files")
-                # Filter out MOTD/banner from output
                 if result.stdout:
                     for line in result.stdout.splitlines():
                         if "removed" in line.lower() or "deleted" in line.lower():
@@ -429,7 +427,7 @@ class SSHClient:
         """
         ssh_cmd = [
             "ssh",
-            *self.ssh_options,
+            *self.ssh_options_with_quiet,  # Use quiet mode
             f"{self.vps_user}@{self.vps_host}",
             command
         ]
@@ -438,19 +436,13 @@ class SSHClient:
             result = self.shell_executor.run(
                 ssh_cmd,
                 capture=True,
-                text=True,
                 check=False,
                 timeout=timeout,
                 log_cmd=False
             )
             
             if result.returncode == 0:
-                # Filter out MOTD/banner messages
-                filtered_output = []
-                for line in result.stdout.strip().splitlines():
-                    if line and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
-                        filtered_output.append(line)
-                return True, '\n'.join(filtered_output)
+                return True, result.stdout.strip()
             else:
                 return False, result.stderr.strip()
                 
