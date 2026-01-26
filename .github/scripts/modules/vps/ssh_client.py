@@ -111,7 +111,7 @@ class SSHClient:
                 ssh_test_cmd,
                 capture=True,
                 check=False,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -126,6 +126,70 @@ class SSHClient:
         except Exception as e:
             self.logger.error(f"❌ SSH test exception: {e}")
             return False
+    
+    def get_remote_file_list(self) -> List[str]:
+        """
+        Get explicit list of package files from remote server with debug logging
+        
+        Returns:
+            List of package filenames
+        """
+        # MANDATORY: Use explicit ls command with debug
+        remote_cmd = f"cd {self.remote_dir} && ls -1 *.pkg.tar.zst"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
+        
+        self.logger.info(f"🔍 Executing remote file listing command: {ssh_cmd}")
+        
+        try:
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=True,
+                log_cmd=True
+            )
+            
+            self.logger.debug(f"RAW SSH OUTPUT: {result.stdout}")
+            self.logger.debug(f"SSH STDERR: {result.stderr}")
+            self.logger.debug(f"SSH RETURN CODE: {result.returncode}")
+            
+            if result.returncode == 0:
+                # Clean output - split lines and remove empty
+                files = []
+                for line in result.stdout.strip().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("Welcome") and not line.startswith("Last login"):
+                        # Construct full path
+                        full_path = f"{self.remote_dir}/{line}"
+                        files.append(full_path)
+                
+                self.logger.info(f"✅ Found {len(files)} remote package files")
+                if files:
+                    self.logger.debug(f"Files found: {files}")
+                return files
+            else:
+                # If ls fails, try to see what's in the directory
+                self.logger.warning(f"⚠️ ls command failed, trying alternative listing...")
+                debug_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"cd {self.remote_dir} && pwd && ls -la\""
+                debug_result = self.shell_executor.run(
+                    debug_cmd,
+                    capture=True,
+                    check=False,
+                    shell=True,
+                    log_cmd=False
+                )
+                
+                if debug_result.returncode == 0:
+                    self.logger.debug(f"DEBUG DIRECTORY LISTING:\n{debug_result.stdout}")
+                
+                self.logger.warning(f"⚠️ Failed to list remote files: {result.stderr[:200]}")
+                return []
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error listing remote files: {e}")
+            return []
     
     def file_exists(self, remote_path: str) -> bool:
         """
@@ -151,7 +215,7 @@ class SSHClient:
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -186,7 +250,7 @@ class SSHClient:
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -235,7 +299,7 @@ class SSHClient:
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -283,7 +347,7 @@ class SSHClient:
                 capture=True,
                 check=False,
                 timeout=30,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -329,7 +393,7 @@ class SSHClient:
                 ssh_cmd,
                 capture=True,
                 check=False,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -376,7 +440,7 @@ class SSHClient:
                 capture=True,
                 check=False,
                 timeout=timeout,
-                shell=True,  # Use shell=True for string command
+                shell=True,
                 log_cmd=False
             )
             
@@ -388,3 +452,44 @@ class SSHClient:
         except Exception as e:
             self.logger.error(f"❌ Remote command execution failed: {e}")
             return False, str(e)
+    
+    def debug_remote_directory(self) -> bool:
+        """
+        Debug: List remote directory contents with full details
+        
+        Returns:
+            True if command executed successfully
+        """
+        self.logger.info("🔍 DEBUG: Listing remote directory contents...")
+        
+        # MANDATORY: Run ls -la on remote_dir
+        remote_cmd = f"cd {self.remote_dir} && pwd && echo '=== DIRECTORY CONTENTS ===' && ls -la && echo '=== PACKAGE FILES ===' && ls -la *.pkg.tar.* 2>/dev/null || echo 'No package files found'"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
+        
+        self.logger.debug(f"DEBUG COMMAND: {ssh_cmd}")
+        
+        try:
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=True,
+                log_cmd=False
+            )
+            
+            self.logger.info("[DEBUG] REMOTE DIR CONTENT:")
+            self.logger.info("=" * 60)
+            if result.stdout:
+                for line in result.stdout.strip().splitlines():
+                    self.logger.info(f"[DEBUG] {line}")
+            self.logger.info("=" * 60)
+            
+            if result.stderr:
+                self.logger.warning(f"[DEBUG] STDERR: {result.stderr[:200]}")
+            
+            return result.returncode == 0
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Error listing remote directory: {e}")
+            return False

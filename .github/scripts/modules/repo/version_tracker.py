@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set, Any
 from datetime import datetime
 
+from modules.vps.ssh_client import SSHClient
+
 
 class VersionTracker:
     """
@@ -17,15 +19,17 @@ class VersionTracker:
     Maintains source of truth for what versions should exist on server
     """
     
-    def __init__(self, repo_root: Path, logger: Optional[logging.Logger] = None):
+    def __init__(self, repo_root: Path, ssh_client: SSHClient, logger: Optional[logging.Logger] = None):
         """
         Initialize VersionTracker
         
         Args:
             repo_root: Repository root directory
+            ssh_client: SSHClient instance for remote operations
             logger: Optional logger instance
         """
         self.repo_root = repo_root
+        self.ssh_client = ssh_client
         self.logger = logger or logging.getLogger(__name__)
         
         # Target versions: {pkg_name: target_version} - versions we want to keep
@@ -71,6 +75,123 @@ class VersionTracker:
         except Exception as e:
             self.logger.error(f"Failed to save state: {e}")
             return False
+    
+    def discover_and_adopt_remote_packages(self, pkg_name: str) -> Optional[Tuple[str, Optional[str]]]:
+        """
+        Enhanced adoption logic: Check remote server for package and adopt if found
+        
+        Args:
+            pkg_name: Package name to search for
+        
+        Returns:
+            Tuple of (version, hash) or None if not found
+        """
+        self.logger.info(f"🔍 Searching for {pkg_name} on remote server...")
+        
+        # MANDATORY: Use explicit file listing with debug
+        remote_files = self.ssh_client.get_remote_file_list()
+        
+        if not remote_files:
+            self.logger.debug(f"No remote files found for {pkg_name}")
+            return None
+        
+        # Case-insensitive matching with architecture suffix handling
+        pkg_name_lower = pkg_name.lower()
+        self.logger.debug(f"Searching for package name (case-insensitive): {pkg_name_lower}")
+        
+        for file_path in remote_files:
+            filename = Path(file_path).name
+            self.logger.debug(f"Checking file: {filename}")
+            
+            # Parse package name and version from filename
+            parsed = self._parse_package_filename_with_arch(filename)
+            if not parsed:
+                continue
+            
+            remote_pkg_name, version, architecture = parsed
+            remote_pkg_name_lower = remote_pkg_name.lower()
+            
+            # Case-insensitive comparison with architecture suffix handling
+            if remote_pkg_name_lower == pkg_name_lower:
+                self.logger.info(f"✅ Found {pkg_name} on remote server: {filename}")
+                
+                # Get hash from remote file
+                remote_hash = self.ssh_client.get_remote_hash(file_path)
+                
+                # Update state
+                self.state["packages"][pkg_name] = {
+                    "version": version,
+                    "hash": remote_hash,
+                    "last_updated": datetime.now().isoformat(),
+                    "source": "adopted",
+                    "filename": filename,
+                    "architecture": architecture
+                }
+                
+                # Save state immediately
+                self.save_state()
+                
+                # Update target versions
+                self._target_versions[pkg_name] = version
+                self._skipped_packages[pkg_name] = version
+                
+                self.logger.info(f"📥 Adopted {pkg_name} version {version} from remote server")
+                return version, remote_hash
+        
+        self.logger.debug(f"Package {pkg_name} not found in remote files")
+        return None
+    
+    def _parse_package_filename_with_arch(self, filename: str) -> Optional[Tuple[str, str, str]]:
+        """
+        Parse package filename to extract name, version, and architecture
+        
+        Args:
+            filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
+        
+        Returns:
+            Tuple of (package_name, version_string, architecture) or None
+        """
+        try:
+            # Remove extensions
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            if len(parts) < 4:
+                return None
+            
+            # Try to find where package name ends and architecture begins
+            # Architecture is usually the last part (x86_64, any, etc.)
+            # Version is usually the 2 or 3 parts before architecture
+            
+            # Start from the end and work backwards
+            for i in range(len(parts) - 2, 0, -1):
+                # Check if the remaining parts look like version-release-architecture
+                remaining = parts[i:]
+                
+                if len(remaining) >= 3:
+                    # Check for architecture suffix (x86_64, any, etc.)
+                    arch = remaining[-1]
+                    
+                    # Check for epoch format (e.g., "2-26.1.9-1-x86_64")
+                    if remaining[0].isdigit() and len(remaining) >= 4:
+                        epoch = remaining[0]
+                        version_part = remaining[1]
+                        release_part = remaining[2]
+                        version_str = f"{epoch}:{version_part}-{release_part}"
+                        package_name = '-'.join(parts[:i])
+                        return package_name, version_str, arch
+                    # Standard format (e.g., "26.1.9-1-x86_64")
+                    elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
+                        version_part = remaining[0]
+                        release_part = remaining[1]
+                        version_str = f"{version_part}-{release_part}"
+                        package_name = '-'.join(parts[:i])
+                        return package_name, version_str, arch
+        
+        except Exception as e:
+            self.logger.debug(f"Could not parse filename {filename}: {e}")
+        
+        return None
     
     def register_built_package(self, pkg_name: str, version: str, hash_value: Optional[str] = None) -> None:
         """
@@ -262,13 +383,13 @@ class VersionTracker:
     
     def _parse_package_filename(self, filename: str) -> Optional[Tuple[str, str]]:
         """
-        Parse package filename to extract name and version
+        Parse package filename to extract name and version (without architecture)
         
         Args:
             filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
         
         Returns:
-            Tuple of (package_name, version_string) or None if cannot parse
+            Tuple of (package_name, version_string) or None
         """
         try:
             # Remove extensions

@@ -3,6 +3,7 @@ Main orchestrator for package builder system
 Coordinates all modules to execute the complete build workflow
 """
 
+
 import os
 import sys
 import time
@@ -62,6 +63,9 @@ class PackageBuilder:
             default_timeout=1800
         )
         
+        # CRITICAL FIX: Run pacman -Sy BEFORE any makepkg to ensure databases are up to date
+        self._sync_pacman_databases_initial()
+        
         # Phase 2: State management and VPS communication
         self.build_state = BuildState(self.logger)
         
@@ -76,6 +80,7 @@ class PackageBuilder:
         # Version tracker with JSON state
         self.version_tracker = VersionTracker(
             repo_root=self.repo_root,
+            ssh_client=self.ssh_client,
             logger=self.logger
         )
         
@@ -125,6 +130,37 @@ class PackageBuilder:
         self.aur_packages: List[str] = []
         
         self.logger.info("✅ PackageBuilder initialized with JSON state tracking")
+    
+    def _sync_pacman_databases_initial(self) -> bool:
+        """
+        CRITICAL FIX: Sync pacman databases BEFORE any makepkg operations
+        
+        Returns:
+            True if sync successful
+        """
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("CRITICAL: Syncing pacman databases BEFORE building")
+        self.logger.info("=" * 60)
+        
+        # Run pacman -Sy to update all databases
+        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        result = self.shell_executor.run(
+            cmd,
+            log_cmd=True,
+            timeout=300,
+            check=False,
+            shell=True
+        )
+        
+        if result.returncode == 0:
+            self.logger.info("✅ Pacman databases synced successfully before building")
+            return True
+        else:
+            self.logger.error("❌ Initial pacman sync failed")
+            if result.stderr:
+                self.logger.error(f"Error: {result.stderr[:500]}")
+            # Continue anyway - some repositories might be temporarily unavailable
+            return False
     
     def _get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from configuration"""
@@ -181,23 +217,14 @@ class PackageBuilder:
                 self.logger.info(f"🔄 {pkg_name}: Version mismatch (local: {local_version}, stored: {stored_version})")
                 return "BUILD", stored_version
         
-        # Package not in local state - check VPS directly
-        self.logger.info(f"🔍 {pkg_name}: Not in state, checking VPS...")
+        # Package not in local state - use enhanced adoption logic
+        self.logger.info(f"🔍 {pkg_name}: Not in state, checking VPS with enhanced discovery...")
         
-        # Try to find any version on VPS
-        remote_version = self._get_remote_version_direct(pkg_name)
-        if remote_version:
-            # Found on VPS, adopt into state
-            self.logger.info(f"📥 {pkg_name}: Found on VPS ({remote_version}), adopting into state")
-            
-            remote_file = self._get_remote_file_path(pkg_name, remote_version)
-            remote_hash = None
-            if remote_file:
-                # Use SSH to get file hash
-                remote_hash = self.ssh_client.get_remote_hash(remote_file)
-            
-            # Register as built package (adopted)
-            self.version_tracker.register_built_package(pkg_name, remote_version, remote_hash)
+        # Use enhanced discovery and adoption
+        adoption_result = self.version_tracker.discover_and_adopt_remote_packages(pkg_name)
+        
+        if adoption_result:
+            remote_version, remote_hash = adoption_result
             
             # Compare with local version
             if remote_version == local_version:
@@ -210,23 +237,6 @@ class PackageBuilder:
         # Not found anywhere
         self.logger.info(f"📦 {pkg_name}: Not found on VPS, building")
         return "BUILD", None
-    
-    def _get_remote_version_direct(self, pkg_name: str) -> Optional[str]:
-        """Get version of package from VPS using SSH (direct method)"""
-        # List remote files for this package
-        remote_files = self.ssh_client.list_remote_files(f"{pkg_name}-*.pkg.tar.*")
-        
-        if not remote_files:
-            return None
-        
-        # Parse first matching file for version
-        for file_path in remote_files:
-            filename = Path(file_path).name
-            parsed = self._parse_package_filename(filename)
-            if parsed and parsed[0] == pkg_name:
-                return parsed[1]
-        
-        return None
     
     def _get_remote_file_path(self, pkg_name: str, version: str) -> Optional[str]:
         """Get full remote path for a package version"""
@@ -421,7 +431,7 @@ class PackageBuilder:
             log_cmd=True,
             timeout=300,
             check=False,
-            shell=True  # Use shell=True for string command
+            shell=True
         )
         
         if result.returncode == 0:
@@ -581,7 +591,7 @@ class PackageBuilder:
         """
         try:
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("🚀 MANJARO PACKAGE BUILDER (JSON STATE + ADOPTION)")
+            self.logger.info("🚀 MANJARO PACKAGE BUILDER (JSON STATE + EXPLICIT DISCOVERY)")
             self.logger.info("=" * 60)
             
             # Initial setup
@@ -627,6 +637,12 @@ class PackageBuilder:
             if not self.ssh_client.test_connection():
                 self.logger.warning("⚠️ SSH connection test failed, but continuing...")
             
+            # MANDATORY DEBUG STEP: List remote directory contents
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("DEBUG STEP: Remote Directory Listing")
+            self.logger.info("=" * 60)
+            self.ssh_client.debug_remote_directory()
+            
             # Get package lists
             self.local_packages, self.aur_packages = self._get_package_lists()
             
@@ -635,9 +651,9 @@ class PackageBuilder:
             self.logger.info(f"   AUR packages: {len(self.aur_packages)}")
             self.logger.info(f"   Total packages: {len(self.local_packages) + len(self.aur_packages)}")
             
-            # STEP 3: PACKAGE BUILDING (WITH ADOPTION LOGIC)
+            # STEP 3: PACKAGE BUILDING (WITH ENHANCED ADOPTION LOGIC)
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 3: PACKAGE BUILDING (WITH ADOPTION)")
+            self.logger.info("STEP 3: PACKAGE BUILDING (WITH ENHANCED ADOPTION)")
             self.logger.info("=" * 60)
             
             self._build_aur_packages()
@@ -732,8 +748,9 @@ class PackageBuilder:
             # State summary
             state_summary = self.version_tracker.get_state_summary()
             self.logger.info(f"JSON State:      {state_summary['total_packages']} packages tracked")
-            self.logger.info(f"Remote Adoption: ✅ Packages automatically adopted from VPS")
-            self.logger.info(f"SSH Execution:   ✅ Fixed command execution with cd into remote_dir")
+            self.logger.info(f"Remote Discovery:✅ Explicit ls command with debug output")
+            self.logger.info(f"Architecture:    ✅ Handles -x86_64 and -any suffixes")
+            self.logger.info(f"Dependency Sync: ✅ pacman -Sy run BEFORE makepkg")
             self.logger.info("=" * 60)
             
             return 0
