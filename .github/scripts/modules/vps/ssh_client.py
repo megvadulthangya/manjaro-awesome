@@ -1,4 +1,3 @@
---- FILE: .github/scripts/modules/vps/ssh_client.py ---
 """
 SSH client for remote VPS operations
 Handles SSH connections, file operations, and remote command execution

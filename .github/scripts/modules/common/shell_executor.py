@@ -1,4 +1,3 @@
---- FILE: .github/scripts/modules/common/shell_executor.py ---
 """
 Shell command execution with comprehensive logging, timeout, and debug mode support
 Extracted from PackageBuilder._run_cmd with enhanced features

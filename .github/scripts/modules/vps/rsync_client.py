@@ -1,4 +1,3 @@
---- FILE: .github/scripts/modules/vps/rsync_client.py ---
 """
 Rsync client for efficient file transfer between local and remote systems
 Handles uploads, downloads, and mirroring operations
