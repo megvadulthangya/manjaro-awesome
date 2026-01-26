@@ -470,6 +470,7 @@ jobs:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GITHUB_REPO: ${{ github.repository }}.git
+          PYTHONPATH: ${{ github.workspace }}/.github/scripts
         run: |
           echo "=== Starting Builder with SRCINFO Versioning ==="
           
@@ -478,6 +479,7 @@ jobs:
           
           echo "Current directory: $(pwd)"
           echo "Repository: $GITHUB_REPO"
+          echo "PYTHONPATH: $PYTHONPATH"
           echo "PACKAGER_ENV status: $([ -n "$PACKAGER_ENV" ] && echo "SET (privacy protected)" || echo "NOT SET - using default")"
           
           # Test SSH connection one more time with identical options to builder.py
@@ -526,8 +528,8 @@ jobs:
           echo ""
           echo "=== Running Builder Script ==="
           
-          # Run as builder user
-          su builder -c "cd '$PWD' && python3 .github/scripts/builder.py 2>&1" | tee build_output.log
+          # Run as builder user with PYTHONPATH set for modular imports
+          su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
           
           BUILD_STATUS=$?
           echo ""
