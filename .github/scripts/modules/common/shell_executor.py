@@ -6,8 +6,8 @@ Extracted from PackageBuilder._run_cmd with enhanced features
 import os
 import subprocess
 import logging
-from typing import Dict, List, Optional, Union, Any
 from pathlib import Path
+from typing import Dict, List, Optional, Union, Any
 
 
 class ShellExecutor:
@@ -38,7 +38,9 @@ class ShellExecutor:
         user: Optional[str] = None,
         log_cmd: bool = False,
         timeout: Optional[int] = None,
-        extra_env: Optional[Dict[str, str]] = None
+        extra_env: Optional[Dict[str, str]] = None,
+        text: bool = True,  # Added to match subprocess.run signature
+        **kwargs  # Accept any additional kwargs for compatibility
     ) -> subprocess.CompletedProcess:
         """
         Run command with comprehensive logging and timeout
@@ -53,6 +55,8 @@ class ShellExecutor:
             log_cmd: Log command details
             timeout: Command timeout in seconds (defaults to self.default_timeout)
             extra_env: Additional environment variables
+            text: Automatically decode stdout/stderr (default: True)
+            **kwargs: Additional arguments for compatibility
         
         Returns:
             subprocess.CompletedProcess
@@ -84,10 +88,10 @@ class ShellExecutor:
         # Prepare command based on user
         if user:
             return self._run_as_user(cmd_str, user, cwd_path, capture, check, shell, 
-                                    env, timeout, log_cmd)
+                                    env, timeout, log_cmd, text)
         else:
             return self._run_direct(cmd_str, cwd_path, capture, check, shell, 
-                                  env, timeout, log_cmd)
+                                  env, timeout, log_cmd, text)
     
     def _log_command(self, cmd: str, log_cmd: bool) -> None:
         """Log command execution details"""
@@ -96,28 +100,45 @@ class ShellExecutor:
         elif log_cmd:
             self.logger.info(f"RUNNING COMMAND: {cmd}")
     
-    def _log_output(self, result: subprocess.CompletedProcess, log_cmd: bool) -> None:
+    def _log_output(self, result: subprocess.CompletedProcess, log_cmd: bool, text: bool) -> None:
         """Log command output based on debug mode"""
         if self.debug_mode:
-            if result.stdout:
+            if text and result.stdout:
                 print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
-            if result.stderr:
+            elif result.stdout:
+                print(f"🔧 [DEBUG] STDOUT (bytes):\n{result.stdout[:500]}", flush=True)
+            
+            if text and result.stderr:
                 print(f"🔧 [DEBUG] STDERR:\n{result.stderr}", flush=True)
+            elif result.stderr:
+                print(f"🔧 [DEBUG] STDERR (bytes):\n{result.stderr[:500]}", flush=True)
+            
             print(f"🔧 [DEBUG] EXIT CODE: {result.returncode}", flush=True)
         elif log_cmd:
-            if result.stdout:
+            if text and result.stdout:
                 self.logger.info(f"STDOUT: {result.stdout[:500]}")
-            if result.stderr:
+            elif result.stdout:
+                self.logger.info(f"STDOUT (bytes): {result.stdout[:500]}")
+            
+            if text and result.stderr:
                 self.logger.info(f"STDERR: {result.stderr[:500]}")
+            elif result.stderr:
+                self.logger.info(f"STDERR (bytes): {result.stderr[:500]}")
+            
             self.logger.info(f"EXIT CODE: {result.returncode}")
         
         # Critical: If command failed and we're in debug mode, print full output
         if result.returncode != 0 and self.debug_mode:
-            print(f"❌ [DEBUG] COMMAND FAILED: {result.cmd if hasattr(result, 'cmd') else 'unknown'}", flush=True)
-            if result.stdout and len(result.stdout) > 500:
+            print(f"❌ [DEBUG] COMMAND FAILED: {cmd if hasattr(result, 'cmd') else 'unknown'}", flush=True)
+            if text and result.stdout and len(result.stdout) > 500:
                 print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
-            if result.stderr and len(result.stderr) > 500:
+            elif result.stdout and len(result.stdout) > 500:
+                print(f"❌ [DEBUG] FULL STDOUT (bytes, truncated):\n{result.stdout[:2000]}", flush=True)
+            
+            if text and result.stderr and len(result.stderr) > 500:
                 print(f"❌ [DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
+            elif result.stderr and len(result.stderr) > 500:
+                print(f"❌ [DEBUG] FULL STDERR (bytes, truncated):\n{result.stderr[:2000]}", flush=True)
     
     def _run_as_user(
         self,
@@ -129,7 +150,8 @@ class ShellExecutor:
         shell: bool,
         env: Dict[str, str],
         timeout: int,
-        log_cmd: bool
+        log_cmd: bool,
+        text: bool
     ) -> subprocess.CompletedProcess:
         """Run command as specified user"""
         # Set up environment for the user
@@ -146,14 +168,14 @@ class ShellExecutor:
             result = subprocess.run(
                 sudo_cmd,
                 capture_output=capture,
-                text=True,
+                text=text,
                 check=check,
                 env=env,
                 timeout=timeout
             )
             
             if log_cmd or self.debug_mode:
-                self._log_output(result, log_cmd)
+                self._log_output(result, log_cmd, text)
             
             return result
             
@@ -169,9 +191,15 @@ class ShellExecutor:
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
-                        print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if text:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        else:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
-                        print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                        if text:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                        else:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
                 else:
                     self.logger.error(error_msg)
             if check:
@@ -187,7 +215,8 @@ class ShellExecutor:
         shell: bool,
         env: Dict[str, str],
         timeout: int,
-        log_cmd: bool
+        log_cmd: bool,
+        text: bool
     ) -> subprocess.CompletedProcess:
         """Run command directly (no user switch)"""
         try:
@@ -196,14 +225,14 @@ class ShellExecutor:
                 cwd=cwd,
                 shell=shell,
                 capture_output=capture,
-                text=True,
+                text=text,
                 check=check,
                 env=env,
                 timeout=timeout
             )
             
             if log_cmd or self.debug_mode:
-                self._log_output(result, log_cmd)
+                self._log_output(result, log_cmd, text)
             
             return result
             
@@ -219,9 +248,15 @@ class ShellExecutor:
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
-                        print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        if text:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
+                        else:
+                            print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
-                        print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                        if text:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
+                        else:
+                            print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
                 else:
                     self.logger.error(error_msg)
             if check:
