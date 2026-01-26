@@ -1,3 +1,4 @@
+--- FILE: .github/scripts/modules/vps/rsync_client.py ---
 """
 Rsync client for efficient file transfer between local and remote systems
 Handles uploads, downloads, and mirroring operations
@@ -172,14 +173,7 @@ class RsyncClient:
         self.logger.info(f"📥 Downloading remote files to local mirror...")
         
         # Build rsync command for mirroring
-        rsync_cmd = f"""
-        rsync -avzq \  # Added -q for quiet mode
-          --progress \
-          --stats \
-          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -q" \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}' \
-          '{temp_dir}/' 2>/dev/null || true
-        """
+        rsync_cmd = f"rsync -avzq --progress --stats -e \"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -q\" '{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}' '{temp_dir}/' 2>/dev/null || true"
         
         self.logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
         self.logger.info(rsync_cmd.strip())
@@ -275,9 +269,9 @@ class RsyncClient:
         
         # Build SSH options
         if enhanced_ssh:
-            ssh_opts = '-e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -q"'  # Added -q
+            ssh_opts = '-e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -q"'
         else:
-            ssh_opts = f'-e "ssh {self.ssh_opts_str}"' if self.ssh_opts_str else '-q'  # Default to quiet
+            ssh_opts = f'-e "ssh {self.ssh_opts_str}"' if self.ssh_opts_str else '-q'
         
         # Build delete flag
         delete_flag = '--delete' if delete else ''
@@ -285,26 +279,10 @@ class RsyncClient:
         # Build command
         if local_base_dir:
             # Change to base directory and use relative paths
-            cmd = f"""
-            cd '{local_base_dir}' && rsync -avzq \  # Added -q for quiet mode
-              --progress \
-              --stats \
-              {delete_flag} \
-              {ssh_opts} \
-              {file_args_str} \
-              '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
-            """
+            cmd = f"cd '{local_base_dir}' && rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
         else:
             # Use absolute paths
-            cmd = f"""
-            rsync -avzq \  # Added -q for quiet mode
-              --progress \
-              --stats \
-              {delete_flag} \
-              {ssh_opts} \
-              {file_args_str} \
-              '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
-            """
+            cmd = f"rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
         
         return cmd.strip()
     
@@ -337,15 +315,7 @@ class RsyncClient:
         # Build rsync command for directory sync
         delete_flag = '--delete' if delete else ''
         
-        rsync_cmd = f"""
-        rsync -avzq \  # Added -q for quiet mode
-          --progress \
-          --stats \
-          {delete_flag} \
-          -e "ssh {self.ssh_opts_str}" \
-          '{local_dir}/' \
-          '{self.vps_user}@{self.vps_host}:{remote_target}/'
-        """
+        rsync_cmd = f"rsync -avzq --progress --stats {delete_flag} -e \"ssh {self.ssh_opts_str}\" '{local_dir}/' '{self.vps_user}@{self.vps_host}:{remote_target}/'"
         
         self.logger.info(f"Syncing directory {local_dir} to {remote_target}")
         self.logger.debug(f"RSYNC command: {rsync_cmd.strip()}")

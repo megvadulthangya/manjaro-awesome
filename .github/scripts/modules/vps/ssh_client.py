@@ -1,3 +1,4 @@
+--- FILE: .github/scripts/modules/vps/ssh_client.py ---
 """
 SSH client for remote VPS operations
 Handles SSH connections, file operations, and remote command execution
@@ -262,27 +263,22 @@ class SSHClient:
             )
             
             if result.returncode == 0:
-                # Filter out non-filename lines (MOTD, warnings, etc.)
+                # Very relaxed filtering - only exclude empty lines and clear welcome messages
                 files = []
-                for line in result.stdout.splitlines():
+                for line in result.stdout.strip().splitlines():
                     line = line.strip()
                     if not line:
                         continue
                     
-                    # Skip common non-filename patterns
-                    if any(x in line.lower() for x in [
-                        'welcome', 'last login', 'system information',
-                        'running', 'uptime', 'memory', 'disk', 'motd',
-                        'warnings', 'secrets', 'do not share'
-                    ]):
-                        self.logger.debug(f"Skipping non-filename line: {line[:50]}...")
+                    # Only exclude lines that are clearly NOT package files
+                    if line.startswith("Welcome") or line.startswith("Last login") or "system information" in line.lower():
                         continue
                     
-                    # Only include lines that look like file paths
-                    if '/' in line and (line.endswith('.pkg.tar.zst') or line.endswith('.pkg.tar.xz')):
+                    # If it looks like a file path with package extension, include it
+                    if '.pkg.tar.' in line:
                         files.append(line)
                 
-                self.logger.info(f"✅ Found {len(files)} valid remote files (filtered)")
+                self.logger.info(f"✅ Found {len(files)} remote files")
                 return files
             else:
                 self.logger.warning(f"⚠️ Failed to list remote files: {result.stderr[:200]}")
@@ -331,24 +327,22 @@ class SSHClient:
                 self.logger.info("No files found on VPS")
                 return {}
             
-            # Filter out non-filename lines
+            # Very relaxed filtering - include all lines that look like file paths
             valid_files = []
             for line in vps_files_raw.splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 
-                # Skip non-filename lines
-                if any(x in line.lower() for x in [
-                    'welcome', 'last login', 'system', 'uptime',
-                    'memory', 'disk', 'motd', 'warning', 'secret'
-                ]):
+                # Skip only obvious welcome messages
+                if line.startswith("Welcome") or line.startswith("Last login"):
                     continue
                 
+                # Include any line that looks like a file path
                 if '/' in line and ('.pkg.tar.' in line or '.db' in line or '.sig' in line):
                     valid_files.append(line)
             
-            self.logger.info(f"Found {len(valid_files)} valid files on VPS (filtered)")
+            self.logger.info(f"Found {len(valid_files)} valid files on VPS")
             
             # Convert to filename: path dictionary
             inventory = {}

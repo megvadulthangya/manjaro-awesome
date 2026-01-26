@@ -1,3 +1,4 @@
+--- FILE: .github/scripts/modules/common/shell_executor.py ---
 """
 Shell command execution with comprehensive logging, timeout, and debug mode support
 Extracted from PackageBuilder._run_cmd with enhanced features
@@ -160,14 +161,20 @@ class ShellExecutor:
         if value is None:
             return ""
         elif isinstance(value, str):
-            return value
+            # Clean string: strip whitespace and ensure no binary data
+            cleaned = value.strip()
+            # Remove any null bytes or control characters that might indicate binary data
+            cleaned = ''.join(char for char in cleaned if ord(char) >= 32 or char == '\n' or char == '\t')
+            return cleaned
         elif isinstance(value, bytes):
             try:
-                return value.decode('utf-8', errors='ignore')
+                decoded = value.decode('utf-8', errors='ignore')
+                return decoded.strip()
             except:
-                return str(value)
+                # If decoding fails, return safe string representation
+                return str(value)[:1000].strip()
         else:
-            return str(value)
+            return str(value).strip()
     
     def _run_as_user(
         self,
@@ -200,7 +207,7 @@ class ShellExecutor:
             
             result = subprocess.run(sudo_cmd, **subprocess_kwargs_copy)
             
-            # Ensure stdout/stderr are strings
+            # Ensure stdout/stderr are clean strings
             if hasattr(result, 'stdout') and result.stdout is not None:
                 result.stdout = self._ensure_string(result.stdout)
             
@@ -219,7 +226,7 @@ class ShellExecutor:
             self.logger.error(error_msg)
             raise
         except subprocess.CalledProcessError as e:
-            # Ensure stdout/stderr are strings for the exception
+            # Ensure stdout/stderr are clean strings for the exception
             if hasattr(e, 'stdout') and e.stdout is not None:
                 e.stdout = self._ensure_string(e.stdout)
             
@@ -258,7 +265,7 @@ class ShellExecutor:
         try:
             result = subprocess.run(cmd, **subprocess_kwargs)
             
-            # Ensure stdout/stderr are strings
+            # Ensure stdout/stderr are clean strings
             if hasattr(result, 'stdout') and result.stdout is not None:
                 result.stdout = self._ensure_string(result.stdout)
             
@@ -277,7 +284,7 @@ class ShellExecutor:
             self.logger.error(error_msg)
             raise
         except subprocess.CalledProcessError as e:
-            # Ensure stdout/stderr are strings for the exception
+            # Ensure stdout/stderr are clean strings for the exception
             if hasattr(e, 'stdout') and e.stdout is not None:
                 e.stdout = self._ensure_string(e.stdout)
             
