@@ -6,6 +6,7 @@ VPS file list is the ONLY source of truth
 import os
 import sys
 import time
+import re
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
@@ -167,9 +168,9 @@ class PackageBuilder:
             self.local_packages, self.aur_packages = self.config_loader.get_package_lists()
         return self.local_packages, self.aur_packages
     
-    def _get_aur_version(self, pkg_name: str) -> Optional[Tuple[str, str, str]]:
+    def _get_aur_version_with_git_fix(self, pkg_name: str) -> Optional[Tuple[str, str, str]]:
         """
-        Get AUR package version WITHOUT checking local directory
+        Get AUR package version with GIT VERSION FIX
         
         Args:
             pkg_name: Package name
@@ -212,7 +213,62 @@ class PackageBuilder:
             return None
         
         try:
-            # Extract version from SRCINFO
+            # For git packages, we need to generate the real version
+            # by checking the PKGBUILD or running makepkg --printsrcinfo
+            pkgbuild_path = pkg_dir / "PKGBUILD"
+            
+            if pkgbuild_path.exists():
+                # Read PKGBUILD to check if it's a git package
+                with open(pkgbuild_path, 'r') as f:
+                    pkgbuild_content = f.read()
+                
+                # Check if this is a git package
+                is_git_package = '_git' in pkg_name or '-git' in pkg_name or 'git+' in pkgbuild_content
+                
+                if is_git_package:
+                    self.logger.debug(f"Detected git package: {pkg_name}")
+                    
+                    # For git packages, run makepkg --printsrcinfo to get real version
+                    # This resolves git commit hashes to actual versions
+                    try:
+                        result = self.shell_executor.run(
+                            ['makepkg', '--printsrcinfo'],
+                            cwd=pkg_dir,
+                            capture=True,
+                            text=True,
+                            check=False,
+                            log_cmd=False
+                        )
+                        
+                        if result.returncode == 0 and result.stdout:
+                            # Parse the output to extract version
+                            lines = result.stdout.strip().split('\n')
+                            pkgver = None
+                            pkgrel = None
+                            epoch = None
+                            
+                            for line in lines:
+                                line = line.strip()
+                                if '=' in line:
+                                    key, value = line.split('=', 1)
+                                    key = key.strip()
+                                    value = value.strip()
+                                    
+                                    if key == 'pkgver':
+                                        pkgver = value
+                                    elif key == 'pkgrel':
+                                        pkgrel = value
+                                    elif key == 'epoch':
+                                        epoch = value
+                            
+                            if pkgver and pkgrel:
+                                self.logger.info(f"✅ Git package version resolved: {pkgver}-{pkgrel}")
+                                shutil.rmtree(pkg_dir, ignore_errors=True)
+                                return pkgver, pkgrel, epoch
+                    except Exception as e:
+                        self.logger.warning(f"Could not get git version via makepkg: {e}")
+            
+            # Standard extraction for non-git packages
             pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
             
             # Clean up immediately
@@ -277,7 +333,7 @@ class PackageBuilder:
     
     def _build_aur_packages_server_first(self) -> None:
         """
-        Build AUR packages using SERVER-FIRST logic
+        Build AUR packages using SERVER-FIRST logic with GIT VERSION FIX
         """
         if not self.aur_packages:
             self.logger.info("No AUR packages to build")
@@ -288,8 +344,8 @@ class PackageBuilder:
         for pkg_name in self.aur_packages:
             self.logger.info(f"\n--- Processing AUR: {pkg_name} ---")
             
-            # Get version from AUR (fresh clone)
-            version_info = self._get_aur_version(pkg_name)
+            # Get version from AUR (with git version fix)
+            version_info = self._get_aur_version_with_git_fix(pkg_name)
             if not version_info:
                 self.build_state.add_failed(
                     pkg_name,
@@ -385,13 +441,14 @@ class PackageBuilder:
                     error_message="Local build failed"
                 )
     
-    def _cleanup_old_versions_on_server(self, pkg_name: str, new_version: str):
+    def _cleanup_old_versions_on_server(self, pkg_name: str, keep_version: str):
         """
-        Cleanup old versions of package from server
+        SAFE CLEANUP: Remove old versions of package from server
+        but KEEP the specified version
         
         Args:
             pkg_name: Package name
-            new_version: New version to keep
+            keep_version: Version to keep (newly built/adopted)
         """
         self.logger.info(f"🧹 Cleaning up old versions of {pkg_name} from server...")
         
@@ -413,21 +470,31 @@ class PackageBuilder:
             
             remote_pkg_name, remote_version, architecture = parsed
             
-            # Check if it's the same package
+            # Check if it's the same package (case-insensitive)
             if remote_pkg_name.lower() == pkg_name.lower():
-                # Check if it's NOT the new version
-                if remote_version != new_version:
+                # Check if it's NOT the version we want to keep
+                if not self.version_tracker._versions_match(remote_version, keep_version):
                     files_to_delete.append(file_path)
-                    self.logger.debug(f"🗑️ Marking for deletion: {filename} (old version)")
+                    self.logger.debug(f"🗑️ Marking for deletion: {filename} (old version: {remote_version})")
+                else:
+                    self.logger.debug(f"✅ Keeping: {filename} (current version: {remote_version})")
         
-        # Delete old versions
+        # SAFETY CHECK: Don't delete if we would delete ALL versions
         if files_to_delete:
-            # Delete in batches
-            batch_size = 10
-            for i in range(0, len(files_to_delete), batch_size):
-                batch = files_to_delete[i:i + batch_size]
-                if self.ssh_client.delete_remote_files(batch):
-                    self.logger.info(f"✅ Deleted {len(batch)} old version(s) of {pkg_name}")
+            # Check if we're keeping at least one version
+            keeping_count = len([f for f in remote_files if Path(f).name not in [Path(d).name for d in files_to_delete]])
+            
+            if keeping_count > 0:
+                # Delete in batches (safety)
+                batch_size = 5
+                for i in range(0, len(files_to_delete), batch_size):
+                    batch = files_to_delete[i:i + batch_size]
+                    if self.ssh_client.delete_remote_files(batch):
+                        self.logger.info(f"✅ Deleted {len(batch)} old version(s) of {pkg_name}")
+            else:
+                self.logger.warning(f"⚠️ Safety check failed: Would delete ALL versions of {pkg_name}, skipping cleanup")
+        else:
+            self.logger.info(f"ℹ️ No old versions of {pkg_name} to clean up")
     
     def _update_server_database(self) -> bool:
         """
@@ -523,7 +590,7 @@ class PackageBuilder:
             self.logger.info("\n🔏 Signing database files with GPG...")
             
             for db_file in downloaded_files:
-                if db_file.suffix in ['.db', '.files']:
+                if db_file.suffix in ['.db', '.files'] or '.db.' in db_file.name or '.files.' in db_file.name:
                     # Create detached signature
                     sig_file = db_file.with_suffix(db_file.suffix + '.sig')
                     
@@ -664,7 +731,7 @@ class PackageBuilder:
             self.logger.info("STEP 4: SERVER-FIRST PACKAGE PROCESSING")
             self.logger.info("=" * 60)
             
-            # Process AUR packages (server-first logic)
+            # Process AUR packages (server-first logic with git fix)
             self._build_aur_packages_server_first()
             
             # Process local packages (server-first logic)
@@ -716,7 +783,8 @@ class PackageBuilder:
             self.logger.info(f"Total built:     {summary['built']}")
             self.logger.info(f"Total adopted:   {summary['skipped']}")
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
-            self.logger.info(f"Architecture:    Server-First")
+            self.logger.info(f"Git version fix: ✅ Implemented")
+            self.logger.info(f"Cleanup safety:  ✅ Version-aware")
             
             # State summary
             state_summary = self.version_tracker.get_state_summary()

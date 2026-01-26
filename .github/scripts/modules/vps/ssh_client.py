@@ -42,6 +42,55 @@ class SSHClient:
         # Add quiet flag to SSH options to suppress MOTD
         self.ssh_options_with_quiet = self.ssh_options + ["-q"]
     
+    def delete_remote_files(self, file_list: List[str]) -> bool:
+        """
+        Delete remote files on VPS
+        
+        Args:
+            file_list: List of full remote paths to delete
+        
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        if not file_list:
+            self.logger.debug("No files to delete")
+            return True
+        
+        self.logger.info(f"🗑️ Deleting {len(file_list)} remote file(s)...")
+        
+        # Extract just filenames from full paths
+        filenames = []
+        for file_path in file_list:
+            filename = Path(file_path).name
+            filenames.append(filename)
+        
+        # Build delete command with proper escaping
+        filenames_str = ' '.join([f"'{f}'" for f in filenames])
+        remote_cmd = f"cd {self.remote_dir} && rm -f {filenames_str}"
+        
+        # Use string command with shell=True
+        ssh_cmd = f"ssh -q {self.vps_user}@{self.vps_host} \"{remote_cmd}\""
+        
+        try:
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=True,
+                log_cmd=False
+            )
+            
+            if result.returncode == 0:
+                self.logger.info(f"✅ Deleted {len(file_list)} file(s) from VPS")
+                return True
+            else:
+                self.logger.warning(f"⚠️ Failed to delete some files: {result.stderr[:200]}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error deleting remote files: {e}")
+            return False
+    
     def setup_ssh_config(self, ssh_key: Optional[str] = None) -> bool:
         """
         Setup SSH config file for builder user
