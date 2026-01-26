@@ -3,7 +3,6 @@ Main orchestrator for package builder system
 Coordinates all modules to execute the complete build workflow
 """
 
-
 import os
 import sys
 import time
@@ -184,58 +183,34 @@ class PackageBuilder:
         Returns:
             Tuple of (decision, remote_version)
         """
-        # Initialize remote_version to avoid UnboundLocalError
-        remote_version = None
+        self.logger.info(f"🔍 Checking remote status for {pkg_name} ({local_version})...")
         
-        # Check if package is in local state
-        state_packages = self.version_tracker.state.get("packages", {})
-        if pkg_name in state_packages:
-            stored_package = state_packages[pkg_name]
-            stored_version = stored_package.get("version")
-            
-            if stored_version == local_version:
-                # Verify integrity via SSH
-                self.logger.debug(f"Version match for {pkg_name}, verifying integrity")
-                
-                # Get remote file path
-                remote_file = self._get_remote_file_path(pkg_name, stored_version)
-                
-                if remote_file and self.ssh_client.file_exists(remote_file):
-                    current_hash = self.ssh_client.get_remote_hash(remote_file)
-                    stored_hash = stored_package.get("hash")
-                    
-                    if current_hash and current_hash == stored_hash:
-                        self.logger.info(f"✅ {pkg_name}: Integrity verified, skipping")
-                        return "SKIP", stored_version
-                    else:
-                        self.logger.warning(f"⚠️ {pkg_name}: Hash mismatch, rebuilding")
-                        return "BUILD", stored_version
-                else:
-                    self.logger.info(f"ℹ️ {pkg_name}: File missing on VPS, rebuilding")
-                    return "BUILD", stored_version
-            else:
-                self.logger.info(f"🔄 {pkg_name}: Version mismatch (local: {local_version}, stored: {stored_version})")
-                return "BUILD", stored_version
+        # Check if package with this exact version exists on remote
+        found, remote_version, remote_hash = self.version_tracker.is_package_on_remote(pkg_name, local_version)
         
-        # Package not in local state - use enhanced adoption logic
-        self.logger.info(f"🔍 {pkg_name}: Not in state, checking VPS with enhanced discovery...")
+        if found and remote_version:
+            self.logger.info(f"✅ [ADOPT] Found {pkg_name} {remote_version} on VPS. Skipping build and updating local state.")
+            return "SKIP", remote_version
         
-        # Use enhanced discovery and adoption
+        # Check if any version of this package exists on remote
         adoption_result = self.version_tracker.discover_and_adopt_remote_packages(pkg_name)
         
         if adoption_result:
             remote_version, remote_hash = adoption_result
-            
-            # Compare with local version
-            if remote_version == local_version:
-                self.logger.info(f"✅ {pkg_name}: Adopted and matches local, skipping")
-                return "SKIP", remote_version
+            # Compare versions if we have a local version
+            if local_version:
+                if remote_version == local_version:
+                    self.logger.info(f"✅ [ADOPT] Package {pkg_name} version {remote_version} already on VPS - skipping build")
+                    return "SKIP", remote_version
+                else:
+                    self.logger.info(f"🔄 Package {pkg_name}: remote has {remote_version}, building {local_version}")
+                    return "BUILD", remote_version
             else:
-                self.logger.info(f"🔄 {pkg_name}: Adopted but version differs, building")
+                self.logger.info(f"ℹ️ Found {pkg_name} on VPS but no local version to compare")
                 return "BUILD", remote_version
         
-        # Not found anywhere
-        self.logger.info(f"📦 {pkg_name}: Not found on VPS, building")
+        # Package not found on remote at all
+        self.logger.info(f"📦 Package {pkg_name} not found on VPS, will build")
         return "BUILD", None
     
     def _get_remote_file_path(self, pkg_name: str, version: str) -> Optional[str]:
@@ -751,6 +726,7 @@ class PackageBuilder:
             self.logger.info(f"Remote Discovery:✅ Explicit ls command with debug output")
             self.logger.info(f"Architecture:    ✅ Handles -x86_64 and -any suffixes")
             self.logger.info(f"Dependency Sync: ✅ pacman -Sy run BEFORE makepkg")
+            self.logger.info(f"Version Matching:✅ Fixed filename parsing with architecture support")
             self.logger.info("=" * 60)
             
             return 0

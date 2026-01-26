@@ -76,6 +76,73 @@ class VersionTracker:
             self.logger.error(f"Failed to save state: {e}")
             return False
     
+    def is_package_on_remote(self, pkg_name: str, version: str) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Check if package with specific version exists on remote server
+        
+        Args:
+            pkg_name: Package name (e.g., 'libinput-gestures')
+            version: Package version (e.g., '2.81-1')
+        
+        Returns:
+            Tuple of (found, remote_version, remote_hash) or (False, None, None)
+        """
+        self.logger.debug(f"Checking if {pkg_name} version {version} exists on remote...")
+        
+        # Get remote file list
+        remote_files = self.ssh_client.get_remote_file_list()
+        
+        if not remote_files:
+            self.logger.debug(f"No remote files found")
+            return False, None, None
+        
+        # Normalize package name for matching (case-insensitive)
+        pkg_name_lower = pkg_name.lower()
+        
+        for file_path in remote_files:
+            filename = Path(file_path).name
+            self.logger.debug(f"Checking remote file: {filename}")
+            
+            # Parse filename to extract name, version, and architecture
+            parsed = self._parse_package_filename_with_arch(filename)
+            if not parsed:
+                continue
+            
+            remote_pkg_name, remote_version, architecture = parsed
+            remote_pkg_name_lower = remote_pkg_name.lower()
+            
+            # Check if package name matches (case-insensitive)
+            if remote_pkg_name_lower == pkg_name_lower:
+                # Check if version matches (including epoch handling)
+                if self._versions_match(remote_version, version):
+                    self.logger.info(f"✅ Found matching package on remote: {pkg_name} {version}")
+                    
+                    # Get hash from remote file
+                    remote_hash = self.ssh_client.get_remote_hash(file_path)
+                    
+                    # Register as adopted
+                    self.register_built_package(pkg_name, version, remote_hash)
+                    
+                    return True, remote_version, remote_hash
+        
+        self.logger.debug(f"Package {pkg_name} version {version} not found in remote files")
+        return False, None, None
+    
+    def _versions_match(self, version1: str, version2: str) -> bool:
+        """Check if two version strings match (handles epoch and architecture)"""
+        # Normalize versions by removing epoch if it's 0
+        def normalize_version(v: str) -> str:
+            if ':' in v:
+                epoch, rest = v.split(':', 1)
+                if epoch == '0':
+                    return rest
+            return v
+        
+        v1_norm = normalize_version(version1)
+        v2_norm = normalize_version(version2)
+        
+        return v1_norm == v2_norm
+    
     def discover_and_adopt_remote_packages(self, pkg_name: str) -> Optional[Tuple[str, Optional[str]]]:
         """
         Enhanced adoption logic: Check remote server for package and adopt if found
@@ -210,17 +277,19 @@ class VersionTracker:
         if "packages" not in self.state:
             self.state["packages"] = {}
         
+        source = "adopted" if hash_value is not None else "built"
+        
         self.state["packages"][pkg_name] = {
             "version": version,
             "hash": hash_value,
             "last_updated": datetime.now().isoformat(),
-            "source": "built" if hash_value is None else "adopted"
+            "source": source
         }
         
         # Save state
         self.save_state()
         
-        self.logger.info(f"📝 Registered built package: {pkg_name} ({version})")
+        self.logger.info(f"📝 Registered {source} package: {pkg_name} ({version})")
     
     def register_target_version(self, pkg_name: str, target_version: str) -> None:
         """
