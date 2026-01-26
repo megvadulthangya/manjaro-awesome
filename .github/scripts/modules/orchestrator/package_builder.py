@@ -64,7 +64,6 @@ class PackageBuilder:
         
         # Phase 2: State management and VPS communication
         self.build_state = BuildState(self.logger)
-        self.version_tracker = VersionTracker(self.logger)
         
         # VPS clients
         self.ssh_client = SSHClient(self.config, self.shell_executor, self.logger)
@@ -73,6 +72,14 @@ class PackageBuilder:
         # Setup SSH configuration
         ssh_key = self.config.get('ssh_key', '')
         self.ssh_client.setup_ssh_config(ssh_key)
+        
+        # Version tracker with JSON state
+        self.version_tracker = VersionTracker(
+            repo_root=self.repo_root,
+            ssh_client=self.ssh_client,
+            shell_executor=self.shell_executor,
+            logger=self.logger
+        )
         
         # Phase 3: Build and repository logic
         self.version_manager = VersionManager(self.shell_executor, self.logger)
@@ -119,10 +126,7 @@ class PackageBuilder:
         self.local_packages: List[str] = []
         self.aur_packages: List[str] = []
         
-        # Remote files cache
-        self.remote_files: List[str] = []
-        
-        self.logger.info("✅ PackageBuilder initialized with all modules")
+        self.logger.info("✅ PackageBuilder initialized with JSON state tracking")
     
     def _get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from configuration"""
@@ -134,53 +138,8 @@ class PackageBuilder:
         """Check repository existence and state on VPS"""
         return self.ssh_client.check_repository_exists()
     
-    def _mirror_remote_packages(self) -> bool:
-        """Mirror remote packages to local directory"""
-        mirror_temp_dir = Path(self.config.get('mirror_temp_dir', '/tmp/repo_mirror'))
-        output_dir = Path(self.config.get('output_dir'))
-        
-        self.logger.info("🔄 Mirroring remote packages locally...")
-        return self.rsync_client.mirror_remote(
-            remote_pattern="*.pkg.tar.*",
-            local_dir=output_dir,
-            temp_dir=mirror_temp_dir
-        )
-    
-    def _get_remote_version(self, pkg_name: str) -> Optional[str]:
-        """
-        Get the version of a package from remote server using SRCINFO-based extraction
-        
-        Note: This replicates the original logic from PackageBuilder.get_remote_version
-        """
-        if not self.remote_files:
-            return None
-        
-        # Look for any file with this package name
-        for filename in self.remote_files:
-            if filename.startswith(f"{pkg_name}-"):
-                # Extract version from filename
-                base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-                parts = base.split('-')
-                
-                # Find where the package name ends
-                for i in range(len(parts) - 2, 0, -1):
-                    possible_name = '-'.join(parts[:i])
-                    if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
-                        if len(parts) >= i + 3:
-                            version_part = parts[i]
-                            release_part = parts[i+1]
-                            if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
-                                epoch_part = parts[i]
-                                version_part = parts[i+1]
-                                release_part = parts[i+2]
-                                return f"{epoch_part}:{version_part}-{release_part}"
-                            else:
-                                return f"{version_part}-{release_part}"
-        
-        return None
-    
     def _build_aur_packages(self) -> None:
-        """Build all AUR packages"""
+        """Build all AUR packages using JSON state tracking"""
         if not self.aur_packages:
             self.logger.info("No AUR packages to build")
             return
@@ -190,13 +149,42 @@ class PackageBuilder:
         for pkg_name in self.aur_packages:
             self.logger.info(f"\n--- Processing AUR: {pkg_name} ---")
             
-            # Get remote version for comparison
-            remote_version = self._get_remote_version(pkg_name)
+            # Get package directory and extract version
+            aur_dir = Path(self.config.get('aur_build_dir', 'build_aur'))
+            pkg_dir = aur_dir / pkg_name
+            
+            if not pkg_dir.exists():
+                self.logger.info(f"ℹ️ {pkg_name}: No local directory, will clone from AUR")
+                local_version = None
+            else:
+                try:
+                    pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
+                    local_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
+                except Exception as e:
+                    self.logger.warning(f"Could not extract local version for {pkg_name}: {e}")
+                    local_version = None
+            
+            # Check package status using JSON state
+            if local_version:
+                decision, remote_version = self.version_tracker.check_package_status(pkg_name, local_version)
+                
+                if decision == "SKIP":
+                    self.logger.info(f"✅ {pkg_name} already up to date - skipping")
+                    self.build_state.add_skipped(pkg_name, remote_version or local_version, is_aur=True, reason="up-to-date")
+                    continue
+                else:
+                    self.logger.info(f"🔄 {pkg_name}: {local_version} > {remote_version or 'not on VPS'}")
+            else:
+                self.logger.info(f"📦 {pkg_name}: No local version, will clone and build")
             
             # Build package
             success = self.aur_builder.build(pkg_name, remote_version)
             
-            if not success:
+            if success:
+                # Update state with built version
+                if local_version:
+                    self.version_tracker.update_package_state(pkg_name, local_version)
+            else:
                 self.build_state.add_failed(
                     pkg_name,
                     remote_version or "unknown",
@@ -205,7 +193,7 @@ class PackageBuilder:
                 )
     
     def _build_local_packages(self) -> None:
-        """Build all local packages"""
+        """Build all local packages using JSON state tracking"""
         if not self.local_packages:
             self.logger.info("No local packages to build")
             return
@@ -215,13 +203,47 @@ class PackageBuilder:
         for pkg_name in self.local_packages:
             self.logger.info(f"\n--- Processing Local: {pkg_name} ---")
             
-            # Get remote version for comparison
-            remote_version = self._get_remote_version(pkg_name)
+            # Get package directory and extract version
+            pkg_dir = self.repo_root / pkg_name
+            
+            if not pkg_dir.exists():
+                self.logger.error(f"Package directory not found: {pkg_name}")
+                self.build_state.add_failed(
+                    pkg_name,
+                    "unknown",
+                    is_aur=False,
+                    error_message="Directory not found"
+                )
+                continue
+            
+            try:
+                pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
+                local_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
+            except Exception as e:
+                self.logger.error(f"Failed to extract version for {pkg_name}: {e}")
+                local_version = None
+            
+            # Check package status using JSON state
+            if local_version:
+                decision, remote_version = self.version_tracker.check_package_status(pkg_name, local_version)
+                
+                if decision == "SKIP":
+                    self.logger.info(f"✅ {pkg_name} already up to date - skipping")
+                    self.build_state.add_skipped(pkg_name, remote_version or local_version, is_aur=False, reason="up-to-date")
+                    continue
+                else:
+                    self.logger.info(f"🔄 {pkg_name}: {local_version} > {remote_version or 'not on VPS'}")
+            else:
+                self.logger.info(f"📦 {pkg_name}: No local version, will build")
             
             # Build package
             success = self.local_builder.build(pkg_name, remote_version)
             
-            if not success:
+            if success:
+                # Update state with built version
+                if local_version:
+                    self.version_tracker.update_package_state(pkg_name, local_version)
+            else:
                 self.build_state.add_failed(
                     pkg_name,
                     remote_version or "unknown",
@@ -289,7 +311,6 @@ class PackageBuilder:
     def _apply_repository_state(self, exists: bool, has_packages: bool):
         """
         Apply repository state with proper SigLevel based on discovery
-        Replicates original logic from PackageBuilder._apply_repository_state
         """
         pacman_conf = Path("/etc/pacman.conf")
         
@@ -411,16 +432,24 @@ class PackageBuilder:
         
         return upload_success
     
+    def _sync_state_to_git(self) -> bool:
+        """Sync JSON state to git repository"""
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("SYNCING JSON STATE TO GIT")
+        self.logger.info("=" * 60)
+        
+        return self.version_tracker.sync_state_to_git()
+    
     def run(self) -> int:
         """
-        Main execution workflow
+        Main execution workflow with JSON state tracking
         
         Returns:
             Exit code (0 for success, 1 for failure)
         """
         try:
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("🚀 MANJARO PACKAGE BUILDER (MODULAR ARCHITECTURE)")
+            self.logger.info("🚀 MANJARO PACKAGE BUILDER (JSON STATE TRACKING)")
             self.logger.info("=" * 60)
             
             # Initial setup
@@ -428,7 +457,11 @@ class PackageBuilder:
             self.logger.info(f"Repository root: {self.repo_root}")
             self.logger.info(f"Repository name: {self.config.get('repo_name')}")
             self.logger.info(f"Output directory: {self.config.get('output_dir')}")
-            self.logger.info(f"PACKAGER identity: {self.config.get('packager_id')}")
+            self.logger.info(f"State file: {self.version_tracker.state_file}")
+            
+            # Show state summary
+            state_summary = self.version_tracker.get_state_summary()
+            self.logger.info(f"📊 State summary: {state_summary['total_packages']} packages tracked")
             
             # STEP 0: Initialize GPG FIRST if enabled
             self.logger.info("\n" + "=" * 60)
@@ -457,28 +490,9 @@ class PackageBuilder:
             # Ensure remote directory exists
             self.ssh_client.ensure_directory()
             
-            # STEP 2: List remote packages for version comparison
-            self.remote_files = self.ssh_client.list_remote_files()
-            
-            # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
-            if self.remote_files:
-                self.logger.info("\n" + "=" * 60)
-                self.logger.info("MANDATORY PRECONDITION: Mirroring remote packages locally")
-                self.logger.info("=" * 60)
-                
-                if not self._mirror_remote_packages():
-                    self.logger.error("❌ FAILED to mirror remote packages locally")
-                    self.logger.error("Cannot proceed without local package mirror")
-                    return 1
-            else:
-                self.logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
-            
-            # STEP 3: Check existing database files
-            existing_db_files, missing_db_files = self.database_manager.check_database_files()
-            
-            # Fetch existing database if available
-            if existing_db_files:
-                self.database_manager.fetch_existing_database(existing_db_files)
+            # STEP 2: Check SSH connection
+            if not self.ssh_client.test_connection():
+                self.logger.warning("⚠️ SSH connection test failed, but continuing...")
             
             # Get package lists
             self.local_packages, self.aur_packages = self._get_package_lists()
@@ -488,9 +502,9 @@ class PackageBuilder:
             self.logger.info(f"   AUR packages: {len(self.aur_packages)}")
             self.logger.info(f"   Total packages: {len(self.local_packages) + len(self.aur_packages)}")
             
-            # STEP 4: PACKAGE BUILDING (SRCINFO VERSIONING)
+            # STEP 3: PACKAGE BUILDING (JSON STATE TRACKING)
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 4: PACKAGE BUILDING (SRCINFO VERSIONING)")
+            self.logger.info("STEP 3: PACKAGE BUILDING (JSON STATE TRACKING)")
             self.logger.info("=" * 60)
             
             self._build_aur_packages()
@@ -500,19 +514,10 @@ class PackageBuilder:
             output_dir = Path(self.config.get('output_dir'))
             local_packages = list(output_dir.glob("*.pkg.tar.*"))
             
-            if local_packages or self.remote_files:
+            if local_packages:
                 self.logger.info("\n" + "=" * 60)
-                self.logger.info("STEP 5: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
+                self.logger.info("STEP 4: REPOSITORY DATABASE HANDLING")
                 self.logger.info("=" * 60)
-                
-                # ZERO-RESIDUE FIX: Perform server cleanup BEFORE database generation
-                self.logger.info("\n" + "=" * 60)
-                self.logger.info("🚨 PRE-DATABASE CLEANUP: Removing zombie packages from server")
-                self.logger.info("=" * 60)
-                self.cleanup_manager.cleanup_server()
-                
-                # Final validation before database generation
-                self.cleanup_manager.validate_output_dir()
                 
                 # Generate database with ALL locally available packages
                 if self.database_manager.generate_database():
@@ -524,27 +529,16 @@ class PackageBuilder:
                         ):
                             self.logger.warning("⚠️ Failed to sign repository files, continuing anyway")
                     
-                    # Test SSH connection before upload
-                    if not self.ssh_client.test_connection():
-                        self.logger.warning("SSH test failed, but trying upload anyway...")
-                    
                     # Upload everything (packages + database + signatures)
                     upload_success = self._upload_packages()
-                    
-                    # ZERO-RESIDUE FIX: Perform final server cleanup AFTER upload
-                    if upload_success:
-                        self.logger.info("\n" + "=" * 60)
-                        self.logger.info("🚨 POST-UPLOAD CLEANUP: Final zombie package removal")
-                        self.logger.info("=" * 60)
-                        self.cleanup_manager.cleanup_server()
                     
                     # Clean up GPG temporary directory
                     self.gpg_handler.cleanup()
                     
                     if upload_success:
-                        # STEP 6: Update repository state and sync pacman
+                        # STEP 5: Update repository state and sync pacman
                         self.logger.info("\n" + "=" * 60)
-                        self.logger.info("STEP 6: FINAL REPOSITORY STATE UPDATE")
+                        self.logger.info("STEP 5: FINAL REPOSITORY STATE UPDATE")
                         self.logger.info("=" * 60)
                         
                         # Re-check repository state (it should exist now)
@@ -553,6 +547,12 @@ class PackageBuilder:
                         
                         # Sync pacman databases
                         self._sync_pacman_databases()
+                        
+                        # Save JSON state
+                        self.version_tracker.save_state()
+                        
+                        # STEP 6: Sync state to git
+                        self._sync_state_to_git()
                         
                         self.logger.info("\n✅ Build completed successfully!")
                     else:
@@ -570,13 +570,16 @@ class PackageBuilder:
                 self.logger.info(f"   Local packages failed: {summary['local_failed']}")
                 self.logger.info(f"   Total skipped: {summary['skipped']}")
                 
+                # Save JSON state even if no packages built
+                self.version_tracker.save_state()
+                
+                # Clean up GPG
+                self.gpg_handler.cleanup()
+                
                 if summary['aur_failed'] > 0 or summary['local_failed'] > 0:
                     self.logger.info("⚠️ Some packages failed to build")
                 else:
                     self.logger.info("✅ All packages are up to date or built successfully!")
-                
-                # Clean up GPG even if no packages built
-                self.gpg_handler.cleanup()
             
             # Final statistics
             self.build_state.mark_complete()
@@ -592,9 +595,11 @@ class PackageBuilder:
             self.logger.info(f"Skipped:         {summary['skipped']}")
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             self.logger.info(f"PACKAGER:        {self.config.get('packager_id')}")
-            self.logger.info(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-            self.logger.info(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker.get_target_packages())}")
-            self.logger.info(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker.get_skipped_packages_dict())}")
+            
+            # State summary
+            state_summary = self.version_tracker.get_state_summary()
+            self.logger.info(f"JSON State:      {state_summary['total_packages']} packages tracked")
+            self.logger.info(f"Zero-Download:   ✅ No rsync downloads, using JSON state")
             self.logger.info("=" * 60)
             
             # List built packages
@@ -614,5 +619,9 @@ class PackageBuilder:
             # Ensure GPG cleanup even on failure
             if hasattr(self, 'gpg_handler'):
                 self.gpg_handler.cleanup()
+            
+            # Save state on failure
+            if hasattr(self, 'version_tracker'):
+                self.version_tracker.save_state()
             
             return 1

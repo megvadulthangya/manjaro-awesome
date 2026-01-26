@@ -105,7 +105,7 @@ class SSHClient:
         
         ssh_test_cmd = [
             "ssh",
-            *self.ssh_options_with_quiet,  # Use quiet mode
+            *self.ssh_options_with_quiet,
             f"{self.vps_user}@{self.vps_host}",
             "echo SSH_TEST_SUCCESS"
         ]
@@ -130,6 +130,80 @@ class SSHClient:
         except Exception as e:
             self.logger.error(f"❌ SSH test exception: {e}")
             return False
+    
+    def file_exists(self, remote_path: str) -> bool:
+        """
+        Check if a file exists on remote server
+        
+        Args:
+            remote_path: Full remote path to check
+        
+        Returns:
+            True if file exists
+        """
+        remote_cmd = f"test -f \"{remote_path}\" && echo EXISTS || echo NOT_EXISTS"
+        
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options_with_quiet,
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=False,
+                log_cmd=False
+            )
+            
+            if result.returncode == 0 and "EXISTS" in result.stdout:
+                return True
+            return False
+        except Exception as e:
+            self.logger.warning(f"Could not check file existence {remote_path}: {e}")
+            return False
+    
+    def get_remote_hash(self, remote_path: str) -> Optional[str]:
+        """
+        Get SHA256 hash of remote file
+        
+        Args:
+            remote_path: Full remote path to file
+        
+        Returns:
+            SHA256 hash string or None if failed
+        """
+        remote_cmd = f"sha256sum \"{remote_path}\" 2>/dev/null | cut -d' ' -f1"
+        
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options_with_quiet,
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=False,
+                log_cmd=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                hash_value = result.stdout.strip()
+                if len(hash_value) == 64:  # SHA256 hash length
+                    return hash_value
+                else:
+                    self.logger.warning(f"Invalid hash format for {remote_path}")
+            return None
+        except Exception as e:
+            self.logger.warning(f"Could not get hash for {remote_path}: {e}")
+            return None
     
     def ensure_directory(self) -> bool:
         """
@@ -240,13 +314,13 @@ class SSHClient:
             pattern: File pattern to match
         
         Returns:
-            List of remote file paths (filtered to remove MOTD and non-filename lines)
+            List of remote file paths
         """
         remote_cmd = f"find {self.remote_dir} -maxdepth 1 -type f -name '{pattern}' 2>/dev/null"
         
         ssh_cmd = [
             "ssh",
-            *self.ssh_options_with_quiet,  # Use quiet mode
+            *self.ssh_options_with_quiet,
             f"{self.vps_user}@{self.vps_host}",
             remote_cmd
         ]
@@ -262,19 +336,11 @@ class SSHClient:
             )
             
             if result.returncode == 0:
-                # Very relaxed filtering - only exclude empty lines and clear welcome messages
+                # Clean output - split lines and remove empty
                 files = []
                 for line in result.stdout.strip().splitlines():
                     line = line.strip()
-                    if not line:
-                        continue
-                    
-                    # Only exclude lines that are clearly NOT package files
-                    if line.startswith("Welcome") or line.startswith("Last login") or "system information" in line.lower():
-                        continue
-                    
-                    # If it looks like a file path with package extension, include it
-                    if '.pkg.tar.' in line:
+                    if line and not line.startswith("Welcome") and not line.startswith("Last login"):
                         files.append(line)
                 
                 self.logger.info(f"✅ Found {len(files)} remote files")
@@ -286,126 +352,6 @@ class SSHClient:
         except Exception as e:
             self.logger.error(f"❌ Error listing remote files: {e}")
             return []
-    
-    def get_file_inventory(self) -> Dict[str, str]:
-        """
-        Get complete inventory of all files on VPS
-        
-        Returns:
-            Dictionary of {filename: full_path}
-        """
-        self.logger.info("📋 Getting complete VPS file inventory...")
-        
-        remote_cmd = rf"""
-        # Get all package files, signatures, and database files
-        find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" -o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" -o -name "*.abs.tar.gz" \) 2>/dev/null
-        """
-        
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,  # Use quiet mode
-            f"{self.vps_user}@{self.vps_host}",
-            remote_cmd
-        ]
-        
-        try:
-            result = self.shell_executor.run(
-                ssh_cmd,
-                capture=True,
-                check=False,
-                timeout=30,
-                log_cmd=False
-            )
-            
-            if result.returncode != 0:
-                self.logger.warning(f"Could not list VPS files: {result.stderr[:200]}")
-                return {}
-            
-            vps_files_raw = result.stdout.strip()
-            if not vps_files_raw:
-                self.logger.info("No files found on VPS")
-                return {}
-            
-            # Very relaxed filtering - include all lines that look like file paths
-            valid_files = []
-            for line in vps_files_raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Skip only obvious welcome messages
-                if line.startswith("Welcome") or line.startswith("Last login"):
-                    continue
-                
-                # Include any line that looks like a file path
-                if '/' in line and ('.pkg.tar.' in line or '.db' in line or '.sig' in line):
-                    valid_files.append(line)
-            
-            self.logger.info(f"Found {len(valid_files)} valid files on VPS")
-            
-            # Convert to filename: path dictionary
-            inventory = {}
-            for file_path in valid_files:
-                filename = Path(file_path).name
-                inventory[filename] = file_path
-            
-            return inventory
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error getting VPS file inventory: {e}")
-            return {}
-    
-    def delete_remote_files(self, files_to_delete: List[str]) -> bool:
-        """
-        Delete files from remote server
-        
-        Args:
-            files_to_delete: List of full paths to delete
-        
-        Returns:
-            True if deletion successful
-        """
-        if not files_to_delete:
-            return True
-        
-        # Quote each filename for safety
-        quoted_files = [f"'{f}'" for f in files_to_delete]
-        files_to_delete_str = ' '.join(quoted_files)
-        
-        delete_cmd = f"rm -fv {files_to_delete_str}"
-        
-        self.logger.info(f"🚀 Deleting {len(files_to_delete)} files from remote server")
-        
-        ssh_cmd = [
-            "ssh",
-            *self.ssh_options_with_quiet,  # Use quiet mode
-            f"{self.vps_user}@{self.vps_host}",
-            delete_cmd
-        ]
-        
-        try:
-            result = self.shell_executor.run(
-                ssh_cmd,
-                capture=True,
-                check=False,
-                timeout=60,
-                log_cmd=True
-            )
-            
-            if result.returncode == 0:
-                self.logger.info(f"✅ Deletion successful for {len(files_to_delete)} files")
-                if result.stdout:
-                    for line in result.stdout.splitlines():
-                        if "removed" in line.lower() or "deleted" in line.lower():
-                            self.logger.debug(f"   {line}")
-                return True
-            else:
-                self.logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"❌ Error during deletion: {e}")
-            return False
     
     def execute_remote_command(self, command: str, timeout: int = 30) -> Tuple[bool, str]:
         """
@@ -420,7 +366,7 @@ class SSHClient:
         """
         ssh_cmd = [
             "ssh",
-            *self.ssh_options_with_quiet,  # Use quiet mode
+            *self.ssh_options_with_quiet,
             f"{self.vps_user}@{self.vps_host}",
             command
         ]
