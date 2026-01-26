@@ -36,6 +36,10 @@ class RsyncClient:
         self.remote_dir = config.get('remote_dir', '')
         self.ssh_options = config.get('ssh_options', [])
         
+        # Add quiet flag to suppress MOTD/banner messages
+        if '-q' not in self.ssh_options:
+            self.ssh_options = ['-q'] + self.ssh_options
+        
         # Build SSH options string for rsync
         self.ssh_opts_str = ' '.join(self.ssh_options)
     
@@ -170,12 +174,12 @@ class RsyncClient:
         # Use rsync to download files from server
         self.logger.info(f"📥 Downloading remote files to local mirror...")
         
-        # Build rsync command for mirroring
+        # Build rsync command for mirroring with quiet flag
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
-          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
+          -e "ssh -q -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}' \
           '{temp_dir}/' 2>/dev/null || true
         """
@@ -272,11 +276,11 @@ class RsyncClient:
         
         file_args_str = ' '.join(file_args)
         
-        # Build SSH options
+        # Build SSH options with quiet flag
         if enhanced_ssh:
-            ssh_opts = '-e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"'
+            ssh_opts = '-e "ssh -q -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"'
         else:
-            ssh_opts = f'-e "ssh {self.ssh_opts_str}"' if self.ssh_opts_str else ''
+            ssh_opts = f'-e "ssh -q {self.ssh_opts_str}"' if self.ssh_opts_str else '-e "ssh -q"'
         
         # Build delete flag
         delete_flag = '--delete' if delete else ''
@@ -309,13 +313,14 @@ class RsyncClient:
     
     def _log_rsync_output(self, result: Any, prefix: str = "RSYNC") -> None:
         """Log rsync output"""
+        # Filter out MOTD/banner messages
         if result.stdout:
             for line in result.stdout.splitlines():
-                if line.strip():
+                if line.strip() and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
                     self.logger.debug(f"{prefix}: {line}")
         if result.stderr:
             for line in result.stderr.splitlines():
-                if line.strip() and "No such file or directory" not in line:
+                if line.strip() and "No such file or directory" not in line and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
                     self.logger.error(f"{prefix} ERR: {line}")
     
     def sync_directories(self, local_dir: Path, remote_subdir: str = "", 
@@ -333,7 +338,7 @@ class RsyncClient:
         """
         remote_target = f"{self.remote_dir}/{remote_subdir}" if remote_subdir else self.remote_dir
         
-        # Build rsync command for directory sync
+        # Build rsync command for directory sync with quiet flag
         delete_flag = '--delete' if delete else ''
         
         rsync_cmd = f"""
@@ -341,7 +346,7 @@ class RsyncClient:
           --progress \
           --stats \
           {delete_flag} \
-          -e "ssh {self.ssh_opts_str}" \
+          -e "ssh -q {self.ssh_opts_str}" \
           '{local_dir}/' \
           '{self.vps_user}@{self.vps_host}:{remote_target}/'
         """

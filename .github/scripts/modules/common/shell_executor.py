@@ -83,21 +83,19 @@ class ShellExecutor:
         if extra_env:
             env.update(extra_env)
         
-        # Handle capture_output parameter (Python 3.7+)
+        # Handle subprocess arguments with proper defaults
         subprocess_kwargs = {
             'cwd': cwd_path,
             'shell': shell,
-            'check': check,
             'env': env,
-            'timeout': timeout
+            'timeout': timeout,
+            'check': check,
+            'capture_output': capture,
+            'text': True,  # Always return strings by default
         }
         
-        # Add any additional kwargs passed by caller
+        # Override defaults with any kwargs provided by caller
         subprocess_kwargs.update(kwargs)
-        
-        # Handle capture parameter (map to capture_output)
-        if 'capture_output' not in subprocess_kwargs:
-            subprocess_kwargs['capture_output'] = capture
         
         # Prepare command based on user
         if user:
@@ -114,45 +112,41 @@ class ShellExecutor:
     
     def _log_output(self, result: subprocess.CompletedProcess, log_cmd: bool) -> None:
         """Log command output based on debug mode"""
-        text = getattr(result, 'text', True)  # Default to True if not specified
+        # Ensure output is string for logging
+        stdout = self._ensure_string(result.stdout)
+        stderr = self._ensure_string(result.stderr)
         
         if self.debug_mode:
-            if text and result.stdout:
-                print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
-            elif result.stdout:
-                print(f"🔧 [DEBUG] STDOUT (bytes):\n{result.stdout[:500]}", flush=True)
-            
-            if text and result.stderr:
-                print(f"🔧 [DEBUG] STDERR:\n{result.stderr}", flush=True)
-            elif result.stderr:
-                print(f"🔧 [DEBUG] STDERR (bytes):\n{result.stderr[:500]}", flush=True)
-            
+            if stdout:
+                print(f"🔧 [DEBUG] STDOUT:\n{stdout}", flush=True)
+            if stderr:
+                print(f"🔧 [DEBUG] STDERR:\n{stderr}", flush=True)
             print(f"🔧 [DEBUG] EXIT CODE: {result.returncode}", flush=True)
         elif log_cmd:
-            if text and result.stdout:
-                self.logger.info(f"STDOUT: {result.stdout[:500]}")
-            elif result.stdout:
-                self.logger.info(f"STDOUT (bytes): {result.stdout[:500]}")
-            
-            if text and result.stderr:
-                self.logger.info(f"STDERR: {result.stderr[:500]}")
-            elif result.stderr:
-                self.logger.info(f"STDERR (bytes): {result.stderr[:500]}")
-            
+            if stdout:
+                self.logger.info(f"STDOUT: {stdout[:500]}")
+            if stderr:
+                self.logger.info(f"STDERR: {stderr[:500]}")
             self.logger.info(f"EXIT CODE: {result.returncode}")
         
         # Critical: If command failed and we're in debug mode, print full output
         if result.returncode != 0 and self.debug_mode:
             print(f"❌ [DEBUG] COMMAND FAILED: {result.cmd if hasattr(result, 'cmd') else 'unknown'}", flush=True)
-            if text and result.stdout and len(result.stdout) > 500:
-                print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
-            elif result.stdout and len(result.stdout) > 500:
-                print(f"❌ [DEBUG] FULL STDOUT (bytes, truncated):\n{result.stdout[:2000]}", flush=True)
-            
-            if text and result.stderr and len(result.stderr) > 500:
-                print(f"❌ [DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
-            elif result.stderr and len(result.stderr) > 500:
-                print(f"❌ [DEBUG] FULL STDERR (bytes, truncated):\n{result.stderr[:2000]}", flush=True)
+            if stdout and len(stdout) > 500:
+                print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{stdout[:2000]}", flush=True)
+            if stderr and len(stderr) > 500:
+                print(f"❌ [DEBUG] FULL STDERR (truncated):\n{stderr[:2000]}", flush=True)
+    
+    def _ensure_string(self, value: Any) -> str:
+        """Ensure value is string, decoding bytes if necessary"""
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            try:
+                return value.decode('utf-8', errors='ignore')
+            except UnicodeDecodeError:
+                return str(value)
+        return str(value)
     
     def _run_as_user(
         self,
@@ -185,6 +179,12 @@ class ShellExecutor:
             
             result = subprocess.run(sudo_cmd, **subprocess_kwargs_copy)
             
+            # Ensure stdout/stderr are strings
+            if isinstance(result.stdout, bytes):
+                result.stdout = self._ensure_string(result.stdout)
+            if isinstance(result.stderr, bytes):
+                result.stderr = self._ensure_string(result.stderr)
+            
             if log_cmd or self.debug_mode:
                 self._log_output(result, log_cmd)
             
@@ -197,22 +197,20 @@ class ShellExecutor:
             self.logger.error(error_msg)
             raise
         except subprocess.CalledProcessError as e:
+            # Ensure exception stdout/stderr are strings
+            if hasattr(e, 'stdout') and isinstance(e.stdout, bytes):
+                e.stdout = self._ensure_string(e.stdout)
+            if hasattr(e, 'stderr') and isinstance(e.stderr, bytes):
+                e.stderr = self._ensure_string(e.stderr)
+            
             if log_cmd or self.debug_mode:
                 error_msg = f"Command failed: {cmd}"
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
-                        text = getattr(e, 'text', True)
-                        if text:
-                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
-                        else:
-                            print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
+                        print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
-                        text = getattr(e, 'text', True)
-                        if text:
-                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
-                        else:
-                            print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
+                        print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                 else:
                     self.logger.error(error_msg)
             if subprocess_kwargs.get('check', True):
@@ -229,6 +227,12 @@ class ShellExecutor:
         try:
             result = subprocess.run(cmd, **subprocess_kwargs)
             
+            # Ensure stdout/stderr are strings
+            if isinstance(result.stdout, bytes):
+                result.stdout = self._ensure_string(result.stdout)
+            if isinstance(result.stderr, bytes):
+                result.stderr = self._ensure_string(result.stderr)
+            
             if log_cmd or self.debug_mode:
                 self._log_output(result, log_cmd)
             
@@ -241,22 +245,20 @@ class ShellExecutor:
             self.logger.error(error_msg)
             raise
         except subprocess.CalledProcessError as e:
+            # Ensure exception stdout/stderr are strings
+            if hasattr(e, 'stdout') and isinstance(e.stdout, bytes):
+                e.stdout = self._ensure_string(e.stdout)
+            if hasattr(e, 'stderr') and isinstance(e.stderr, bytes):
+                e.stderr = self._ensure_string(e.stderr)
+            
             if log_cmd or self.debug_mode:
                 error_msg = f"Command failed: {cmd}"
                 if self.debug_mode:
                     print(f"❌ [DEBUG] {error_msg}", flush=True)
                     if hasattr(e, 'stdout') and e.stdout:
-                        text = getattr(e, 'text', True)
-                        if text:
-                            print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
-                        else:
-                            print(f"❌ [DEBUG] EXCEPTION STDOUT (bytes):\n{e.stdout[:1000]}", flush=True)
+                        print(f"❌ [DEBUG] EXCEPTION STDOUT:\n{e.stdout}", flush=True)
                     if hasattr(e, 'stderr') and e.stderr:
-                        text = getattr(e, 'text', True)
-                        if text:
-                            print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
-                        else:
-                            print(f"❌ [DEBUG] EXCEPTION STDERR (bytes):\n{e.stderr[:1000]}", flush=True)
+                        print(f"❌ [DEBUG] EXCEPTION STDERR:\n{e.stderr}", flush=True)
                 else:
                     self.logger.error(error_msg)
             if subprocess_kwargs.get('check', True):

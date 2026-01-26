@@ -4,7 +4,6 @@ Handles SSH connections, file operations, and remote command execution
 """
 
 import os
-import subprocess
 import shutil
 import logging
 from pathlib import Path
@@ -37,6 +36,10 @@ class SSHClient:
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
         
+        # Add quiet flag to suppress MOTD/banner messages
+        if '-q' not in self.ssh_options:
+            self.ssh_options = ['-q'] + self.ssh_options
+        
         # SSH key path
         self.ssh_key_path = Path("/home/builder/.ssh/id_ed25519")
     
@@ -54,7 +57,7 @@ class SSHClient:
             ssh_dir = Path("/home/builder/.ssh")
             ssh_dir.mkdir(exist_ok=True, mode=0o700)
             
-            # Write SSH config file
+            # Write SSH config file with LogLevel quiet
             config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
@@ -63,6 +66,7 @@ class SSHClient:
   ConnectTimeout 30
   ServerAliveInterval 15
   ServerAliveCountMax 3
+  LogLevel QUIET
 """
             
             config_file = ssh_dir / "config"
@@ -117,12 +121,17 @@ class SSHClient:
                 log_cmd=False
             )
             
-            if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
-                self.logger.info("✅ SSH connection successful")
-                return True
-            else:
-                self.logger.warning(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
-                return False
+            # Filter out non-test output (MOTD, banners)
+            output = result.stdout.strip()
+            if "SSH_TEST_SUCCESS" in output:
+                # Extract just the test success line
+                for line in output.splitlines():
+                    if "SSH_TEST_SUCCESS" in line:
+                        self.logger.info("✅ SSH connection successful")
+                        return True
+            
+            self.logger.warning(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
+            return False
                 
         except Exception as e:
             self.logger.error(f"❌ SSH test exception: {e}")
@@ -167,8 +176,9 @@ class SSHClient:
             
             if result.returncode == 0:
                 self.logger.info("✅ Remote directory verified")
+                # Filter out MOTD/banner messages
                 for line in result.stdout.splitlines():
-                    if line.strip():
+                    if line.strip() and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd']):
                         self.logger.debug(f"REMOTE DIR: {line}")
                 return True
             else:
@@ -200,7 +210,7 @@ class SSHClient:
         fi
         """
         
-        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", *self.ssh_options, remote_cmd]
         
         try:
             result = self.shell_executor.run(
@@ -212,23 +222,23 @@ class SSHClient:
                 log_cmd=False
             )
             
-            if result.returncode == 0:
-                if "REPO_EXISTS_WITH_PACKAGES" in result.stdout:
+            # Filter output for our specific markers
+            output = result.stdout.strip()
+            for line in output.splitlines():
+                line = line.strip()
+                if "REPO_EXISTS_WITH_PACKAGES" in line:
                     self.logger.info("✅ Repository exists on VPS (has package files)")
                     return True, True
-                elif "REPO_EXISTS_WITH_DB" in result.stdout:
+                elif "REPO_EXISTS_WITH_DB" in line:
                     self.logger.info("✅ Repository exists on VPS (has database)")
                     return True, False
-                else:
+                elif "REPO_NOT_FOUND" in line:
                     self.logger.info("ℹ️ Repository does not exist on VPS (first run)")
                     return False, False
-            else:
-                self.logger.warning(f"⚠️ Could not check repository existence: {result.stderr[:200]}")
-                return False, False
-                
-        except subprocess.TimeoutExpired:
-            self.logger.error("❌ SSH timeout checking repository existence")
+            
+            self.logger.warning(f"⚠️ Could not check repository existence: No valid response")
             return False, False
+                
         except Exception as e:
             self.logger.error(f"❌ Error checking repository: {e}")
             return False, False
@@ -264,8 +274,19 @@ class SSHClient:
             )
             
             if result.returncode == 0:
-                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
-                self.logger.info(f"✅ Found {len(files)} remote files")
+                # Filter out MOTD/banner messages and only keep actual file paths
+                files = []
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if line and line != 'NO_FILES':
+                        # Skip lines that look like MOTD/banner messages
+                        if any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
+                            continue
+                        # Only include lines that look like file paths
+                        if line.startswith(self.remote_dir) and any(ext in line for ext in ['.pkg.tar.', '.db', '.files', '.sig']):
+                            files.append(line)
+                
+                self.logger.info(f"✅ Found {len(files)} remote files (filtered)")
                 return files
             else:
                 self.logger.warning(f"⚠️ Failed to list remote files: {result.stderr[:200]}")
@@ -315,8 +336,19 @@ class SSHClient:
                 self.logger.info("No files found on VPS")
                 return {}
             
-            vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
-            self.logger.info(f"Found {len(vps_files)} files on VPS")
+            # Filter out MOTD/banner messages
+            vps_files = []
+            for line in vps_files_raw.split('\n'):
+                line = line.strip()
+                if line:
+                    # Skip lines that look like MOTD/banner messages
+                    if any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
+                        continue
+                    # Only include lines that look like file paths
+                    if line.startswith(self.remote_dir):
+                        vps_files.append(line)
+            
+            self.logger.info(f"Found {len(vps_files)} files on VPS (filtered)")
             
             # Convert to filename: path dictionary
             inventory = {}
@@ -326,9 +358,6 @@ class SSHClient:
             
             return inventory
             
-        except subprocess.TimeoutExpired:
-            self.logger.error("❌ SSH timeout getting VPS file inventory")
-            return {}
         except Exception as e:
             self.logger.error(f"❌ Error getting VPS file inventory: {e}")
             return {}
@@ -373,6 +402,7 @@ class SSHClient:
             
             if result.returncode == 0:
                 self.logger.info(f"✅ Deletion successful for {len(files_to_delete)} files")
+                # Filter out MOTD/banner from output
                 if result.stdout:
                     for line in result.stdout.splitlines():
                         if "removed" in line.lower() or "deleted" in line.lower():
@@ -382,9 +412,6 @@ class SSHClient:
                 self.logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
                 return False
                 
-        except subprocess.TimeoutExpired:
-            self.logger.error("❌ SSH command timed out - aborting deletion for safety")
-            return False
         except Exception as e:
             self.logger.error(f"❌ Error during deletion: {e}")
             return False
@@ -418,7 +445,12 @@ class SSHClient:
             )
             
             if result.returncode == 0:
-                return True, result.stdout.strip()
+                # Filter out MOTD/banner messages
+                filtered_output = []
+                for line in result.stdout.strip().splitlines():
+                    if line and not any(term in line.lower() for term in ['welcome', 'system', 'last login', 'motd', 'secrets']):
+                        filtered_output.append(line)
+                return True, '\n'.join(filtered_output)
             else:
                 return False, result.stderr.strip()
                 
