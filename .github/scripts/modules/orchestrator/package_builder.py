@@ -138,8 +138,132 @@ class PackageBuilder:
         """Check repository existence and state on VPS"""
         return self.ssh_client.check_repository_exists()
     
+    def _check_and_adopt_package(self, pkg_name: str, local_version: str, is_aur: bool) -> Tuple[str, Optional[str]]:
+        """
+        Check package status and adopt from remote if needed
+        
+        Args:
+            pkg_name: Package name
+            local_version: Local version string
+            is_aur: Whether it's an AUR package
+        
+        Returns:
+            Tuple of (decision, remote_version)
+        """
+        # Initialize remote_version to avoid UnboundLocalError
+        remote_version = None
+        
+        # Check if package is in local state
+        if pkg_name in self.version_tracker.state["packages"]:
+            stored_package = self.version_tracker.state["packages"][pkg_name]
+            stored_version = stored_package.get("version")
+            
+            if stored_version == local_version:
+                # Verify integrity via SSH
+                self.logger.debug(f"Version match for {pkg_name}, verifying integrity")
+                remote_file = self.version_tracker._get_remote_file_path(pkg_name, stored_version)
+                
+                if remote_file and self.ssh_client.file_exists(remote_file):
+                    current_hash = self.ssh_client.get_remote_hash(remote_file)
+                    stored_hash = stored_package.get("hash")
+                    
+                    if current_hash and current_hash == stored_hash:
+                        self.logger.info(f"✅ {pkg_name}: Integrity verified, skipping")
+                        return "SKIP", stored_version
+                    else:
+                        self.logger.warning(f"⚠️ {pkg_name}: Hash mismatch, rebuilding")
+                        return "BUILD", stored_version
+                else:
+                    self.logger.info(f"ℹ️ {pkg_name}: File missing on VPS, rebuilding")
+                    return "BUILD", stored_version
+            else:
+                self.logger.info(f"🔄 {pkg_name}: Version mismatch (local: {local_version}, stored: {stored_version})")
+                return "BUILD", stored_version
+        
+        # Package not in local state - check VPS directly
+        self.logger.info(f"🔍 {pkg_name}: Not in state, checking VPS...")
+        
+        # Try to find any version on VPS
+        remote_version = self._get_remote_version_direct(pkg_name)
+        if remote_version:
+            # Found on VPS, adopt into state
+            self.logger.info(f"📥 {pkg_name}: Found on VPS ({remote_version}), adopting into state")
+            
+            remote_file = self.version_tracker._get_remote_file_path(pkg_name, remote_version)
+            remote_hash = None
+            if remote_file:
+                # Use SSH to get file hash
+                remote_hash = self.ssh_client.get_remote_hash(remote_file)
+            
+            self.version_tracker.state["packages"][pkg_name] = {
+                "version": remote_version,
+                "hash": remote_hash,
+                "last_checked": self._get_timestamp(),
+                "source": "adopted"
+            }
+            
+            # Save state immediately after adoption
+            self.version_tracker.save_state()
+            
+            # Compare with local version
+            if remote_version == local_version:
+                self.logger.info(f"✅ {pkg_name}: Adopted and matches local, skipping")
+                return "SKIP", remote_version
+            else:
+                self.logger.info(f"🔄 {pkg_name}: Adopted but version differs, building")
+                return "BUILD", remote_version
+        
+        # Not found anywhere
+        self.logger.info(f"📦 {pkg_name}: Not found on VPS, building")
+        return "BUILD", None
+    
+    def _get_remote_version_direct(self, pkg_name: str) -> Optional[str]:
+        """Get version of package from VPS using SSH (direct method)"""
+        # List remote files for this package using string command with shell=True
+        remote_cmd = f"find {self.ssh_client.remote_dir} -maxdepth 1 -type f -name '{pkg_name}-*.pkg.tar.*' 2>/dev/null"
+        
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_client.ssh_options_with_quiet,
+            f"{self.ssh_client.vps_user}@{self.ssh_client.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            # Execute SSH command as string with shell=True for proper escaping
+            result = self.shell_executor.run(
+                ssh_cmd,
+                capture=True,
+                check=False,
+                shell=False,  # Use list mode for SSH
+                log_cmd=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                # Parse first matching file for version
+                for line in result.stdout.strip().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("Welcome") or line.startswith("Last login"):
+                        continue
+                    
+                    if '.pkg.tar.' in line:
+                        filename = Path(line).name
+                        parsed = self.version_tracker._parse_package_filename(filename)
+                        if parsed and parsed[0] == pkg_name:
+                            return parsed[1]
+            
+            return None
+        except Exception as e:
+            self.logger.warning(f"Could not get remote version for {pkg_name}: {e}")
+            return None
+    
+    def _get_timestamp(self) -> str:
+        """Get current timestamp in ISO format"""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
     def _build_aur_packages(self) -> None:
-        """Build all AUR packages using JSON state tracking"""
+        """Build all AUR packages using JSON state tracking with adoption"""
         if not self.aur_packages:
             self.logger.info("No AUR packages to build")
             return
@@ -164,9 +288,10 @@ class PackageBuilder:
                     self.logger.warning(f"Could not extract local version for {pkg_name}: {e}")
                     local_version = None
             
-            # Check package status using JSON state
+            # Check package status with adoption logic
+            remote_version = None
             if local_version:
-                decision, remote_version = self.version_tracker.check_package_status(pkg_name, local_version)
+                decision, remote_version = self._check_and_adopt_package(pkg_name, local_version, is_aur=True)
                 
                 if decision == "SKIP":
                     self.logger.info(f"✅ {pkg_name} already up to date - skipping")
@@ -180,11 +305,12 @@ class PackageBuilder:
             # Build package
             success = self.aur_builder.build(pkg_name, remote_version)
             
-            if success:
+            if success and local_version:
                 # Update state with built version
-                if local_version:
-                    self.version_tracker.update_package_state(pkg_name, local_version)
-            else:
+                self.version_tracker.update_package_state(pkg_name, local_version)
+                # Save state immediately
+                self.version_tracker.save_state()
+            elif not success:
                 self.build_state.add_failed(
                     pkg_name,
                     remote_version or "unknown",
@@ -193,7 +319,7 @@ class PackageBuilder:
                 )
     
     def _build_local_packages(self) -> None:
-        """Build all local packages using JSON state tracking"""
+        """Build all local packages using JSON state tracking with adoption"""
         if not self.local_packages:
             self.logger.info("No local packages to build")
             return
@@ -223,9 +349,10 @@ class PackageBuilder:
                 self.logger.error(f"Failed to extract version for {pkg_name}: {e}")
                 local_version = None
             
-            # Check package status using JSON state
+            # Check package status with adoption logic
+            remote_version = None
             if local_version:
-                decision, remote_version = self.version_tracker.check_package_status(pkg_name, local_version)
+                decision, remote_version = self._check_and_adopt_package(pkg_name, local_version, is_aur=False)
                 
                 if decision == "SKIP":
                     self.logger.info(f"✅ {pkg_name} already up to date - skipping")
@@ -239,11 +366,12 @@ class PackageBuilder:
             # Build package
             success = self.local_builder.build(pkg_name, remote_version)
             
-            if success:
+            if success and local_version:
                 # Update state with built version
-                if local_version:
-                    self.version_tracker.update_package_state(pkg_name, local_version)
-            else:
+                self.version_tracker.update_package_state(pkg_name, local_version)
+                # Save state immediately
+                self.version_tracker.save_state()
+            elif not success:
                 self.build_state.add_failed(
                     pkg_name,
                     remote_version or "unknown",
@@ -267,13 +395,14 @@ class PackageBuilder:
             self.logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
         
-        # Run pacman -Sy
+        # Run pacman -Sy with string command and shell=True
         cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
         result = self.shell_executor.run(
             cmd,
             log_cmd=True,
             timeout=300,
-            check=False
+            check=False,
+            shell=True  # Use shell=True for pacman command
         )
         
         if result.returncode == 0:
@@ -288,7 +417,8 @@ class PackageBuilder:
                 debug_cmd,
                 log_cmd=True,
                 timeout=30,
-                check=False
+                check=False,
+                shell=True
             )
             
             if debug_result.returncode == 0:
@@ -384,7 +514,7 @@ class PackageBuilder:
                 temp_file.write('\n'.join(new_lines))
                 temp_path = temp_file.name
             
-            # Copy to pacman.conf
+            # Copy to pacman.conf using subprocess.run directly
             subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
             subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
             os.unlink(temp_path)
@@ -395,7 +525,7 @@ class PackageBuilder:
             if exists and has_packages:
                 self.logger.info("🔄 Synchronizing pacman databases after enabling repository...")
                 cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-                result = self.shell_executor.run(cmd, log_cmd=True, timeout=300, check=False)
+                result = self.shell_executor.run(cmd, log_cmd=True, timeout=300, check=False, shell=True)
                 if result.returncode == 0:
                     self.logger.info("✅ Pacman databases synchronized successfully")
                 else:
@@ -442,14 +572,14 @@ class PackageBuilder:
     
     def run(self) -> int:
         """
-        Main execution workflow with JSON state tracking
+        Main execution workflow with JSON state tracking and adoption
         
         Returns:
             Exit code (0 for success, 1 for failure)
         """
         try:
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("🚀 MANJARO PACKAGE BUILDER (JSON STATE TRACKING)")
+            self.logger.info("🚀 MANJARO PACKAGE BUILDER (JSON STATE + ADOPTION)")
             self.logger.info("=" * 60)
             
             # Initial setup
@@ -490,7 +620,8 @@ class PackageBuilder:
             # Ensure remote directory exists
             self.ssh_client.ensure_directory()
             
-            # STEP 2: Check SSH connection
+            # STEP 2: Test SSH connection
+            self.logger.info("\n🔍 Testing SSH connection...")
             if not self.ssh_client.test_connection():
                 self.logger.warning("⚠️ SSH connection test failed, but continuing...")
             
@@ -502,9 +633,9 @@ class PackageBuilder:
             self.logger.info(f"   AUR packages: {len(self.aur_packages)}")
             self.logger.info(f"   Total packages: {len(self.local_packages) + len(self.aur_packages)}")
             
-            # STEP 3: PACKAGE BUILDING (JSON STATE TRACKING)
+            # STEP 3: PACKAGE BUILDING (WITH ADOPTION LOGIC)
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 3: PACKAGE BUILDING (JSON STATE TRACKING)")
+            self.logger.info("STEP 3: PACKAGE BUILDING (WITH ADOPTION)")
             self.logger.info("=" * 60)
             
             self._build_aur_packages()
@@ -599,14 +730,15 @@ class PackageBuilder:
             # State summary
             state_summary = self.version_tracker.get_state_summary()
             self.logger.info(f"JSON State:      {state_summary['total_packages']} packages tracked")
+            self.logger.info(f"Remote Adoption: ✅ Packages automatically adopted from VPS")
             self.logger.info(f"Zero-Download:   ✅ No rsync downloads, using JSON state")
             self.logger.info("=" * 60)
             
-            # List built packages
-            built_packages = self.build_state.get_built_packages()
-            if built_packages:
-                self.logger.info("\n📦 Built packages:")
-                for pkg in built_packages:
+            # List skipped packages (adopted ones)
+            skipped_packages = self.build_state.get_skipped_packages()
+            if skipped_packages:
+                self.logger.info("\n⏭️ Skipped packages (adopted from VPS):")
+                for pkg in skipped_packages:
                     self.logger.info(f"  - {pkg['name']} ({pkg['version']})")
             
             return 0
