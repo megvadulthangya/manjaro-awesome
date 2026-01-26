@@ -1,6 +1,5 @@
 """
-Version tracking for Zero-Residue cleanup policy
-Tracks target versions and remote inventory for precise package management
+Version tracking for Zero-Residue cleanup policy - SERVER-FIRST ARCHITECTURE
 """
 
 import json
@@ -15,8 +14,7 @@ from modules.vps.ssh_client import SSHClient
 
 class VersionTracker:
     """
-    Tracks package versions for Zero-Residue cleanup
-    Maintains source of truth for what versions should exist on server
+    Tracks package versions - SERVER-FIRST ARCHITECTURE
     """
     
     def __init__(self, repo_root: Path, ssh_client: SSHClient, logger: Optional[logging.Logger] = None):
@@ -48,6 +46,9 @@ class VersionTracker:
         self.state_file = self.repo_root / ".build_tracking" / "vps_state.json"
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state: Dict[str, Any] = self._load_state()
+        
+        # Load remote inventory at initialization
+        self._load_remote_inventory()
     
     def _load_state(self) -> Dict[str, Any]:
         """Load state from JSON file"""
@@ -64,6 +65,17 @@ class VersionTracker:
             self.logger.error(f"Failed to load state file: {e}")
             return {"packages": {}, "metadata": {"created": datetime.now().isoformat()}}
     
+    def _load_remote_inventory(self):
+        """Load remote inventory at initialization"""
+        self.logger.info("🔍 Loading remote inventory...")
+        remote_files = self.ssh_client.get_remote_file_list()
+        
+        for file_path in remote_files:
+            filename = Path(file_path).name
+            self._remote_inventory[filename] = file_path
+        
+        self.logger.info(f"📋 Remote inventory loaded: {len(self._remote_inventory)} files")
+    
     def save_state(self) -> bool:
         """Save state to JSON file"""
         try:
@@ -78,7 +90,7 @@ class VersionTracker:
     
     def is_package_on_remote(self, pkg_name: str, version: str) -> Tuple[bool, Optional[str], Optional[str]]:
         """
-        Check if package with specific version exists on remote server
+        SERVER-FIRST: Check if package with specific version exists on remote server
         
         Args:
             pkg_name: Package name (e.g., 'libinput-gestures')
@@ -89,20 +101,10 @@ class VersionTracker:
         """
         self.logger.debug(f"Checking if {pkg_name} version {version} exists on remote...")
         
-        # Get remote file list
-        remote_files = self.ssh_client.get_remote_file_list()
-        
-        if not remote_files:
-            self.logger.debug(f"No remote files found")
-            return False, None, None
-        
         # Normalize package name for matching (case-insensitive)
         pkg_name_lower = pkg_name.lower()
         
-        for file_path in remote_files:
-            filename = Path(file_path).name
-            self.logger.debug(f"Checking remote file: {filename}")
-            
+        for filename, file_path in self._remote_inventory.items():
             # Parse filename to extract name, version, and architecture
             parsed = self._parse_package_filename_with_arch(filename)
             if not parsed:
@@ -119,9 +121,6 @@ class VersionTracker:
                     
                     # Get hash from remote file
                     remote_hash = self.ssh_client.get_remote_hash(file_path)
-                    
-                    # Register as adopted
-                    self.register_built_package(pkg_name, version, remote_hash)
                     
                     return True, remote_version, remote_hash
         
@@ -155,19 +154,10 @@ class VersionTracker:
         """
         self.logger.info(f"🔍 Searching for {pkg_name} on remote server...")
         
-        # MANDATORY: Use explicit file listing with debug
-        remote_files = self.ssh_client.get_remote_file_list()
-        
-        if not remote_files:
-            self.logger.debug(f"No remote files found for {pkg_name}")
-            return None
-        
         # Case-insensitive matching with architecture suffix handling
         pkg_name_lower = pkg_name.lower()
-        self.logger.debug(f"Searching for package name (case-insensitive): {pkg_name_lower}")
         
-        for file_path in remote_files:
-            filename = Path(file_path).name
+        for filename, file_path in self._remote_inventory.items():
             self.logger.debug(f"Checking file: {filename}")
             
             # Parse package name and version from filename
