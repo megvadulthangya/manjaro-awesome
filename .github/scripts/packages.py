@@ -40,6 +40,7 @@ AUR_PACKAGES = [
     "nordic-theme",
     "nordic-darker-theme",
     "geany-nord-theme",
+    "geany-plugin-preview",
     "nordzy-icon-theme",
     "oh-my-posh-bin",
     "fish-done",
