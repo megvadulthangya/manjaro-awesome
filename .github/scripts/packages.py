@@ -15,8 +15,8 @@ LOCAL_PACKAGES = [
     "nordic-backgrounds",
     "awesome-copycats-manjaro",
     "i3lock-fancy-git",
-#    "ttf-font-awesome-5",
-    "nvidia-driver-assistant",
+    "ttf-font-awesome-5",
+    "nvidia-driver-assistant"
 #    "grayjay-bin"
 ]
 
@@ -25,7 +25,6 @@ AUR_PACKAGES = [
     "awesome-git",
     "awesome-freedesktop-git",
     "lain-git",
-    "ttf-font-awesome-5",
     "grayjay-bin",
     "libinput-gestures",
     "gtk2",
