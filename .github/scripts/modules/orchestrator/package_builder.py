@@ -9,6 +9,7 @@ import time
 import re
 import logging
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional, Set
@@ -478,28 +479,26 @@ class PackageBuilder:
         self.logger.info(f"📁 Created staging directory: {self._staging_dir}")
         return self._staging_dir
     
-    def _download_existing_database(self) -> bool:
+    def _download_existing_database_only(self) -> bool:
         """
-        Download existing database and package files from VPS to staging
+        Download ONLY database files from VPS to staging (no packages)
         
         Returns:
             True if successful or no database exists (first run)
         """
         repo_name = self.config.get('repo_name', '')
-        remote_dir = self.config.get('remote_dir', '')
         
-        self.logger.info("📥 Downloading existing database from VPS...")
+        self.logger.info("📥 Downloading existing database files only from VPS...")
         
         patterns = [
-            f"{repo_name}.db.tar.gz*",
-            f"{repo_name}.files.tar.gz*",
-            "*.pkg.tar.zst*"
+            f"{repo_name}.db*",
+            f"{repo_name}.files*"
         ]
         
         download_success = True
         
         for pattern in patterns:
-            self.logger.info(f"  Downloading pattern: {pattern}")
+            self.logger.info(f"  Downloading: {pattern}")
             success = self.rsync_client.mirror_remote(
                 remote_pattern=pattern,
                 local_dir=self._staging_dir,
@@ -508,48 +507,85 @@ class PackageBuilder:
             
             if not success:
                 self.logger.warning(f"⚠️ Failed to download {pattern}")
-                if pattern.endswith(".pkg.tar.zst*"):
-                    download_success = False
+                download_success = False
         
-        db_files = list(self._staging_dir.glob(f"{repo_name}.db.tar.gz"))
+        db_files = list(self._staging_dir.glob(f"{repo_name}.db*"))
+        files_files = list(self._staging_dir.glob(f"{repo_name}.files*"))
+        
         if db_files:
-            self.logger.info(f"✅ Downloaded existing database ({len(db_files)} files)")
+            self.logger.info(f"✅ Downloaded {len(db_files)} database files")
         else:
             self.logger.info("ℹ️ No existing database found (first run)")
         
-        package_files = list(self._staging_dir.glob("*.pkg.tar.zst"))
-        self.logger.info(f"📦 Downloaded {len(package_files)} existing package files")
+        if files_files:
+            self.logger.info(f"✅ Downloaded {len(files_files)} files database files")
         
         return download_success
     
-    def _prepare_staging_directory(self) -> Set[str]:
+    def _create_dummy_files_for_adopted_packages(self) -> None:
         """
-        Prepare staging directory with new packages and dummy files
+        Create dummy files for packages that are already on server (adopted)
+        
+        Uses the version_tracker to get list of adopted packages
+        """
+        self.logger.info("🔄 Creating dummy files for adopted packages...")
+        
+        adopted_packages = self.version_tracker.get_skipped_packages_dict()
+        
+        if not adopted_packages:
+            self.logger.info("ℹ️ No adopted packages found")
+            return
+        
+        self.logger.info(f"Found {len(adopted_packages)} adopted packages")
+        
+        created_count = 0
+        
+        for pkg_name, remote_version in adopted_packages.items():
+            try:
+                dummy_filename = f"{pkg_name}-{remote_version}-x86_64.pkg.tar.zst"
+                dummy_path = self._staging_dir / dummy_filename
+                
+                if not dummy_path.exists():
+                    dummy_path.touch()
+                    self.logger.debug(f"  Created dummy: {dummy_filename}")
+                    created_count += 1
+                
+                sig_filename = f"{dummy_filename}.sig"
+                sig_path = self._staging_dir / sig_filename
+                if not sig_path.exists():
+                    sig_path.touch()
+                    self.logger.debug(f"  Created dummy signature: {sig_filename}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to create dummy for {pkg_name}: {e}")
+        
+        self.logger.info(f"✅ Created {created_count} dummy package files")
+    
+    def _move_new_packages_to_staging(self) -> List[Path]:
+        """
+        Move newly built packages to staging directory
         
         Returns:
-            Set of package filenames that need dummy files
+            List of paths to new packages moved to staging
         """
         output_dir = Path(self.config.get('output_dir', 'built_packages'))
-        repo_name = self.config.get('repo_name', '')
-        
-        self.logger.info("📋 Preparing staging directory...")
-        
-        existing_packages = set()
-        for pkg_file in self._staging_dir.glob("*.pkg.tar.zst"):
-            existing_packages.add(pkg_file.name)
-        
-        self.logger.info(f"Found {len(existing_packages)} existing packages in staging")
         
         new_packages = list(output_dir.glob("*.pkg.tar.zst"))
-        self.logger.info(f"Moving {len(new_packages)} new packages to staging...")
+        if not new_packages:
+            self.logger.info("ℹ️ No new packages to move to staging")
+            return []
         
-        moved_count = 0
+        self.logger.info(f"📦 Moving {len(new_packages)} new packages to staging...")
+        
+        moved_packages = []
+        
         for new_pkg in new_packages:
             try:
                 dest = self._staging_dir / new_pkg.name
                 if dest.exists():
                     dest.unlink()
                 shutil.move(str(new_pkg), str(dest))
+                moved_packages.append(dest)
                 
                 sig_file = new_pkg.with_suffix(new_pkg.suffix + '.sig')
                 if sig_file.exists():
@@ -558,44 +594,12 @@ class PackageBuilder:
                         sig_dest.unlink()
                     shutil.move(str(sig_file), str(sig_dest))
                 
-                moved_count += 1
+                self.logger.debug(f"  Moved: {new_pkg.name}")
             except Exception as e:
                 self.logger.error(f"Failed to move {new_pkg.name}: {e}")
         
-        self.logger.info(f"✅ Moved {moved_count} new packages to staging")
-        
-        packages_needing_dummy = existing_packages - {p.name for p in self._staging_dir.glob("*.pkg.tar.zst")}
-        self.logger.info(f"📝 {len(packages_needing_dummy)} packages need dummy files")
-        
-        return packages_needing_dummy
-    
-    def _create_dummy_files(self, package_filenames: Set[str]) -> None:
-        """
-        Create dummy files for packages that exist on VPS but aren't being rebuilt
-        
-        Args:
-            package_filenames: Set of package filenames to create dummy files for
-        """
-        self.logger.info("🔄 Creating dummy files for existing packages...")
-        
-        created_count = 0
-        for pkg_filename in package_filenames:
-            dummy_path = self._staging_dir / pkg_filename
-            if not dummy_path.exists():
-                try:
-                    dummy_path.touch()
-                    self.logger.debug(f"  Created dummy: {pkg_filename}")
-                    created_count += 1
-                    
-                    sig_filename = pkg_filename + '.sig'
-                    sig_path = self._staging_dir / sig_filename
-                    if not sig_path.exists():
-                        sig_path.touch()
-                        self.logger.debug(f"  Created dummy signature: {sig_filename}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to create dummy for {pkg_filename}: {e}")
-        
-        self.logger.info(f"✅ Created {created_count} dummy package files")
+        self.logger.info(f"✅ Moved {len(moved_packages)} new packages to staging")
+        return moved_packages
     
     def _update_database_locally(self) -> bool:
         """
@@ -629,22 +633,28 @@ class PackageBuilder:
             
             self.logger.info(f"Found {len(package_files)} package files for database update")
             
-            if self.gpg_handler.gpg_enabled:
-                self.logger.info("🔏 Running repo-add with GPG signing...")
-                cmd = f"repo-add --sign --remove {db_file} *.pkg.tar.zst"
+            gpg_key_id = self.gpg_handler.gpg_key_id if self.gpg_handler.gpg_enabled else ""
+            
+            if self.gpg_handler.gpg_enabled and gpg_key_id:
+                self.logger.info(f"🔏 Running repo-add with GPG signing (key: {gpg_key_id})...")
+                env = os.environ.copy()
+                env['GNUPGHOME'] = self.gpg_handler.gpg_home if hasattr(self.gpg_handler, 'gpg_home') else ''
+                
+                cmd = f"repo-add --sign --key {gpg_key_id} --remove {db_file} *.pkg.tar.zst"
             else:
                 self.logger.info("🔧 Running repo-add without signing...")
                 cmd = f"repo-add --remove {db_file} *.pkg.tar.zst"
+                env = os.environ.copy()
             
             self.logger.info(f"Command: {cmd}")
             
-            result = self.shell_executor.run(
+            result = subprocess.run(
                 cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
-                check=False,
-                log_cmd=True
+                env=env,
+                check=False
             )
             
             if result.returncode == 0:
@@ -655,6 +665,7 @@ class PackageBuilder:
                     size_mb = db_path.stat().st_size / (1024 * 1024)
                     self.logger.info(f"Database size: {size_mb:.2f} MB")
                     
+                    # Verify database entries
                     self._verify_database_entries(db_file)
                     return True
                 else:
@@ -662,6 +673,8 @@ class PackageBuilder:
                     return False
             else:
                 self.logger.error(f"❌ repo-add failed with exit code {result.returncode}:")
+                if result.stdout:
+                    self.logger.error(f"STDOUT: {result.stdout[:500]}")
                 if result.stderr:
                     self.logger.error(f"STDERR: {result.stderr[:500]}")
                 return False
@@ -689,41 +702,54 @@ class PackageBuilder:
         except Exception as e:
             self.logger.warning(f"Could not verify database: {e}")
     
-    def _upload_updated_repository(self) -> bool:
+    def _upload_only_new_files(self) -> bool:
         """
-        Upload updated repository (packages + database) to VPS
+        Upload ONLY new packages and updated database files to VPS
         
         Returns:
             True if successful
         """
-        self.logger.info("\n📤 Uploading updated repository to VPS...")
+        self.logger.info("\n📤 Uploading ONLY new files to VPS...")
         
-        patterns = [
-            "*.pkg.tar.zst",
-            "*.pkg.tar.zst.sig",
-            f"{self.config.get('repo_name', '')}.*"
-        ]
+        repo_name = self.config.get('repo_name', '')
         
-        upload_success = True
+        files_to_upload = []
         
-        for pattern in patterns:
-            files_to_upload = list(self._staging_dir.glob(pattern))
-            if not files_to_upload:
-                self.logger.info(f"ℹ️ No files found for pattern: {pattern}")
-                continue
-            
-            self.logger.info(f"📦 Uploading {len(files_to_upload)} files ({pattern})...")
-            
-            files_list = [str(f) for f in files_to_upload]
-            success = self.rsync_client.upload(files_list, self._staging_dir)
-            
-            if not success:
-                self.logger.error(f"❌ Failed to upload {pattern}")
-                upload_success = False
-            else:
-                self.logger.info(f"✅ Successfully uploaded {pattern}")
+        self.logger.info("1. Collecting new package files...")
+        new_packages = list(self._staging_dir.glob("*.pkg.tar.zst"))
+        for pkg_file in new_packages:
+            if pkg_file.stat().st_size > 0:
+                files_to_upload.append(pkg_file)
+                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                if sig_file.exists() and sig_file.stat().st_size > 0:
+                    files_to_upload.append(sig_file)
         
-        return upload_success
+        self.logger.info(f"  Found {len([f for f in files_to_upload if '.pkg.tar.zst' in str(f)])} new packages")
+        
+        self.logger.info("2. Collecting updated database files...")
+        db_patterns = [f"{repo_name}.db*", f"{repo_name}.files*"]
+        for pattern in db_patterns:
+            for db_file in self._staging_dir.glob(pattern):
+                if db_file.stat().st_size > 0:
+                    files_to_upload.append(db_file)
+        
+        self.logger.info(f"  Found {len(files_to_upload) - len([f for f in files_to_upload if '.pkg.tar.zst' in str(f)])} database files")
+        
+        if not files_to_upload:
+            self.logger.error("❌ No files to upload")
+            return False
+        
+        self.logger.info(f"📦 Total files to upload: {len(files_to_upload)}")
+        
+        files_list = [str(f) for f in files_to_upload]
+        upload_success = self.rsync_client.upload(files_list, self._staging_dir)
+        
+        if upload_success:
+            self.logger.info("✅ All new files uploaded successfully")
+            return True
+        else:
+            self.logger.error("❌ File upload failed")
+            return False
     
     def _cleanup_staging(self) -> None:
         """Clean up staging directory"""
@@ -758,20 +784,24 @@ class PackageBuilder:
             staging_dir = self._create_local_staging()
             
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 2: Download existing database from VPS")
+            self.logger.info("STEP 2: Download ONLY existing database files from VPS")
             self.logger.info("=" * 60)
-            if not self._download_existing_database():
-                self.logger.warning("⚠️ Failed to download some files, continuing...")
+            if not self._download_existing_database_only():
+                self.logger.warning("⚠️ Failed to download some database files, continuing...")
             
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 3: Prepare staging with new packages")
+            self.logger.info("STEP 3: Create dummy files for adopted packages")
             self.logger.info("=" * 60)
-            packages_needing_dummy = self._prepare_staging_directory()
+            self._create_dummy_files_for_adopted_packages()
             
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 4: Create dummy files for existing packages")
+            self.logger.info("STEP 4: Move new packages to staging")
             self.logger.info("=" * 60)
-            self._create_dummy_files(packages_needing_dummy)
+            moved_packages = self._move_new_packages_to_staging()
+            
+            if not moved_packages:
+                self.logger.error("❌ No packages moved to staging")
+                return False
             
             self.logger.info("\n" + "=" * 60)
             self.logger.info("STEP 5: Update database locally with GPG signing")
@@ -781,10 +811,10 @@ class PackageBuilder:
                 return False
             
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 6: Upload updated repository to VPS")
+            self.logger.info("STEP 6: Upload ONLY new files to VPS")
             self.logger.info("=" * 60)
-            if not self._upload_updated_repository():
-                self.logger.error("❌ Repository upload failed")
+            if not self._upload_only_new_files():
+                self.logger.error("❌ File upload failed")
                 return False
             
             self.logger.info("\n" + "=" * 60)
