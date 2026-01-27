@@ -8,6 +8,7 @@ import sys
 import time
 import re
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -129,6 +130,9 @@ class PackageBuilder:
         self.local_packages: List[str] = []
         self.aur_packages: List[str] = []
         
+        # Track sanitized artifacts
+        self._sanitized_files: Dict[str, str] = {}  # original -> sanitized
+        
         self.logger.info("✅ PackageBuilder initialized with SERVER-FIRST architecture")
     
     def _sync_pacman_databases_initial(self) -> bool:
@@ -182,7 +186,6 @@ class PackageBuilder:
         pkg_dir = aur_dir / pkg_name
         
         # Create fresh clone to get version
-        import shutil
         if pkg_dir.exists():
             shutil.rmtree(pkg_dir, ignore_errors=True)
         
@@ -262,8 +265,9 @@ class PackageBuilder:
                                         epoch = value
                             
                             if pkgver and pkgrel:
-                                self.logger.info(f"✅ Git package version resolved: {pkgver}-{pkgrel}")
+                                # Clean up immediately
                                 shutil.rmtree(pkg_dir, ignore_errors=True)
+                                self.logger.info(f"✅ Git package version resolved: {pkgver}-{pkgrel}")
                                 return pkgver, pkgrel, epoch
                     except Exception as e:
                         self.logger.warning(f"Could not get git version via makepkg: {e}")
@@ -331,6 +335,73 @@ class PackageBuilder:
             self.logger.info(f"🔄 [BUILD] {pkg_name} {version_str} not on server or outdated. Starting build.")
             return "BUILD"
     
+    def _sanitize_artifacts(self, pkg_name: str, pkg_dir: Path) -> List[Path]:
+        """
+        Sanitize package artifacts by replacing ':' with '_' in filenames
+        
+        Args:
+            pkg_name: Package name
+            pkg_dir: Package directory containing built artifacts
+        
+        Returns:
+            List of sanitized file paths
+        """
+        self.logger.info(f"🔧 Sanitizing artifacts for {pkg_name}...")
+        
+        sanitized_files = []
+        
+        # Find all package files
+        for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
+            original_name = pkg_file.name
+            sanitized_name = original_name.replace(':', '_')
+            
+            if sanitized_name != original_name:
+                # Create sanitized path
+                sanitized_path = pkg_file.with_name(sanitized_name)
+                
+                # Rename the file
+                try:
+                    pkg_file.rename(sanitized_path)
+                    self.logger.info(f"  🔄 Renamed: {original_name} -> {sanitized_name}")
+                    
+                    # Track the sanitization
+                    self._sanitized_files[str(pkg_file)] = str(sanitized_path)
+                    
+                    # Also rename signature if exists
+                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                    if sig_file.exists():
+                        sanitized_sig = sanitized_path.with_suffix(sanitized_path.suffix + '.sig')
+                        sig_file.rename(sanitized_sig)
+                        self.logger.info(f"  🔄 Renamed signature: {sig_file.name} -> {sanitized_sig.name}")
+                    
+                    sanitized_files.append(sanitized_path)
+                except Exception as e:
+                    self.logger.error(f"Failed to rename {original_name}: {e}")
+                    # Keep original file
+                    sanitized_files.append(pkg_file)
+            else:
+                sanitized_files.append(pkg_file)
+        
+        # Also check output directory for any already moved files
+        output_dir = Path(self.config.get('output_dir', 'built_packages'))
+        for pkg_file in output_dir.glob(f"*{pkg_name}*.pkg.tar.*"):
+            original_name = pkg_file.name
+            if ':' in original_name:
+                sanitized_name = original_name.replace(':', '_')
+                sanitized_path = pkg_file.with_name(sanitized_name)
+                
+                try:
+                    pkg_file.rename(sanitized_path)
+                    self.logger.info(f"  🔄 Renamed in output_dir: {original_name} -> {sanitized_name}")
+                    
+                    # Track the sanitization
+                    self._sanitized_files[str(pkg_file)] = str(sanitized_path)
+                except Exception as e:
+                    self.logger.error(f"Failed to rename in output_dir {original_name}: {e}")
+        
+        self.logger.info(f"✅ Sanitized {len(sanitized_files)} files for {pkg_name}")
+        return sanitized_files
+    
     def _build_aur_packages_server_first(self) -> None:
         """
         Build AUR packages using SERVER-FIRST logic with GIT VERSION FIX
@@ -372,12 +443,18 @@ class PackageBuilder:
             success = self.aur_builder.build(pkg_name, None)  # Pass None to force build
             
             if success:
+                # Sanitize artifacts immediately after build
+                aur_dir = Path(self.config.get('aur_build_dir', 'build_aur'))
+                pkg_dir = aur_dir / pkg_name
+                if pkg_dir.exists():
+                    self._sanitize_artifacts(pkg_name, pkg_dir)
+                
                 # Register built package
                 self.version_tracker.register_built_package(pkg_name, version_str)
                 self.build_state.add_built(pkg_name, version_str, is_aur=True)
                 
-                # Cleanup old versions from server
-                self._cleanup_old_versions_on_server(pkg_name, version_str)
+                # Cleanup old versions from server (queued, not executed yet)
+                self._queue_old_version_cleanup(pkg_name, version_str)
             else:
                 self.build_state.add_failed(
                     pkg_name,
@@ -427,12 +504,17 @@ class PackageBuilder:
             success = self.local_builder.build(pkg_name, None)  # Pass None to force build
             
             if success:
+                # Sanitize artifacts immediately after build
+                pkg_dir = self.repo_root / pkg_name
+                if pkg_dir.exists():
+                    self._sanitize_artifacts(pkg_name, pkg_dir)
+                
                 # Register built package
                 self.version_tracker.register_built_package(pkg_name, version_str)
                 self.build_state.add_built(pkg_name, version_str, is_aur=False)
                 
-                # Cleanup old versions from server
-                self._cleanup_old_versions_on_server(pkg_name, version_str)
+                # Cleanup old versions from server (queued, not executed yet)
+                self._queue_old_version_cleanup(pkg_name, version_str)
             else:
                 self.build_state.add_failed(
                     pkg_name,
@@ -441,27 +523,24 @@ class PackageBuilder:
                     error_message="Local build failed"
                 )
     
-    def _cleanup_old_versions_on_server(self, pkg_name: str, keep_version: str):
+    def _queue_old_version_cleanup(self, pkg_name: str, keep_version: str):
         """
-        SAFE CLEANUP: Remove old versions of package from server
-        but KEEP the specified version
+        Queue old versions for cleanup (but don't execute yet)
         
         Args:
             pkg_name: Package name
             keep_version: Version to keep (newly built/adopted)
         """
-        self.logger.info(f"🧹 Cleaning up old versions of {pkg_name} from server...")
+        self.logger.info(f"🧹 Queuing cleanup of old versions for {pkg_name}...")
         
         # Get all remote files
-        remote_files = self.ssh_client.get_remote_file_list()
+        remote_files = self.ssh_client.get_cached_inventory()
         if not remote_files:
             return
         
         # Find files for this package
-        files_to_delete = []
-        
-        for file_path in remote_files:
-            filename = Path(file_path).name
+        for remote_path in remote_files.values():
+            filename = Path(remote_path).name
             
             # Parse filename
             parsed = self.version_tracker._parse_package_filename_with_arch(filename)
@@ -474,27 +553,11 @@ class PackageBuilder:
             if remote_pkg_name.lower() == pkg_name.lower():
                 # Check if it's NOT the version we want to keep
                 if not self.version_tracker._versions_match(remote_version, keep_version):
-                    files_to_delete.append(file_path)
-                    self.logger.debug(f"🗑️ Marking for deletion: {filename} (old version: {remote_version})")
+                    # Queue for deletion (will be executed after successful upload)
+                    self.version_tracker.queue_deletion(remote_path)
+                    self.logger.debug(f"🗑️ Queued for deletion: {filename} (old version: {remote_version})")
                 else:
                     self.logger.debug(f"✅ Keeping: {filename} (current version: {remote_version})")
-        
-        # SAFETY CHECK: Don't delete if we would delete ALL versions
-        if files_to_delete:
-            # Check if we're keeping at least one version
-            keeping_count = len([f for f in remote_files if Path(f).name not in [Path(d).name for d in files_to_delete]])
-            
-            if keeping_count > 0:
-                # Delete in batches (safety)
-                batch_size = 5
-                for i in range(0, len(files_to_delete), batch_size):
-                    batch = files_to_delete[i:i + batch_size]
-                    if self.ssh_client.delete_remote_files(batch):
-                        self.logger.info(f"✅ Deleted {len(batch)} old version(s) of {pkg_name}")
-            else:
-                self.logger.warning(f"⚠️ Safety check failed: Would delete ALL versions of {pkg_name}, skipping cleanup")
-        else:
-            self.logger.info(f"ℹ️ No old versions of {pkg_name} to clean up")
     
     def _update_server_database(self) -> bool:
         """
@@ -657,6 +720,15 @@ class PackageBuilder:
         if upload_success:
             self.logger.info("✅ Packages uploaded successfully")
             
+            # Now execute queued deletions
+            self.logger.info("\n🧹 Executing queued cleanup operations...")
+            cleanup_success = self.version_tracker.commit_queued_deletions()
+            
+            if cleanup_success:
+                self.logger.info("✅ Cleanup operations completed")
+            else:
+                self.logger.warning("⚠️ Some cleanup operations failed")
+            
             # Update server database
             return self._update_server_database()
         else:
@@ -785,6 +857,7 @@ class PackageBuilder:
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             self.logger.info(f"Git version fix: ✅ Implemented")
             self.logger.info(f"Cleanup safety:  ✅ Version-aware")
+            self.logger.info(f"Sanitized files: {len(self._sanitized_files)}")
             
             # State summary
             state_summary = self.version_tracker.get_state_summary()

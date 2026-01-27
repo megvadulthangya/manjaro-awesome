@@ -145,6 +145,59 @@ class RsyncClient:
             self.logger.error(f"RSYNC retry execution error: {e}")
             return False
     
+    def _build_rsync_command(self, local_files: List[str], local_base_dir: Optional[Path],
+                            delete: bool = False, enhanced_ssh: bool = False) -> str:
+        """
+        Build rsync command with syntax safety (prefixing with ./)
+        
+        Args:
+            local_files: List of local file paths
+            local_base_dir: Base directory for relative paths
+            delete: Whether to add --delete flag
+            enhanced_ssh: Whether to use enhanced SSH options
+        
+        Returns:
+            Rsync command string
+        """
+        # Build file list with safety prefix
+        if local_base_dir:
+            # Use relative paths from base directory with ./ prefix
+            file_args = []
+            for file_path in local_files:
+                rel_path = os.path.relpath(file_path, local_base_dir)
+                # Prefix with ./ to ensure rsync treats it as local file
+                safe_path = f"./{rel_path}"
+                file_args.append(f"'{safe_path}'")
+        else:
+            # Use absolute paths with ./ prefix
+            file_args = []
+            for file_path in local_files:
+                # Extract just the filename and prefix with ./
+                filename = os.path.basename(file_path)
+                safe_path = f"./{filename}"
+                file_args.append(f"'{safe_path}'")
+        
+        file_args_str = ' '.join(file_args)
+        
+        # Build SSH options
+        if enhanced_ssh:
+            ssh_opts = '-e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -q"'
+        else:
+            ssh_opts = f'-e "ssh {self.ssh_opts_str}"' if self.ssh_opts_str else '-q'
+        
+        # Build delete flag
+        delete_flag = '--delete' if delete else ''
+        
+        # Build command
+        if local_base_dir:
+            # Change to base directory and use relative paths with ./ prefix
+            cmd = f"cd '{local_base_dir}' && rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
+        else:
+            # Use current directory and ./ prefix
+            cmd = f"rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
+        
+        return cmd.strip()
+    
     def mirror_remote(self, remote_pattern: str, local_dir: Path, 
                       temp_dir: Optional[Path] = None) -> bool:
         """
@@ -239,52 +292,6 @@ class RsyncClient:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             return False
     
-    def _build_rsync_command(self, local_files: List[str], local_base_dir: Optional[Path],
-                            delete: bool = False, enhanced_ssh: bool = False) -> str:
-        """
-        Build rsync command
-        
-        Args:
-            local_files: List of local file paths
-            local_base_dir: Base directory for relative paths
-            delete: Whether to add --delete flag
-            enhanced_ssh: Whether to use enhanced SSH options
-        
-        Returns:
-            Rsync command string
-        """
-        # Build file list
-        if local_base_dir:
-            # Use relative paths from base directory
-            file_args = []
-            for file_path in local_files:
-                rel_path = os.path.relpath(file_path, local_base_dir)
-                file_args.append(f"'{rel_path}'")
-        else:
-            # Use absolute paths
-            file_args = [f"'{f}'" for f in local_files]
-        
-        file_args_str = ' '.join(file_args)
-        
-        # Build SSH options
-        if enhanced_ssh:
-            ssh_opts = '-e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -q"'
-        else:
-            ssh_opts = f'-e "ssh {self.ssh_opts_str}"' if self.ssh_opts_str else '-q'
-        
-        # Build delete flag
-        delete_flag = '--delete' if delete else ''
-        
-        # Build command
-        if local_base_dir:
-            # Change to base directory and use relative paths
-            cmd = f"cd '{local_base_dir}' && rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
-        else:
-            # Use absolute paths
-            cmd = f"rsync -avzq --progress --stats {delete_flag} {ssh_opts} {file_args_str} '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'"
-        
-        return cmd.strip()
-    
     def _log_rsync_output(self, result: Any, prefix: str = "RSYNC") -> None:
         """Log rsync output"""
         if result.stdout:
@@ -311,13 +318,18 @@ class RsyncClient:
         """
         remote_target = f"{self.remote_dir}/{remote_subdir}" if remote_subdir else self.remote_dir
         
-        # Build rsync command for directory sync
+        # Build rsync command for directory sync with safety prefix
         delete_flag = '--delete' if delete else ''
         
-        rsync_cmd = f"rsync -avzq --progress --stats {delete_flag} -e \"ssh {self.ssh_opts_str}\" '{local_dir}/' '{self.vps_user}@{self.vps_host}:{remote_target}/'"
+        # Use ./ prefix for directory sync
+        rsync_cmd = f"rsync -avzq --progress --stats {delete_flag} -e \"ssh {self.ssh_opts_str}\" './' '{self.vps_user}@{self.vps_host}:{remote_target}/'"
         
         self.logger.info(f"Syncing directory {local_dir} to {remote_target}")
         self.logger.debug(f"RSYNC command: {rsync_cmd.strip()}")
+        
+        # Change to local directory before running rsync
+        old_cwd = os.getcwd()
+        os.chdir(local_dir)
         
         try:
             result = self.shell_executor.run(
@@ -338,3 +350,5 @@ class RsyncClient:
         except Exception as e:
             self.logger.error(f"❌ Directory sync error: {e}")
             return False
+        finally:
+            os.chdir(old_cwd)
