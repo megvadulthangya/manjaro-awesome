@@ -38,7 +38,7 @@ AUR_PACKAGES = [
     "tamzen-font",
     "betterlockscreen",
     "nordic-theme",
-    "nordic-darker-theme",
+#    "nordic-darker-theme",
     "geany-nord-theme",
     "geany-plugin-preview",
     "nordzy-icon-theme",
@@ -53,11 +53,11 @@ AUR_PACKAGES = [
     "simplescreenrecorder",
     "gtkhash-thunar",
     "a4tech-bloody-driver-git",
-    "nordic-bluish-accent-theme",
-    "nordic-bluish-accent-standard-buttons-theme",
-    "nordic-polar-standard-buttons-theme",
-    "nordic-standard-buttons-theme",
-    "nordic-darker-standard-buttons-theme"
+#    "nordic-bluish-accent-theme",
+#    "nordic-bluish-accent-standard-buttons-theme",
+#    "nordic-polar-standard-buttons-theme",
+#    "nordic-standard-buttons-theme",
+#    "nordic-darker-standard-buttons-theme"
 ]
 
 # Optionally, you can also define package groups or categories
