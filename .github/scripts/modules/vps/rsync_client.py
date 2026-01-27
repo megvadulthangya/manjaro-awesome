@@ -148,7 +148,7 @@ class RsyncClient:
     def _build_rsync_command(self, local_files: List[str], local_base_dir: Optional[Path],
                             delete: bool = False, enhanced_ssh: bool = False) -> str:
         """
-        Build rsync command with syntax safety (prefixing with ./)
+        Build rsync command with syntax safety (ALWAYS prefixing with ./)
         
         Args:
             local_files: List of local file paths
@@ -159,20 +159,20 @@ class RsyncClient:
         Returns:
             Rsync command string
         """
-        # Build file list with safety prefix
+        # Build file list with safety prefix - ALWAYS use ./ prefix
         if local_base_dir:
             # Use relative paths from base directory with ./ prefix
             file_args = []
             for file_path in local_files:
                 rel_path = os.path.relpath(file_path, local_base_dir)
-                # Prefix with ./ to ensure rsync treats it as local file
+                # ALWAYS prefix with ./ to ensure rsync treats it as local file
                 safe_path = f"./{rel_path}"
                 file_args.append(f"'{safe_path}'")
         else:
-            # Use absolute paths with ./ prefix
+            # Use absolute paths but extract filename and prefix with ./
             file_args = []
             for file_path in local_files:
-                # Extract just the filename and prefix with ./
+                # Extract just the filename and ALWAYS prefix with ./
                 filename = os.path.basename(file_path)
                 safe_path = f"./{filename}"
                 file_args.append(f"'{safe_path}'")
@@ -224,13 +224,17 @@ class RsyncClient:
         # Use rsync to download files from server
         self.logger.info(f"📥 Downloading remote files to local mirror...")
         
-        # Build rsync command for mirroring
-        rsync_cmd = f"rsync -avzq --progress --stats -e \"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -q\" '{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}' '{temp_dir}/' 2>/dev/null || true"
+        # Build rsync command for mirroring with safety prefix
+        rsync_cmd = f"rsync -avzq --progress --stats -e \"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -q\" '{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}' './' 2>/dev/null || true"
         
         self.logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
         self.logger.info(rsync_cmd.strip())
         
         start_time = time.time()
+        
+        # Change to temp directory for safe rsync
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
         
         try:
             result = self.shell_executor.run(
@@ -291,6 +295,8 @@ class RsyncClient:
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
             return False
+        finally:
+            os.chdir(old_cwd)
     
     def _log_rsync_output(self, result: Any, prefix: str = "RSYNC") -> None:
         """Log rsync output"""
@@ -306,7 +312,7 @@ class RsyncClient:
     def sync_directories(self, local_dir: Path, remote_subdir: str = "", 
                         delete: bool = False) -> bool:
         """
-        Sync entire directories
+        Sync entire directories with safety prefix
         
         Args:
             local_dir: Local directory to sync

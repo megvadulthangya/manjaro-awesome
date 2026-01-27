@@ -172,141 +172,154 @@ class PackageBuilder:
             self.local_packages, self.aur_packages = self.config_loader.get_package_lists()
         return self.local_packages, self.aur_packages
     
-    def _get_aur_version_with_git_fix(self, pkg_name: str) -> Optional[Tuple[str, str, str]]:
+    def _resolve_vcs_version_before_build(self, pkg_name: str, is_aur: bool) -> Optional[Tuple[str, str, str]]:
         """
-        Get AUR package version with GIT VERSION FIX
+        VCS PRIORITY FIX: Resolve git/VCS package version BEFORE building
         
         Args:
             pkg_name: Package name
+            is_aur: Whether it's an AUR package
         
         Returns:
             Tuple of (pkgver, pkgrel, epoch) or None if failed
         """
-        aur_dir = Path(self.config.get('aur_build_dir', 'build_aur'))
-        pkg_dir = aur_dir / pkg_name
+        self.logger.info(f"🔍 Pre-resolving VCS version for {pkg_name}...")
         
-        # Create fresh clone to get version
-        if pkg_dir.exists():
-            shutil.rmtree(pkg_dir, ignore_errors=True)
-        
-        self.logger.info(f"🔍 Fetching version for {pkg_name} from AUR...")
-        
-        # Try different AUR URLs
-        aur_urls = self.config.get('aur_urls', [
-            "https://aur.archlinux.org/{pkg_name}.git",
-            "git://aur.archlinux.org/{pkg_name}.git"
-        ])
-        
-        clone_success = False
-        for aur_url_template in aur_urls:
-            aur_url = aur_url_template.format(pkg_name=pkg_name)
-            result = self.shell_executor.run(
-                f"git clone --depth 1 {aur_url} {pkg_dir}",
-                check=False,
-                log_cmd=False
-            )
-            if result and result.returncode == 0:
-                clone_success = True
-                break
-        
-        if not clone_success:
-            self.logger.error(f"Failed to clone {pkg_name} from AUR")
-            if pkg_dir.exists():
-                shutil.rmtree(pkg_dir, ignore_errors=True)
-            return None
+        if is_aur:
+            # For AUR packages, create a temporary clone
+            aur_dir = Path(self.config.get('aur_build_dir', 'build_aur'))
+            temp_dir = aur_dir / f"temp_{pkg_name}"
+            
+            # Clean up any existing temp directory
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            # Try different AUR URLs
+            aur_urls = self.config.get('aur_urls', [
+                "https://aur.archlinux.org/{pkg_name}.git",
+                "git://aur.archlinux.org/{pkg_name}.git"
+            ])
+            
+            clone_success = False
+            for aur_url_template in aur_urls:
+                aur_url = aur_url_template.format(pkg_name=pkg_name)
+                result = self.shell_executor.run(
+                    f"git clone --depth 1 {aur_url} {temp_dir}",
+                    check=False,
+                    log_cmd=False
+                )
+                if result and result.returncode == 0:
+                    clone_success = True
+                    break
+            
+            if not clone_success:
+                self.logger.error(f"Failed to clone {pkg_name} for version resolution")
+                return None
+            
+            pkg_dir = temp_dir
+        else:
+            # For local packages, use the existing directory
+            pkg_dir = self.repo_root / pkg_name
+            if not pkg_dir.exists():
+                self.logger.error(f"Package directory not found: {pkg_name}")
+                return None
         
         try:
-            # For git packages, we need to generate the real version
-            # by checking the PKGBUILD or running makepkg --printsrcinfo
-            pkgbuild_path = pkg_dir / "PKGBUILD"
+            # Use VersionTracker to resolve VCS version
+            version_info = self.version_tracker.resolve_vcs_version(pkg_name, pkg_dir)
             
-            if pkgbuild_path.exists():
-                # Read PKGBUILD to check if it's a git package
-                with open(pkgbuild_path, 'r') as f:
-                    pkgbuild_content = f.read()
-                
-                # Check if this is a git package
-                is_git_package = '_git' in pkg_name or '-git' in pkg_name or 'git+' in pkgbuild_content
-                
-                if is_git_package:
-                    self.logger.debug(f"Detected git package: {pkg_name}")
-                    
-                    # For git packages, run makepkg --printsrcinfo to get real version
-                    # This resolves git commit hashes to actual versions
-                    try:
-                        result = self.shell_executor.run(
-                            ['makepkg', '--printsrcinfo'],
-                            cwd=pkg_dir,
-                            capture=True,
-                            text=True,
-                            check=False,
-                            log_cmd=False
-                        )
-                        
-                        if result.returncode == 0 and result.stdout:
-                            # Parse the output to extract version
-                            lines = result.stdout.strip().split('\n')
-                            pkgver = None
-                            pkgrel = None
-                            epoch = None
-                            
-                            for line in lines:
-                                line = line.strip()
-                                if '=' in line:
-                                    key, value = line.split('=', 1)
-                                    key = key.strip()
-                                    value = value.strip()
-                                    
-                                    if key == 'pkgver':
-                                        pkgver = value
-                                    elif key == 'pkgrel':
-                                        pkgrel = value
-                                    elif key == 'epoch':
-                                        epoch = value
-                            
-                            if pkgver and pkgrel:
-                                # Clean up immediately
-                                shutil.rmtree(pkg_dir, ignore_errors=True)
-                                self.logger.info(f"✅ Git package version resolved: {pkgver}-{pkgrel}")
-                                return pkgver, pkgrel, epoch
-                    except Exception as e:
-                        self.logger.warning(f"Could not get git version via makepkg: {e}")
+            if version_info:
+                pkgver, pkgrel, epoch = version_info
+                self.logger.info(f"✅ VCS version resolved: {pkgver}-{pkgrel}")
+            else:
+                # Fall back to standard SRCINFO extraction
+                pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
+                self.logger.info(f"✅ Standard version extracted: {pkgver}-{pkgrel}")
             
-            # Standard extraction for non-git packages
-            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
-            
-            # Clean up immediately
-            shutil.rmtree(pkg_dir, ignore_errors=True)
+            # Clean up temp directory for AUR packages
+            if is_aur and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
             
             return pkgver, pkgrel, epoch
         except Exception as e:
-            self.logger.error(f"Failed to extract version for {pkg_name}: {e}")
-            if pkg_dir.exists():
-                shutil.rmtree(pkg_dir, ignore_errors=True)
+            self.logger.error(f"Failed to resolve version for {pkg_name}: {e}")
+            if is_aur and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
             return None
     
-    def _get_local_version(self, pkg_name: str) -> Optional[Tuple[str, str, str]]:
+    def _sanitize_artifacts(self, pkg_name: str) -> List[Path]:
         """
-        Get local package version
+        INTERNAL SANITIZATION: Replace ':' with '_' in filenames BEFORE rsync
         
         Args:
             pkg_name: Package name
         
         Returns:
-            Tuple of (pkgver, pkgrel, epoch) or None if failed
+            List of sanitized file paths
         """
-        pkg_dir = self.repo_root / pkg_name
+        self.logger.info(f"🔧 Sanitizing artifacts for {pkg_name}...")
         
-        if not pkg_dir.exists():
-            self.logger.error(f"Package directory not found: {pkg_name}")
-            return None
+        output_dir = Path(self.config.get('output_dir', 'built_packages'))
+        sanitized_files = []
         
-        try:
-            # Extract version from SRCINFO
-            return self.version_manager.extract_version_from_srcinfo(pkg_dir)
-        except Exception as e:
-            self.logger.error(f"Failed to extract version for {pkg_name}: {e}")
-            return None
+        # Find all package files for this package
+        patterns = [f"*{pkg_name}*.pkg.tar.*", f"{pkg_name}*.pkg.tar.*"]
+        
+        for pattern in patterns:
+            for pkg_file in output_dir.glob(pattern):
+                original_name = pkg_file.name
+                
+                # Check if filename contains colon
+                if ':' in original_name:
+                    sanitized_name = original_name.replace(':', '_')
+                    sanitized_path = pkg_file.with_name(sanitized_name)
+                    
+                    # Rename the file
+                    try:
+                        pkg_file.rename(sanitized_path)
+                        self.logger.info(f"  🔄 Renamed: {original_name} -> {sanitized_name}")
+                        
+                        # Track the sanitization
+                        self._sanitized_files[str(pkg_file)] = str(sanitized_path)
+                        
+                        # Also rename signature if exists
+                        sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                        if sig_file.exists():
+                            sanitized_sig = sanitized_path.with_suffix(sanitized_path.suffix + '.sig')
+                            sig_file.rename(sanitized_sig)
+                            self.logger.info(f"  🔄 Renamed signature: {sig_file.name} -> {sanitized_sig.name}")
+                        
+                        sanitized_files.append(sanitized_path)
+                    except Exception as e:
+                        self.logger.error(f"Failed to rename {original_name}: {e}")
+                        # Keep original file
+                        sanitized_files.append(pkg_file)
+                else:
+                    sanitized_files.append(pkg_file)
+        
+        # Also check build directories
+        build_dirs = [
+            Path(self.config.get('aur_build_dir', 'build_aur')) / pkg_name,
+            self.repo_root / pkg_name
+        ]
+        
+        for build_dir in build_dirs:
+            if build_dir.exists():
+                for pkg_file in build_dir.glob("*.pkg.tar.*"):
+                    original_name = pkg_file.name
+                    if ':' in original_name:
+                        sanitized_name = original_name.replace(':', '_')
+                        sanitized_path = pkg_file.with_name(sanitized_name)
+                        
+                        try:
+                            pkg_file.rename(sanitized_path)
+                            self.logger.info(f"  🔄 Renamed in build dir: {original_name} -> {sanitized_name}")
+                            self._sanitized_files[str(pkg_file)] = str(sanitized_path)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to rename in build dir {original_name}: {e}")
+        
+        self.logger.info(f"✅ Sanitized {len(sanitized_files)} files for {pkg_name}")
+        return sanitized_files
     
     def _check_server_for_package(self, pkg_name: str, version_str: str, is_aur: bool) -> str:
         """
@@ -335,76 +348,9 @@ class PackageBuilder:
             self.logger.info(f"🔄 [BUILD] {pkg_name} {version_str} not on server or outdated. Starting build.")
             return "BUILD"
     
-    def _sanitize_artifacts(self, pkg_name: str, pkg_dir: Path) -> List[Path]:
-        """
-        Sanitize package artifacts by replacing ':' with '_' in filenames
-        
-        Args:
-            pkg_name: Package name
-            pkg_dir: Package directory containing built artifacts
-        
-        Returns:
-            List of sanitized file paths
-        """
-        self.logger.info(f"🔧 Sanitizing artifacts for {pkg_name}...")
-        
-        sanitized_files = []
-        
-        # Find all package files
-        for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
-            original_name = pkg_file.name
-            sanitized_name = original_name.replace(':', '_')
-            
-            if sanitized_name != original_name:
-                # Create sanitized path
-                sanitized_path = pkg_file.with_name(sanitized_name)
-                
-                # Rename the file
-                try:
-                    pkg_file.rename(sanitized_path)
-                    self.logger.info(f"  🔄 Renamed: {original_name} -> {sanitized_name}")
-                    
-                    # Track the sanitization
-                    self._sanitized_files[str(pkg_file)] = str(sanitized_path)
-                    
-                    # Also rename signature if exists
-                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
-                    if sig_file.exists():
-                        sanitized_sig = sanitized_path.with_suffix(sanitized_path.suffix + '.sig')
-                        sig_file.rename(sanitized_sig)
-                        self.logger.info(f"  🔄 Renamed signature: {sig_file.name} -> {sanitized_sig.name}")
-                    
-                    sanitized_files.append(sanitized_path)
-                except Exception as e:
-                    self.logger.error(f"Failed to rename {original_name}: {e}")
-                    # Keep original file
-                    sanitized_files.append(pkg_file)
-            else:
-                sanitized_files.append(pkg_file)
-        
-        # Also check output directory for any already moved files
-        output_dir = Path(self.config.get('output_dir', 'built_packages'))
-        for pkg_file in output_dir.glob(f"*{pkg_name}*.pkg.tar.*"):
-            original_name = pkg_file.name
-            if ':' in original_name:
-                sanitized_name = original_name.replace(':', '_')
-                sanitized_path = pkg_file.with_name(sanitized_name)
-                
-                try:
-                    pkg_file.rename(sanitized_path)
-                    self.logger.info(f"  🔄 Renamed in output_dir: {original_name} -> {sanitized_name}")
-                    
-                    # Track the sanitization
-                    self._sanitized_files[str(pkg_file)] = str(sanitized_path)
-                except Exception as e:
-                    self.logger.error(f"Failed to rename in output_dir {original_name}: {e}")
-        
-        self.logger.info(f"✅ Sanitized {len(sanitized_files)} files for {pkg_name}")
-        return sanitized_files
-    
     def _build_aur_packages_server_first(self) -> None:
         """
-        Build AUR packages using SERVER-FIRST logic with GIT VERSION FIX
+        Build AUR packages using SERVER-FIRST logic with VCS PRIORITY FIX
         """
         if not self.aur_packages:
             self.logger.info("No AUR packages to build")
@@ -415,14 +361,14 @@ class PackageBuilder:
         for pkg_name in self.aur_packages:
             self.logger.info(f"\n--- Processing AUR: {pkg_name} ---")
             
-            # Get version from AUR (with git version fix)
-            version_info = self._get_aur_version_with_git_fix(pkg_name)
+            # VCS PRIORITY FIX: Resolve version BEFORE checking server
+            version_info = self._resolve_vcs_version_before_build(pkg_name, is_aur=True)
             if not version_info:
                 self.build_state.add_failed(
                     pkg_name,
                     "unknown",
                     is_aur=True,
-                    error_message="Failed to get version from AUR"
+                    error_message="Failed to resolve version"
                 )
                 continue
             
@@ -443,11 +389,8 @@ class PackageBuilder:
             success = self.aur_builder.build(pkg_name, None)  # Pass None to force build
             
             if success:
-                # Sanitize artifacts immediately after build
-                aur_dir = Path(self.config.get('aur_build_dir', 'build_aur'))
-                pkg_dir = aur_dir / pkg_name
-                if pkg_dir.exists():
-                    self._sanitize_artifacts(pkg_name, pkg_dir)
+                # INTERNAL SANITIZATION: Rename files with colons
+                self._sanitize_artifacts(pkg_name)
                 
                 # Register built package
                 self.version_tracker.register_built_package(pkg_name, version_str)
@@ -465,7 +408,7 @@ class PackageBuilder:
     
     def _build_local_packages_server_first(self) -> None:
         """
-        Build local packages using SERVER-FIRST logic
+        Build local packages using SERVER-FIRST logic with VCS PRIORITY FIX
         """
         if not self.local_packages:
             self.logger.info("No local packages to build")
@@ -476,14 +419,14 @@ class PackageBuilder:
         for pkg_name in self.local_packages:
             self.logger.info(f"\n--- Processing Local: {pkg_name} ---")
             
-            # Get version from local package
-            version_info = self._get_local_version(pkg_name)
+            # VCS PRIORITY FIX: Resolve version BEFORE checking server
+            version_info = self._resolve_vcs_version_before_build(pkg_name, is_aur=False)
             if not version_info:
                 self.build_state.add_failed(
                     pkg_name,
                     "unknown",
                     is_aur=False,
-                    error_message="Failed to get version from local package"
+                    error_message="Failed to resolve version"
                 )
                 continue
             
@@ -504,10 +447,8 @@ class PackageBuilder:
             success = self.local_builder.build(pkg_name, None)  # Pass None to force build
             
             if success:
-                # Sanitize artifacts immediately after build
-                pkg_dir = self.repo_root / pkg_name
-                if pkg_dir.exists():
-                    self._sanitize_artifacts(pkg_name, pkg_dir)
+                # INTERNAL SANITIZATION: Rename files with colons
+                self._sanitize_artifacts(pkg_name)
                 
                 # Register built package
                 self.version_tracker.register_built_package(pkg_name, version_str)
@@ -855,9 +796,8 @@ class PackageBuilder:
             self.logger.info(f"Total built:     {summary['built']}")
             self.logger.info(f"Total adopted:   {summary['skipped']}")
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
-            self.logger.info(f"Git version fix: ✅ Implemented")
-            self.logger.info(f"Cleanup safety:  ✅ Version-aware")
-            self.logger.info(f"Sanitized files: {len(self._sanitized_files)}")
+            self.logger.info(f"VCS priority fix: ✅ Implemented")
+            self.logger.info(f"Internal sanitization: ✅ {len(self._sanitized_files)} files renamed")
             
             # State summary
             state_summary = self.version_tracker.get_state_summary()

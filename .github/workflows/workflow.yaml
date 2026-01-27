@@ -457,6 +457,9 @@ jobs:
           
           echo "✅ GPG and pacman-key initialization complete"
 
+
+
+
       - name: Run Builder with SRCINFO Versioning
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -547,30 +550,7 @@ jobs:
           
           exit $BUILD_STATUS
 
-      - name: Sanitize Artifact Filenames
-        if: always()
-        run: |
-          echo "=== Sanitizing artifact filenames ==="
-          
-          # Create a sanitized copy of built packages
-          if [ -d "built_packages" ] && [ "$(ls -A built_packages 2>/dev/null)" ]; then
-            echo "Creating sanitized artifact directory..."
-            mkdir -p artifact_packages
-            
-            for file in built_packages/*; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                # Replace invalid characters
-                sanitized_name=$(echo "$filename" | sed 's/:/_/g' | sed 's/[<>|*?"\r\n]//g')
-                echo "Copying: $filename -> $sanitized_name"
-                cp "$file" "artifact_packages/$sanitized_name"
-              fi
-            done
-            
-            echo "✅ Artifact filenames sanitized"
-          else
-            echo "⚠️ No built packages found to sanitize"
-          fi
+      # NOTE: Removed "Sanitize Artifact Filenames" step - now handled internally by Python
 
       - name: Upload Build Artifacts
         if: always()
@@ -580,7 +560,7 @@ jobs:
           path: |
             builder.log
             build_output.log
-            artifact_packages/
+            built_packages/
           retention-days: 7
           if-no-files-found: warn
 
@@ -603,33 +583,3 @@ jobs:
           find /tmp -name "yay-*" -type d -exec rm -rf {} + 2>/dev/null || true
           
           echo "✅ Temporary directories cleaned"
-
-      - name: Summary Report
-        if: always()
-        run: |
-          echo "=== BUILD SUMMARY ==="
-          echo "Workflow: ${{ github.workflow }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Repository: ${{ github.repository }}"
-          echo "Trigger: ${{ github.event_name }}"
-          echo "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          
-          if [ -f "build_output.log" ]; then
-            echo ""
-            echo "=== Build Statistics ==="
-            grep -E "BUILD SUMMARY|Duration:|AUR packages:|Local packages:|Total built:|Skipped:|GPG signing:|PACKAGER:" build_output.log | tail -15 || echo "No summary found"
-          fi
-          
-          if [ -d "artifact_packages" ]; then
-            PKG_COUNT=$(ls -1 artifact_packages/ 2>/dev/null | wc -l)
-            echo ""
-            echo "Artifacts created: $PKG_COUNT packages"
-          fi
-          
-          echo ""
-          echo "=== NEXT STEPS ==="
-          echo "1. Check artifacts for built packages"
-          echo "2. Review builder.log for detailed logs"
-          echo "3. Verify repository on VPS: ${{ secrets.REPO_SERVER_URL }}"
-          echo "4. Test installation: sudo pacman -Syu && sudo pacman -S <package>"
