@@ -5,24 +5,30 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
     "gghelper",
-    "gtk2",
-    "awesome-freedesktop-git",
-    "lain-git",
+#    "gtk2",
+#    "awesome-freedesktop-git",
+#    "lain-git",
     "awesome-rofi",
-    "awesome-git",
+#    "awesome-git",
     "awesome-welcome",
-    "tilix-git",
+#    "tilix-git",
     "nordic-backgrounds",
     "awesome-copycats-manjaro",
     "i3lock-fancy-git",
-    "ttf-font-awesome-5",
+#    "ttf-font-awesome-5",
     "nvidia-driver-assistant",
-    "grayjay-bin"
+#    "grayjay-bin"
 ]
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "awesome-git",
+    "awesome-freedesktop-git",
+    "lain-git",
+    "ttf-font-awesome-5",
+    "grayjay-bin",
     "libinput-gestures",
+    "gtk2",
     "gtkd",
     "qt5-styleplugins",
     "urxvt-resize-font-git",
@@ -37,6 +43,7 @@ AUR_PACKAGES = [
     "nordzy-icon-theme",
     "oh-my-posh-bin",
     "fish-done",
+    "tilix-git",
     "find-the-command",
     "p7zip-gui",
     "qownnotes",
