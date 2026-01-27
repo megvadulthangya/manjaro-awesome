@@ -11,6 +11,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import glob
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional, Set
 
@@ -491,14 +492,13 @@ class PackageBuilder:
         self.logger.info("📥 Downloading existing database files only from VPS...")
         
         patterns = [
-            f"{repo_name}.db*",
-            f"{repo_name}.files*"
+            f"{repo_name}.db.tar.gz*",
+            f"{repo_name}.files.tar.gz*"
         ]
         
-        download_success = True
-        
         for pattern in patterns:
-            self.logger.info(f"  Downloading: {pattern}")
+            self.logger.info(f"  Downloading pattern: {pattern}")
+            
             success = self.rsync_client.mirror_remote(
                 remote_pattern=pattern,
                 local_dir=self._staging_dir,
@@ -507,59 +507,77 @@ class PackageBuilder:
             
             if not success:
                 self.logger.warning(f"⚠️ Failed to download {pattern}")
-                download_success = False
         
-        db_files = list(self._staging_dir.glob(f"{repo_name}.db*"))
-        files_files = list(self._staging_dir.glob(f"{repo_name}.files*"))
+        db_files = list(self._staging_dir.glob(f"{repo_name}.db.tar.gz*"))
+        files_files = list(self._staging_dir.glob(f"{repo_name}.files.tar.gz*"))
         
-        if db_files:
-            self.logger.info(f"✅ Downloaded {len(db_files)} database files")
+        total_files = len(db_files) + len(files_files)
+        
+        if total_files > 0:
+            self.logger.info(f"✅ Downloaded {total_files} database files")
         else:
-            self.logger.info("ℹ️ No existing database found (first run)")
+            self.logger.info("ℹ️ No existing database files found (first run or clean state)")
         
-        if files_files:
-            self.logger.info(f"✅ Downloaded {len(files_files)} files database files")
-        
-        return download_success
+        return True
     
-    def _create_dummy_files_for_adopted_packages(self) -> None:
+    def _create_dummy_files_for_all_packages(self) -> None:
         """
-        Create dummy files for packages that are already on server (adopted)
+        Create dummy files for ALL packages that should be in the repository
         
-        Uses the version_tracker to get list of adopted packages
+        Creates dummy files for:
+        1. Newly built packages (already moved to staging)
+        2. Adopted packages (already on server)
+        3. Any other packages that exist on server
+        
+        This ensures repo-add has a complete view of the repository.
         """
-        self.logger.info("🔄 Creating dummy files for adopted packages...")
+        self.logger.info("🔄 Creating dummy files for all repository packages...")
         
+        # Get all packages that should be in the repository
+        all_packages = set()
+        
+        # 1. Get adopted packages (already on server, skipped in this build)
         adopted_packages = self.version_tracker.get_skipped_packages_dict()
+        for pkg_name, version_str in adopted_packages.items():
+            # Create filename pattern for this package
+            dummy_name = f"{pkg_name}-{version_str}-x86_64.pkg.tar.zst"
+            all_packages.add((dummy_name, True))  # True = is dummy (needs creation)
         
-        if not adopted_packages:
-            self.logger.info("ℹ️ No adopted packages found")
-            return
+        # 2. Get built packages (already in staging with real files)
+        staging_packages = list(self._staging_dir.glob("*.pkg.tar.zst"))
+        for pkg_file in staging_packages:
+            if pkg_file.stat().st_size > 0:  # Only count real files
+                all_packages.add((pkg_file.name, False))  # False = real file (already exists)
         
-        self.logger.info(f"Found {len(adopted_packages)} adopted packages")
+        # 3. Get all packages from server inventory
+        remote_files = self.ssh_client.get_cached_inventory()
+        for filename in remote_files.keys():
+            if filename.endswith('.pkg.tar.zst'):
+                # Check if we already have this package (either dummy or real)
+                if not any(filename == pkg_name for pkg_name, _ in all_packages):
+                    all_packages.add((filename, True))  # Need dummy
         
+        # Create dummy files for those that need them
         created_count = 0
-        
-        for pkg_name, remote_version in adopted_packages.items():
-            try:
-                dummy_filename = f"{pkg_name}-{remote_version}-x86_64.pkg.tar.zst"
-                dummy_path = self._staging_dir / dummy_filename
-                
+        for pkg_filename, needs_dummy in all_packages:
+            if needs_dummy:
+                dummy_path = self._staging_dir / pkg_filename
                 if not dummy_path.exists():
-                    dummy_path.touch()
-                    self.logger.debug(f"  Created dummy: {dummy_filename}")
-                    created_count += 1
-                
-                sig_filename = f"{dummy_filename}.sig"
-                sig_path = self._staging_dir / sig_filename
-                if not sig_path.exists():
-                    sig_path.touch()
-                    self.logger.debug(f"  Created dummy signature: {sig_filename}")
-                    
-            except Exception as e:
-                self.logger.warning(f"Failed to create dummy for {pkg_name}: {e}")
+                    try:
+                        dummy_path.touch()
+                        self.logger.debug(f"  Created dummy: {pkg_filename}")
+                        created_count += 1
+                        
+                        # Also create dummy signature
+                        sig_path = dummy_path.with_suffix(dummy_path.suffix + '.sig')
+                        if not sig_path.exists():
+                            sig_path.touch()
+                            self.logger.debug(f"  Created dummy signature: {sig_filename}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to create dummy for {pkg_filename}: {e}")
         
         self.logger.info(f"✅ Created {created_count} dummy package files")
+        self.logger.info(f"📊 Total packages in staging: {len(all_packages)}")
     
     def _move_new_packages_to_staging(self) -> List[Path]:
         """
@@ -601,6 +619,33 @@ class PackageBuilder:
         self.logger.info(f"✅ Moved {len(moved_packages)} new packages to staging")
         return moved_packages
     
+    def _clean_dummy_files_before_upload(self) -> None:
+        """
+        Remove all 0-byte dummy files from staging before upload
+        
+        This ensures dummy files never reach the VPS
+        """
+        self.logger.info("🧹 Cleaning dummy files before upload...")
+        
+        removed_count = 0
+        
+        # Remove dummy package files (0-byte .pkg.tar.zst)
+        for pkg_file in self._staging_dir.glob("*.pkg.tar.zst"):
+            if pkg_file.stat().st_size == 0:
+                try:
+                    pkg_file.unlink()
+                    removed_count += 1
+                    
+                    # Also remove corresponding signature if it's also 0-byte
+                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                    if sig_file.exists() and sig_file.stat().st_size == 0:
+                        sig_file.unlink()
+                        removed_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to remove dummy file {pkg_file.name}: {e}")
+        
+        self.logger.info(f"✅ Removed {removed_count} dummy files")
+    
     def _update_database_locally(self) -> bool:
         """
         Update repository database locally with GPG signing
@@ -620,57 +665,71 @@ class PackageBuilder:
         try:
             db_file = f"{repo_name}.db.tar.gz"
             
-            self.logger.info(f"Cleaning old database files...")
+            self.logger.info("Cleaning old database files...")
             for f in [f"{repo_name}.db", f"{repo_name}.db.tar.gz", 
                       f"{repo_name}.files", f"{repo_name}.files.tar.gz"]:
                 if os.path.exists(f):
                     os.remove(f)
             
-            package_files = list(Path(".").glob("*.pkg.tar.zst"))
+            package_files = list(glob.glob("*.pkg.tar.zst"))
             if not package_files:
                 self.logger.error("❌ No package files found for database update")
                 return False
             
             self.logger.info(f"Found {len(package_files)} package files for database update")
             
-            gpg_key_id = self.gpg_handler.gpg_key_id if self.gpg_handler.gpg_enabled else ""
-            
-            if self.gpg_handler.gpg_enabled and gpg_key_id:
-                self.logger.info(f"🔏 Running repo-add with GPG signing (key: {gpg_key_id})...")
-                env = os.environ.copy()
-                env['GNUPGHOME'] = self.gpg_handler.gpg_home if hasattr(self.gpg_handler, 'gpg_home') else ''
+            if self.gpg_handler.gpg_enabled:
+                self.logger.info("🔏 Running repo-add with GPG signing...")
                 
-                cmd = f"repo-add --sign --key {gpg_key_id} --remove {db_file} *.pkg.tar.zst"
+                # Set GNUPGHOME environment variable for non-interactive signing
+                env = os.environ.copy()
+                if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
+                    env['GNUPGHOME'] = self.gpg_handler.gpg_home
+                
+                cmd = f"repo-add --sign --remove {db_file} *.pkg.tar.zst"
+                
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False
+                )
             else:
                 self.logger.info("🔧 Running repo-add without signing...")
                 cmd = f"repo-add --remove {db_file} *.pkg.tar.zst"
-                env = os.environ.copy()
-            
-            self.logger.info(f"Command: {cmd}")
-            
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False
-            )
+                
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
             
             if result.returncode == 0:
-                self.logger.info("✅ Database updated and signed locally")
+                self.logger.info("✅ Database updated successfully")
                 
-                db_path = Path(db_file)
-                if db_path.exists():
-                    size_mb = db_path.stat().st_size / (1024 * 1024)
-                    self.logger.info(f"Database size: {size_mb:.2f} MB")
-                    
-                    # Verify database entries
-                    self._verify_database_entries(db_file)
-                    return True
-                else:
+                if not os.path.exists(db_file):
                     self.logger.error("❌ Database file not created")
                     return False
+                
+                # Verify the database was created with signatures if GPG enabled
+                if self.gpg_handler.gpg_enabled:
+                    sig_file = f"{db_file}.sig"
+                    if os.path.exists(sig_file):
+                        sig_size = os.path.getsize(sig_file)
+                        if sig_size > 0:
+                            self.logger.info(f"✅ Database signed successfully ({sig_size} bytes)")
+                        else:
+                            self.logger.warning("⚠️ Database signature file is empty")
+                    else:
+                        self.logger.warning("⚠️ Database signature file not found")
+                
+                # Verify database entries
+                self._verify_database_entries(db_file)
+                return True
             else:
                 self.logger.error(f"❌ repo-add failed with exit code {result.returncode}:")
                 if result.stdout:
@@ -681,6 +740,8 @@ class PackageBuilder:
                 
         except Exception as e:
             self.logger.error(f"❌ Database update error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             os.chdir(old_cwd)
@@ -702,50 +763,47 @@ class PackageBuilder:
         except Exception as e:
             self.logger.warning(f"Could not verify database: {e}")
     
-    def _upload_only_new_files(self) -> bool:
+    def _upload_only_real_files(self) -> bool:
         """
-        Upload ONLY new packages and updated database files to VPS
+        Upload ONLY real files (not dummies) to VPS
         
         Returns:
             True if successful
         """
-        self.logger.info("\n📤 Uploading ONLY new files to VPS...")
-        
-        repo_name = self.config.get('repo_name', '')
+        self.logger.info("\n📤 Uploading real files to VPS (excluding dummies)...")
         
         files_to_upload = []
         
-        self.logger.info("1. Collecting new package files...")
-        new_packages = list(self._staging_dir.glob("*.pkg.tar.zst"))
-        for pkg_file in new_packages:
+        # Collect real package files (non-zero size)
+        for pkg_file in self._staging_dir.glob("*.pkg.tar.zst"):
             if pkg_file.stat().st_size > 0:
                 files_to_upload.append(pkg_file)
+                
+                # Include signature if it exists and has content
                 sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
                 if sig_file.exists() and sig_file.stat().st_size > 0:
                     files_to_upload.append(sig_file)
         
-        self.logger.info(f"  Found {len([f for f in files_to_upload if '.pkg.tar.zst' in str(f)])} new packages")
+        self.logger.info(f"Found {len([f for f in files_to_upload if str(f).endswith('.pkg.tar.zst')])} real package files")
         
-        self.logger.info("2. Collecting updated database files...")
-        db_patterns = [f"{repo_name}.db*", f"{repo_name}.files*"]
-        for pattern in db_patterns:
+        # Collect database files
+        repo_name = self.config.get('repo_name', '')
+        for pattern in [f"{repo_name}.db*", f"{repo_name}.files*"]:
             for db_file in self._staging_dir.glob(pattern):
                 if db_file.stat().st_size > 0:
                     files_to_upload.append(db_file)
         
-        self.logger.info(f"  Found {len(files_to_upload) - len([f for f in files_to_upload if '.pkg.tar.zst' in str(f)])} database files")
-        
         if not files_to_upload:
-            self.logger.error("❌ No files to upload")
-            return False
+            self.logger.warning("⚠️ No files to upload (all files are dummies or empty)")
+            return True
         
-        self.logger.info(f"📦 Total files to upload: {len(files_to_upload)}")
+        self.logger.info(f"📦 Total real files to upload: {len(files_to_upload)}")
         
         files_list = [str(f) for f in files_to_upload]
         upload_success = self.rsync_client.upload(files_list, self._staging_dir)
         
         if upload_success:
-            self.logger.info("✅ All new files uploaded successfully")
+            self.logger.info("✅ All real files uploaded successfully")
             return True
         else:
             self.logger.error("❌ File upload failed")
@@ -753,7 +811,7 @@ class PackageBuilder:
     
     def _cleanup_staging(self) -> None:
         """Clean up staging directory"""
-        if self._staging_dir and self._staging_dir.exists():
+        if self._staging_dir and os.path.exists(self._staging_dir):
             try:
                 shutil.rmtree(self._staging_dir, ignore_errors=True)
                 self.logger.debug(f"🧹 Cleaned up staging directory: {self._staging_dir}")
@@ -761,48 +819,43 @@ class PackageBuilder:
             except Exception as e:
                 self.logger.warning(f"Could not clean staging directory: {e}")
     
-    def _upload_new_packages(self) -> bool:
+    def _force_database_update(self) -> bool:
         """
-        Main upload workflow with local database update
+        FORCE database update even if no new packages were built
+        
+        This ensures the remote DB is always healthy and signed
         
         Returns:
             True if successful
         """
-        output_dir = Path(self.config.get('output_dir'))
-        new_packages = list(output_dir.glob("*.pkg.tar.*"))
-        
-        if not new_packages:
-            self.logger.info("ℹ️ No new packages to upload")
-            return True
-        
-        self.logger.info(f"\n🚀 Starting repository update with {len(new_packages)} new package(s)")
+        self.logger.info("\n🔧 FORCING database update (ensuring remote DB is healthy)...")
         
         try:
+            # Step 1: Create staging directory
             self.logger.info("\n" + "=" * 60)
             self.logger.info("STEP 1: Create local staging directory")
             self.logger.info("=" * 60)
             staging_dir = self._create_local_staging()
             
+            # Step 2: Download existing database files
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 2: Download ONLY existing database files from VPS")
+            self.logger.info("STEP 2: Download existing database files from VPS")
             self.logger.info("=" * 60)
-            if not self._download_existing_database_only():
-                self.logger.warning("⚠️ Failed to download some database files, continuing...")
+            self._download_existing_database_only()
             
+            # Step 3: Move any new packages to staging
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 3: Create dummy files for adopted packages")
+            self.logger.info("STEP 3: Move new packages to staging")
             self.logger.info("=" * 60)
-            self._create_dummy_files_for_adopted_packages()
+            self._move_new_packages_to_staging()
             
+            # Step 4: Create dummy files for all packages
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 4: Move new packages to staging")
+            self.logger.info("STEP 4: Create dummy files for all repository packages")
             self.logger.info("=" * 60)
-            moved_packages = self._move_new_packages_to_staging()
+            self._create_dummy_files_for_all_packages()
             
-            if not moved_packages:
-                self.logger.error("❌ No packages moved to staging")
-                return False
-            
+            # Step 5: Update database locally with GPG signing
             self.logger.info("\n" + "=" * 60)
             self.logger.info("STEP 5: Update database locally with GPG signing")
             self.logger.info("=" * 60)
@@ -810,15 +863,23 @@ class PackageBuilder:
                 self.logger.error("❌ Local database update failed")
                 return False
             
+            # Step 6: Clean dummy files before upload
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 6: Upload ONLY new files to VPS")
+            self.logger.info("STEP 6: Clean dummy files before upload")
             self.logger.info("=" * 60)
-            if not self._upload_only_new_files():
+            self._clean_dummy_files_before_upload()
+            
+            # Step 7: Upload only real files
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("STEP 7: Upload only real files to VPS")
+            self.logger.info("=" * 60)
+            if not self._upload_only_real_files():
                 self.logger.error("❌ File upload failed")
                 return False
             
+            # Step 8: Execute queued cleanup
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 7: Execute queued cleanup operations")
+            self.logger.info("STEP 8: Execute queued cleanup operations")
             self.logger.info("=" * 60)
             cleanup_success = self.version_tracker.commit_queued_deletions()
             
@@ -830,13 +891,13 @@ class PackageBuilder:
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Upload workflow failed: {e}")
+            self.logger.error(f"❌ Force database update failed: {e}")
             import traceback
             traceback.print_exc()
             return False
         finally:
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 8: Cleanup staging directory")
+            self.logger.info("STEP 9: Cleanup staging directory")
             self.logger.info("=" * 60)
             self._cleanup_staging()
     
@@ -904,30 +965,19 @@ class PackageBuilder:
             self._build_aur_packages_server_first()
             self._build_local_packages_server_first()
             
-            output_dir = Path(self.config.get('output_dir'))
-            new_packages = list(output_dir.glob("*.pkg.tar.*"))
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("STEP 5: FORCED DATABASE UPDATE (ALWAYS RUN)")
+            self.logger.info("=" * 60)
             
-            if new_packages:
-                self.logger.info(f"\n📊 New packages built: {len(new_packages)}")
-                
-                self.logger.info("\n" + "=" * 60)
-                self.logger.info("STEP 5: REPOSITORY UPDATE WITH LOCAL DATABASE")
-                self.logger.info("=" * 60)
-                
-                upload_success = self._upload_new_packages()
-                
-                if not upload_success:
-                    self.logger.error("\n❌ Repository update failed!")
-                    return 1
-                
-                self.gpg_handler.cleanup()
-                
-                self.logger.info("\n✅ Repository update completed successfully!")
-            else:
-                self.logger.info("\n📊 No new packages were built - all packages already on server")
-                
-                self.version_tracker.save_state()
-                self.gpg_handler.cleanup()
+            # ALWAYS run database update, even if no new packages
+            db_update_success = self._force_database_update()
+            
+            if not db_update_success:
+                self.logger.error("\n❌ Database update failed!")
+                return 1
+            
+            self.gpg_handler.cleanup()
+            self.logger.info("\n✅ Repository maintenance completed successfully!")
             
             self.logger.info("\n" + "=" * 60)
             self.logger.info("STEP 6: FINAL STATISTICS")
@@ -944,7 +994,7 @@ class PackageBuilder:
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             self.logger.info(f"VCS priority fix: ✅ Implemented")
             self.logger.info(f"Internal sanitization: ✅ {len(self._sanitized_files)} files renamed")
-            self.logger.info(f"Local database update: ✅ Implemented")
+            self.logger.info(f"Forced DB update: ✅ Always executed")
             
             state_summary = self.version_tracker.get_state_summary()
             self.logger.info(f"Packages tracked: {state_summary['total_packages']}")
@@ -963,7 +1013,7 @@ class PackageBuilder:
             if hasattr(self, 'version_tracker'):
                 self.version_tracker.save_state()
             
-            if hasattr(self, '_staging_dir') and self._staging_dir and self._staging_dir.exists():
+            if hasattr(self, '_staging_dir') and self._staging_dir and os.path.exists(self._staging_dir):
                 shutil.rmtree(self._staging_dir, ignore_errors=True)
             
             return 1

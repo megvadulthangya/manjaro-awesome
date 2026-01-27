@@ -19,11 +19,19 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      
+
+      - name: Disk usage BEFORE cleanup
+        run: |
+          echo "=== DF -h BEFORE ==="
+          df -h
+          echo "=== FREE -h BEFORE ==="
+          free -h
+          echo "=== LSBLK ==="
+          lsblk
+
       - name: Free Disk Space (Comprehensive Cleanup)
         uses: jlumbroso/free-disk-space@main
         with:
-          # Enable all cleanup options for maximum space
           tool-cache: true
           android: true
           dotnet: true
@@ -31,13 +39,19 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-          # Additional aggressive cleanup for build environment
           remove-android: true
           remove-dotnet: true
           remove-haskell: true
           remove-docker: true
-          # Force remove large directories
           force-remove-all-additional-packages: true
+
+      - name: Disk usage AFTER cleanup
+        run: |
+          echo "=== DF -h AFTER ==="
+          df -h
+          echo "=== FREE -h AFTER ==="
+          free -h
+
 
   build-and-deploy:
     name: Build and Deploy Packages
