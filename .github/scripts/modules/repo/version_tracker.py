@@ -3,6 +3,7 @@ Version tracking for Zero-Residue cleanup policy - SERVER-FIRST ARCHITECTURE
 Enhanced with VCS version resolution and protected artifacts
 """
 
+import os
 import json
 import re
 import subprocess
@@ -82,7 +83,9 @@ class VersionTracker:
             return repo_state_path
         
         # Priority 3: User home directory
-        home_state_path = Path.home() / ".build_tracking" / "vps_state.json"
+        home_dir = Path.home()
+        home_state_path = home_dir / ".build_tracking" / "vps_state.json"
+        home_state_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Using home directory state path: {home_state_path}")
         return home_state_path
     
