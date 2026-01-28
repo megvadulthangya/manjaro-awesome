@@ -80,9 +80,13 @@ class PackageBuilder:
         self.ssh_client = SSHClient(self.config, self.shell_executor, self.logger)
         self.rsync_client = RsyncClient(self.config, self.shell_executor, self.logger)
         
-        # Setup SSH configuration
-        ssh_key = self.config.get('ssh_key', '')
-        self.ssh_client.setup_ssh_config(ssh_key)
+        # Setup SSH configuration for VPS
+        vps_ssh_key = os.getenv('VPS_SSH_KEY', '')
+        self.ssh_client.setup_ssh_config(vps_ssh_key)
+        
+        # Git SSH setup for CI_PUSH_SSH_KEY
+        self._git_ssh_temp_key: Optional[Path] = None
+        self._git_ssh_env: Optional[Dict[str, str]] = None
         
         # Version tracker with JSON state
         self.version_tracker = VersionTracker(
@@ -103,9 +107,6 @@ class PackageBuilder:
             build_state=self.build_state,
             logger=self.logger
         )
-        
-        # Note: LocalBuilder will be handled differently with temp clone method
-        # We'll create a new local builder instance for the temp clone
         
         # Repository managers
         self.database_manager = DatabaseManager(
@@ -148,6 +149,201 @@ class PackageBuilder:
         
         self.logger.info("✅ PackageBuilder initialized with COMPLETE BUILD SYSTEM")
     
+    def _setup_git_ssh(self) -> bool:
+        """
+        Setup Git SSH authentication using CI_PUSH_SSH_KEY
+        
+        Returns:
+            True if successful
+        """
+        ci_push_ssh_key = os.getenv('CI_PUSH_SSH_KEY')
+        if not ci_push_ssh_key:
+            self.logger.error("❌ CI_PUSH_SSH_KEY environment variable not set")
+            return False
+        
+        try:
+            # Create temporary directory for SSH key
+            temp_ssh_dir = Path(tempfile.mkdtemp(prefix="git_ssh_"))
+            self._git_ssh_temp_key = temp_ssh_dir / "id_ed25519"
+            
+            # Write SSH key to file
+            with open(self._git_ssh_temp_key, 'w') as f:
+                f.write(ci_push_ssh_key)
+            
+            # Set proper permissions
+            self._git_ssh_temp_key.chmod(0o600)
+            
+            # Create known_hosts with github.com key
+            known_hosts = temp_ssh_dir / "known_hosts"
+            ssh_keyscan_cmd = [
+                "ssh-keyscan",
+                "-t", "ed25519",
+                "github.com"
+            ]
+            
+            result = subprocess.run(
+                ssh_keyscan_cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                with open(known_hosts, 'w') as f:
+                    f.write(result.stdout)
+                known_hosts.chmod(0o644)
+            else:
+                # Fallback: accept host key without verification
+                with open(known_hosts, 'w') as f:
+                    f.write("github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
+            
+            # Create Git SSH command
+            git_ssh_cmd = (
+                f"ssh -o IdentitiesOnly=yes "
+                f"-o IdentityFile={self._git_ssh_temp_key} "
+                f"-o UserKnownHostsFile={known_hosts} "
+                f"-o StrictHostKeyChecking=yes "
+                f"-o ConnectTimeout=30"
+            )
+            
+            self._git_ssh_env = os.environ.copy()
+            self._git_ssh_env['GIT_SSH_COMMAND'] = git_ssh_cmd
+            
+            self.logger.info("✅ Git SSH authentication configured")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to setup Git SSH: {e}")
+            return False
+    
+    def _cleanup_git_ssh(self):
+        """Clean up temporary Git SSH key"""
+        if self._git_ssh_temp_key and self._git_ssh_temp_key.exists():
+            try:
+                temp_dir = self._git_ssh_temp_key.parent
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                self._git_ssh_temp_key = None
+                self._git_ssh_env = None
+                self.logger.debug("🧹 Cleaned up Git SSH temporary files")
+            except Exception as e:
+                self.logger.warning(f"Failed to cleanup Git SSH: {e}")
+    
+    def _setup_temp_repo(self) -> bool:
+        """
+        GIT SYNC: Robust repository clone with proper SSH authentication
+        
+        Returns:
+            True if successful
+        """
+        self.logger.info("\n" + "=" * 60)
+        self.logger.info("GIT SYNC: Setting up temporary repository clone")
+        self.logger.info("=" * 60)
+        
+        # Setup Git SSH authentication
+        if not self._setup_git_ssh():
+            self.logger.error("❌ Failed to setup Git SSH authentication")
+            return False
+        
+        # Get clone directory from config
+        clone_dir_config = self.config.get('sync_clone_dir', '/tmp/manjaro-awesome-gitclone')
+        self._temp_clone_dir = Path(clone_dir_config)
+        
+        # Clean up existing temp clone if exists
+        if self._temp_clone_dir.exists():
+            self.logger.info("🧹 Cleaning existing temporary clone...")
+            try:
+                shutil.rmtree(self._temp_clone_dir, ignore_errors=True)
+                self.logger.info("✅ Existing clone removed")
+            except Exception as e:
+                self.logger.error(f"Failed to remove existing clone: {e}")
+                return False
+        
+        # Get SSH repo URL from config
+        ssh_repo_url = self.config.get('ssh_repo_url', 'git@github.com:megvadulthangya/manjaro-awesome.git')
+        
+        self.logger.info(f"📥 Cloning repository from {ssh_repo_url}...")
+        self.logger.info(f"Clone directory: {self._temp_clone_dir}")
+        
+        try:
+            # Use git command directly with SSH environment
+            clone_cmd = [
+                'git', 'clone',
+                '--depth', '1',
+                ssh_repo_url,
+                str(self._temp_clone_dir)
+            ]
+            
+            # Run git clone with SSH environment
+            result = subprocess.run(
+                clone_cmd,
+                env=self._git_ssh_env,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                self.logger.info(f"✅ Repository cloned to {self._temp_clone_dir}")
+                
+                # Verify clone integrity
+                git_dir = self._temp_clone_dir / ".git"
+                if not git_dir.exists():
+                    self.logger.error("❌ Git directory not found after clone")
+                    return False
+                
+                # Setup build tracking directory in temp clone
+                self._build_tracking_dir = self._temp_clone_dir / ".build_tracking"
+                self._build_tracking_dir.mkdir(exist_ok=True)
+                
+                self.logger.info(f"📁 Build tracking directory: {self._build_tracking_dir}")
+                
+                # Configure git user for commits
+                self._configure_git_identity()
+                
+                return True
+            else:
+                self.logger.error(f"❌ Failed to clone repository (exit code: {result.returncode})")
+                if result.stderr:
+                    self.logger.error(f"Error: {result.stderr[:500]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.logger.error("❌ Git clone timed out after 5 minutes")
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ Clone operation failed: {e}")
+            return False
+    
+    def _configure_git_identity(self):
+        """Configure git user identity for commits"""
+        if not self._temp_clone_dir or not self._temp_clone_dir.exists():
+            return
+        
+        # Get packager identity from config or environment
+        packager_env = self.config.get('packager_env', 'Maintainer <no-reply@gshoots.hu>')
+        
+        try:
+            # Configure git user
+            subprocess.run(
+                ['git', 'config', 'user.email', 'no-reply@gshoots.hu'],
+                cwd=self._temp_clone_dir,
+                capture_output=True,
+                check=False
+            )
+            
+            subprocess.run(
+                ['git', 'config', 'user.name', 'Manjaro Awesome Builder'],
+                cwd=self._temp_clone_dir,
+                capture_output=True,
+                check=False
+            )
+            
+            self.logger.info("✅ Git identity configured")
+            
+        except Exception as e:
+            self.logger.warning(f"Could not configure git identity: {e}")
+    
     def _sync_pacman_databases_initial(self) -> bool:
         """
         CRITICAL FIX: Sync pacman databases BEFORE any operations
@@ -182,62 +378,6 @@ class PackageBuilder:
         if not self.local_packages or not self.aur_packages:
             self.local_packages, self.aur_packages = self.config_loader.get_package_lists()
         return self.local_packages, self.aur_packages
-    
-    def _setup_temp_clone(self) -> bool:
-        """
-        GIT SYNC: Clone repository into /tmp/manjaro-awesome-gitclone
-        
-        Returns:
-            True if successful
-        """
-        self.logger.info("\n" + "=" * 60)
-        self.logger.info("GIT SYNC: Setting up temporary repository clone")
-        self.logger.info("=" * 60)
-        
-        # Clean up existing temp clone if exists
-        self._temp_clone_dir = Path("/tmp/manjaro-awesome-gitclone")
-        
-        if self._temp_clone_dir.exists():
-            self.logger.info("🧹 Cleaning existing temporary clone...")
-            try:
-                shutil.rmtree(self._temp_clone_dir, ignore_errors=True)
-                self.logger.info("✅ Existing clone removed")
-            except Exception as e:
-                self.logger.error(f"Failed to remove existing clone: {e}")
-                return False
-        
-        # Clone the repository using SSH
-        ssh_repo_url = self.config.get('ssh_repo_url', 'git@github.com:megvadulthangya/manjaro-awesome.git')
-        
-        self.logger.info(f"📥 Cloning repository from {ssh_repo_url}...")
-        
-        try:
-            clone_cmd = f"git clone --depth 1 {ssh_repo_url} {self._temp_clone_dir}"
-            
-            result = self.shell_executor.run(
-                clone_cmd,
-                log_cmd=True,
-                timeout=300,
-                check=False,
-                shell=True
-            )
-            
-            if result.returncode == 0:
-                self.logger.info(f"✅ Repository cloned to {self._temp_clone_dir}")
-                
-                # Setup build tracking directory in temp clone
-                self._build_tracking_dir = self._temp_clone_dir / ".build_tracking"
-                self._build_tracking_dir.mkdir(exist_ok=True)
-                
-                self.logger.info(f"📁 Build tracking directory: {self._build_tracking_dir}")
-                return True
-            else:
-                self.logger.error(f"❌ Failed to clone repository: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"❌ Clone operation failed: {e}")
-            return False
     
     def _get_pkgbuild_hash(self, pkgbuild_path: Path) -> str:
         """
@@ -708,13 +848,17 @@ class PackageBuilder:
     
     def _commit_and_push_changes(self) -> bool:
         """
-        Commit and push changes from temporary clone
+        Commit and push changes from temporary clone using Git SSH authentication
         
         Returns:
             True if successful
         """
         if not self._temp_clone_dir:
             self.logger.error("Temporary clone not set up")
+            return False
+        
+        if not self._git_ssh_env:
+            self.logger.error("Git SSH environment not configured")
             return False
         
         self.logger.info("\n" + "=" * 60)
@@ -728,12 +872,17 @@ class PackageBuilder:
             # Check if there are any changes
             status_result = subprocess.run(
                 ['git', 'status', '--porcelain'],
+                env=self._git_ssh_env,
                 capture_output=True,
                 text=True,
                 check=False
             )
             
-            if status_result.returncode != 0 or not status_result.stdout.strip():
+            if status_result.returncode != 0:
+                self.logger.error(f"Git status failed: {status_result.stderr}")
+                return False
+            
+            if not status_result.stdout.strip():
                 self.logger.info("ℹ️ No changes to commit")
                 return True
             
@@ -741,10 +890,11 @@ class PackageBuilder:
             for line in status_result.stdout.strip().splitlines():
                 self.logger.info(f"  {line}")
             
-            # Add all changes
+            # Add all changes including build tracking
             self.logger.info("➕ Adding changes...")
             add_result = subprocess.run(
                 ['git', 'add', '.'],
+                env=self._git_ssh_env,
                 capture_output=True,
                 text=True,
                 check=False
@@ -760,6 +910,7 @@ class PackageBuilder:
             
             commit_result = subprocess.run(
                 ['git', 'commit', '-m', commit_message],
+                env=self._git_ssh_env,
                 capture_output=True,
                 text=True,
                 check=False
@@ -767,12 +918,17 @@ class PackageBuilder:
             
             if commit_result.returncode != 0:
                 self.logger.error(f"Git commit failed: {commit_result.stderr}")
-                return False
+                # Check if it's just an empty commit
+                if "nothing to commit" not in commit_result.stderr.lower():
+                    return False
+                self.logger.info("ℹ️ No changes to commit")
+                return True
             
-            # Push changes
+            # Push changes to main branch
             self.logger.info("📤 Pushing to remote...")
             push_result = subprocess.run(
                 ['git', 'push', 'origin', 'main'],
+                env=self._git_ssh_env,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -786,6 +942,9 @@ class PackageBuilder:
                 self.logger.error(f"Git push failed: {push_result.stderr}")
                 return False
                 
+        except subprocess.TimeoutExpired:
+            self.logger.error("❌ Git push timed out after 5 minutes")
+            return False
         except Exception as e:
             self.logger.error(f"Git operation failed: {e}")
             return False
@@ -1615,7 +1774,7 @@ class PackageBuilder:
             self.logger.info("STEP 3: TEMPORARY REPOSITORY CLONE")
             self.logger.info("=" * 60)
             
-            if not self._setup_temp_clone():
+            if not self._setup_temp_repo():
                 self.logger.error("❌ Failed to setup temporary repository clone")
                 return 1
             
@@ -1707,4 +1866,8 @@ class PackageBuilder:
             if hasattr(self, '_temp_clone_dir') and self._temp_clone_dir and os.path.exists(self._temp_clone_dir):
                 shutil.rmtree(self._temp_clone_dir, ignore_errors=True)
             
+            self._cleanup_git_ssh()
+            
             return 1
+        finally:
+            self._cleanup_git_ssh()
