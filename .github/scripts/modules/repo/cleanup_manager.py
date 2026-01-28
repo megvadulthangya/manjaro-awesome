@@ -1,16 +1,17 @@
 """
-Cleanup manager for Zero-Residue policy
-Handles surgical removal of old package versions from local and remote systems
-Extracted from RepoManager with enhanced precision
+Zero-Residue cleanup protocol and atomic path management
+Ensures /tmp directories and sensitive build artifacts are securely removed
 """
 
 import os
 import shutil
-import subprocess
-import re
 import logging
+import atexit
+import signal
+import tempfile
 from pathlib import Path
-from typing import Dict, Any, List, Set, Optional, Tuple
+from typing import List, Set, Optional, Dict, Any
+from contextlib import contextmanager
 
 from modules.repo.version_tracker import VersionTracker
 from modules.vps.ssh_client import SSHClient
@@ -18,38 +19,342 @@ from modules.vps.rsync_client import RsyncClient
 
 
 class CleanupManager:
-    """Manages Zero-Residue cleanup operations for local and remote systems"""
+    """Manages Zero-Residue cleanup operations with atomic path tracking"""
     
-    def __init__(self, config: Dict[str, Any], version_tracker: VersionTracker,
-                 ssh_client: SSHClient, rsync_client: RsyncClient,
+    def __init__(self, config: Optional[Dict[str, Any]] = None,
+                 version_tracker: Optional[VersionTracker] = None,
+                 ssh_client: Optional[SSHClient] = None,
+                 rsync_client: Optional[RsyncClient] = None,
                  logger: Optional[logging.Logger] = None):
         """
-        Initialize CleanupManager
+        Initialize CleanupManager with optional dependencies
         
         Args:
-            config: Configuration dictionary
-            version_tracker: VersionTracker instance
-            ssh_client: SSHClient instance
-            rsync_client: RsyncClient instance
+            config: Configuration dictionary (optional)
+            version_tracker: VersionTracker instance (optional)
+            ssh_client: SSHClient instance (optional)
+            rsync_client: RsyncClient instance (optional)
             logger: Optional logger instance
         """
-        self.config = config
+        self.config = config or {}
         self.version_tracker = version_tracker
         self.ssh_client = ssh_client
         self.rsync_client = rsync_client
         self.logger = logger or logging.getLogger(__name__)
         
-        # Extract configuration
-        self.repo_name = config.get('repo_name', '')
-        self.output_dir = Path(config.get('output_dir', 'built_packages'))
-        self.remote_dir = config.get('remote_dir', '')
+        # Track temporary paths for zero-residue cleanup
+        self._temp_paths: Set[Path] = set()
+        self._temp_files: Set[Path] = set()
+        
+        # Register cleanup on exit
+        self._register_exit_handlers()
         
         # Upload success flag for safety valve
         self._upload_successful = False
+        
+        self.logger.info("🧹 Zero-Residue CleanupManager initialized")
+    
+    def _register_exit_handlers(self):
+        """Register cleanup handlers for exit signals"""
+        # Register for normal exit
+        atexit.register(self._atexit_cleanup)
+        
+        # Register for interrupt signals
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        self.logger.debug("Exit handlers registered")
+    
+    def _atexit_cleanup(self):
+        """Cleanup function called at exit"""
+        if self._temp_paths or self._temp_files:
+            self.logger.info("🔄 Performing automatic cleanup on exit...")
+            self.perform_cleanup(force=True)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle interrupt signals"""
+        self.logger.warning(f"🚨 Received signal {signum}, performing emergency cleanup...")
+        self.perform_cleanup(force=True)
+        exit(130 if signum == signal.SIGINT else 1)
+    
+    def register_temp_path(self, path: Path) -> bool:
+        """
+        Register a temporary path for automatic cleanup
+        
+        Args:
+            path: Path to track (file or directory)
+        
+        Returns:
+            True if path registered successfully
+        """
+        try:
+            path = Path(path).resolve()
+            
+            # Only register paths that exist and are in temporary locations
+            if not path.exists():
+                self.logger.debug(f"Path does not exist, not registering: {path}")
+                return False
+            
+            # Safety check: only register paths under /tmp or tempfile directories
+            if not self._is_safe_temp_path(path):
+                self.logger.warning(f"⚠️ Path not in safe temp location, skipping: {path}")
+                return False
+            
+            if path.is_dir():
+                self._temp_paths.add(path)
+                self.logger.debug(f"📁 Registered temp directory: {path}")
+            else:
+                self._temp_files.add(path)
+                self.logger.debug(f"📄 Registered temp file: {path}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to register temp path {path}: {e}")
+            return False
+    
+    def _is_safe_temp_path(self, path: Path) -> bool:
+        """
+        Check if path is in a safe temporary location
+        
+        Args:
+            path: Path to check
+        
+        Returns:
+            True if path is in a safe temporary location
+        """
+        path_str = str(path)
+        safe_patterns = [
+            '/tmp/',
+            tempfile.gettempdir(),
+            '/var/tmp/',
+        ]
+        
+        # Also check for project-specific temp directories
+        if self.config:
+            sync_clone_dir = self.config.get('sync_clone_dir', '')
+            if sync_clone_dir and sync_clone_dir in path_str:
+                return True
+            
+            mirror_temp_dir = self.config.get('mirror_temp_dir', '')
+            if mirror_temp_dir and mirror_temp_dir in path_str:
+                return True
+        
+        return any(pattern in path_str for pattern in safe_patterns if pattern)
+    
+    @contextmanager
+    def temporary_directory(self, prefix: str = "builder_", suffix: str = "") -> Path:
+        """
+        Context manager for creating temporary directories with automatic cleanup
+        
+        Args:
+            prefix: Directory name prefix
+            suffix: Directory name suffix
+        
+        Yields:
+            Path to created temporary directory
+        """
+        temp_dir = None
+        try:
+            temp_dir = Path(tempfile.mkdtemp(prefix=prefix, suffix=suffix))
+            self.register_temp_path(temp_dir)
+            self.logger.debug(f"📁 Created temporary directory: {temp_dir}")
+            yield temp_dir
+        finally:
+            if temp_dir and temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    self._temp_paths.discard(temp_dir)
+                    self.logger.debug(f"🧹 Cleaned temporary directory: {temp_dir}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to clean temp dir {temp_dir}: {e}")
+    
+    @contextmanager
+    def temporary_file(self, prefix: str = "builder_", suffix: str = ".tmp") -> Path:
+        """
+        Context manager for creating temporary files with automatic cleanup
+        
+        Args:
+            prefix: File name prefix
+            suffix: File name suffix
+        
+        Yields:
+            Path to created temporary file
+        """
+        temp_file = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False) as f:
+                temp_file = Path(f.name)
+            self.register_temp_path(temp_file)
+            self.logger.debug(f"📄 Created temporary file: {temp_file}")
+            yield temp_file
+        finally:
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink(missing_ok=True)
+                    self._temp_files.discard(temp_file)
+                    self.logger.debug(f"🧹 Cleaned temporary file: {temp_file}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to clean temp file {temp_file}: {e}")
+    
+    def perform_cleanup(self, force: bool = False) -> Dict[str, int]:
+        """
+        Perform comprehensive zero-residue cleanup
+        
+        Args:
+            force: If True, force cleanup even if upload was not successful
+        
+        Returns:
+            Dictionary with cleanup statistics
+        """
+        if not force and not self._upload_successful:
+            self.logger.warning("⚠️ Upload not marked successful, skipping cleanup for safety")
+            return {'cleaned': 0, 'failed': 0}
+        
+        self.logger.info("🧹 Performing Zero-Residue cleanup...")
+        
+        stats = {
+            'directories_cleaned': 0,
+            'files_cleaned': 0,
+            'directories_failed': 0,
+            'files_failed': 0
+        }
+        
+        # Clean temporary directories
+        for temp_dir in list(self._temp_paths):
+            if temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    stats['directories_cleaned'] += 1
+                    self.logger.debug(f"🧹 Cleaned directory: {temp_dir}")
+                except Exception as e:
+                    stats['directories_failed'] += 1
+                    self.logger.warning(f"Failed to clean directory {temp_dir}: {e}")
+            self._temp_paths.remove(temp_dir)
+        
+        # Clean temporary files
+        for temp_file in list(self._temp_files):
+            if temp_file.exists():
+                try:
+                    temp_file.unlink(missing_ok=True)
+                    stats['files_cleaned'] += 1
+                    self.logger.debug(f"🧹 Cleaned file: {temp_file}")
+                except Exception as e:
+                    stats['files_failed'] += 1
+                    self.logger.warning(f"Failed to clean file {temp_file}: {e}")
+            self._temp_files.remove(temp_file)
+        
+        # Clean SSH keys and agents if SSH client available
+        if self.ssh_client:
+            self._clean_ssh_resources()
+        
+        # Clean configuration-specific temp directories
+        self._clean_config_temp_dirs()
+        
+        # Clear caches
+        if self.version_tracker:
+            self.version_tracker.clear_remote_inventory()
+        
+        # Report statistics
+        total_cleaned = stats['directories_cleaned'] + stats['files_cleaned']
+        total_failed = stats['directories_failed'] + stats['files_failed']
+        
+        if total_cleaned > 0:
+            self.logger.info(f"✅ Zero-Residue cleanup: {total_cleaned} items cleaned")
+        
+        if total_failed > 0:
+            self.logger.warning(f"⚠️ Cleanup failed for {total_failed} items")
+        
+        return stats
+    
+    def _clean_ssh_resources(self):
+        """Clean SSH keys and agent resources"""
+        try:
+            # Clear SSH client cache
+            if hasattr(self.ssh_client, 'clear_cache'):
+                self.ssh_client.clear_cache()
+            
+            # Try to kill SSH agent if we started one
+            ssh_auth_sock = os.environ.get('SSH_AUTH_SOCK')
+            if ssh_auth_sock and os.path.exists(ssh_auth_sock):
+                try:
+                    # This is a socket file, not a regular file
+                    os.unlink(ssh_auth_sock)
+                    self.logger.debug("🧹 Cleaned SSH auth socket")
+                except:
+                    pass
+            
+            # Clean known SSH key files in /tmp
+            for temp_dir in Path('/tmp').glob('git_ssh_*'):
+                if temp_dir.is_dir():
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        self.logger.debug(f"🧹 Cleaned SSH temp dir: {temp_dir}")
+                    except:
+                        pass
+            
+            self.logger.debug("SSH resources cleaned")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to clean SSH resources: {e}")
+    
+    def _clean_config_temp_dirs(self):
+        """Clean configuration-specific temporary directories"""
+        if not self.config:
+            return
+        
+        temp_dirs = []
+        
+        # Add config-defined temp directories
+        if 'sync_clone_dir' in self.config:
+            temp_dirs.append(Path(self.config['sync_clone_dir']))
+        
+        if 'mirror_temp_dir' in self.config:
+            temp_dirs.append(Path(self.config['mirror_temp_dir']))
+        
+        # Clean each directory
+        for temp_dir in temp_dirs:
+            if temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    self.logger.debug(f"🧹 Cleaned config temp dir: {temp_dir}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to clean config temp dir {temp_dir}: {e}")
     
     def set_upload_successful(self, successful: bool):
         """Set the upload success flag for safety valve"""
         self._upload_successful = successful
+        if successful:
+            self.logger.debug("✅ Upload marked successful, cleanup enabled")
+        else:
+            self.logger.warning("⚠️ Upload marked unsuccessful, cleanup disabled")
+    
+    def get_tracked_paths(self) -> Dict[str, List[str]]:
+        """Get currently tracked temporary paths"""
+        return {
+            'directories': sorted([str(p) for p in self._temp_paths]),
+            'files': sorted([str(p) for p in self._temp_files])
+        }
+    
+    def clear_tracking(self):
+        """Clear all tracked paths without cleaning them"""
+        self._temp_paths.clear()
+        self._temp_files.clear()
+        self.logger.debug("🧹 Cleared path tracking (no cleanup performed)")
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - always perform cleanup"""
+        self.logger.debug("Context manager exiting, performing cleanup...")
+        self.perform_cleanup(force=True)
+        
+        # Don't suppress exceptions
+        return False
+    
+    # Legacy methods from original CleanupManager for backward compatibility
     
     def purge_old_local(self, pkg_name: str, old_version: str, target_version: Optional[str] = None):
         """
@@ -62,8 +367,11 @@ class CleanupManager:
             old_version: Version to potentially delete
             target_version: Version we want to keep (None if building new)
         """
+        if not self.config:
+            return
+        
         # If we have a registered target version, use it
-        if target_version is None:
+        if target_version is None and self.version_tracker:
             target_version = self.version_tracker.get_target_version(pkg_name)
         
         if target_version and old_version == target_version:
@@ -76,11 +384,15 @@ class CleanupManager:
     
     def _delete_specific_version_local(self, pkg_name: str, version_to_delete: str):
         """Delete a specific version of a package from local output_dir"""
+        if 'output_dir' not in self.config:
+            return
+        
+        output_dir = Path(self.config['output_dir'])
         patterns = self._version_to_patterns(pkg_name, version_to_delete)
         deleted_count = 0
         
         for pattern in patterns:
-            for old_file in self.output_dir.glob(pattern):
+            for old_file in output_dir.glob(pattern):
                 try:
                     # Verify this is actually the version we want to delete
                     extracted_version = self._extract_version_from_filename(old_file.name, pkg_name)
@@ -99,173 +411,6 @@ class CleanupManager:
         
         if deleted_count > 0:
             self.logger.info(f"✅ Removed {deleted_count} local files for {pkg_name} version {version_to_delete}")
-    
-    def validate_output_dir(self):
-        """
-        🔥 ZOMBIE PROTECTION: Final validation before database generation
-        
-        Enhanced to recognize skipped packages as legitimate (not zombies)
-        
-        Scans output_dir and ensures:
-        1. Only one version per package exists
-        2. If multiple versions exist, keep only the target version
-        3. Delete any "zombie" files (old versions that shouldn't be there)
-        
-        This is the LAST CHANCE to clean up before repo-add runs.
-        """
-        self.logger.info("\n" + "=" * 60)
-        self.logger.info("🚨 FINAL VALIDATION: Removing zombie packages from output_dir")
-        self.logger.info("=" * 60)
-        
-        # Get all package files in output_dir
-        package_files = list(self.output_dir.glob("*.pkg.tar.*"))
-        
-        if not package_files:
-            self.logger.info("ℹ️ No package files in output_dir to validate")
-            return
-        
-        self.logger.info(f"🔍 Validating {len(package_files)} package files in output_dir...")
-        
-        # Group files by package name
-        packages_dict: Dict[str, List[Tuple[str, Path]]] = {}
-        
-        for pkg_file in package_files:
-            # Extract package name and version from filename
-            extracted = self._parse_package_filename(pkg_file.name)
-            if extracted:
-                pkg_name, version_str = extracted
-                if pkg_name not in packages_dict:
-                    packages_dict[pkg_name] = []
-                packages_dict[pkg_name].append((version_str, pkg_file))
-        
-        # Process each package
-        total_deleted = 0
-        
-        for pkg_name, files in packages_dict.items():
-            if len(files) > 1:
-                self.logger.warning(f"⚠️ Multiple versions found for {pkg_name}: {[v[0] for v in files]}")
-                
-                # Check if we have a registered target version
-                target_version = self.version_tracker.get_target_version(pkg_name)
-                
-                if target_version:
-                    # Keep only the target version
-                    kept = False
-                    for version_str, file_path in files:
-                        if version_str == target_version:
-                            self.logger.info(f"✅ Keeping target version: {file_path.name} ({version_str})")
-                            kept = True
-                        else:
-                            try:
-                                file_path.unlink()
-                                self.logger.info(f"🗑️ Removing non-target version: {file_path.name}")
-                                total_deleted += 1
-                            except Exception as e:
-                                self.logger.warning(f"Could not delete {file_path}: {e}")
-                    
-                    if not kept:
-                        self.logger.error(f"❌ Target version {target_version} for {pkg_name} not found in output_dir!")
-                else:
-                    # No target version registered, keep the latest
-                    self.logger.warning(f"⚠️ No target version registered for {pkg_name}, using version comparison")
-                    latest_version = self._find_latest_version([v[0] for v in files])
-                    for version_str, file_path in files:
-                        if version_str == latest_version:
-                            self.logger.info(f"✅ Keeping latest version: {file_path.name} ({version_str})")
-                        else:
-                            try:
-                                file_path.unlink()
-                                self.logger.info(f"🗑️ Removing older version: {file_path.name}")
-                                total_deleted += 1
-                            except Exception as e:
-                                self.logger.warning(f"Could not delete {file_path}: {e}")
-        
-        if total_deleted > 0:
-            self.logger.info(f"🎯 Final validation: Removed {total_deleted} zombie package files")
-        else:
-            self.logger.info("✅ Output_dir validation passed - no zombie packages found")
-    
-    def cleanup_server(self):
-        """
-        🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
-        using TARGET VERSIONS as SOURCE OF TRUTH.
-        
-        Only keeps packages that match registered target versions.
-        """
-        self.logger.info("\n" + "=" * 60)
-        self.logger.info("🔒 ZERO-RESIDUE SERVER CLEANUP: Target Versions are Source of Truth")
-        self.logger.info("=" * 60)
-        
-        # VALVE: Check if we have any target versions registered
-        if not self.version_tracker.has_packages():
-            self.logger.warning("⚠️ No target versions registered - skipping server cleanup")
-            return
-        
-        self.logger.info(f"🔄 Zero-Residue cleanup initiated with {len(self.version_tracker.get_target_packages())} target versions")
-        
-        # STEP 1: Get ALL files from VPS
-        vps_files = self.ssh_client.get_file_inventory()
-        if not vps_files:
-            self.logger.info("ℹ️ No files found on VPS - nothing to clean up")
-            return
-        
-        # Update version tracker with remote inventory
-        self.version_tracker.set_remote_inventory(vps_files)
-        
-        # STEP 2: Determine files to delete based on target versions
-        files_to_delete = self.version_tracker.get_files_to_delete()
-        
-        if not files_to_delete:
-            self.logger.info("✅ No zombie packages found on VPS")
-            return
-        
-        self.logger.warning(f"🚨 Identified {len(files_to_delete)} zombie packages for deletion")
-        
-        # STEP 3: Execute deletion
-        deleted_count = 0
-        batch_size = 50
-        
-        for i in range(0, len(files_to_delete), batch_size):
-            batch = files_to_delete[i:i + batch_size]
-            if self.ssh_client.delete_remote_files(batch):
-                deleted_count += len(batch)
-        
-        self.logger.info(f"📊 Server cleanup complete: Deleted {deleted_count} zombie packages")
-    
-    def _parse_package_filename(self, filename: str) -> Optional[Tuple[str, str]]:
-        """Parse package filename to extract name and version"""
-        try:
-            # Remove extensions
-            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-            parts = base.split('-')
-            
-            # The package name is everything before the last 3 parts (version-release-arch)
-            # or last 4 parts (epoch-version-release-arch)
-            if len(parts) >= 4:
-                # Try to find where package name ends
-                for i in range(len(parts) - 3, 0, -1):
-                    potential_name = '-'.join(parts[:i])
-                    
-                    # Check if remaining parts look like version-release-arch
-                    remaining = parts[i:]
-                    if len(remaining) >= 3:
-                        # Check for epoch format (e.g., "2-26.1.9-1-x86_64")
-                        if remaining[0].isdigit() and '-' in '-'.join(remaining[1:]):
-                            epoch = remaining[0]
-                            version_part = remaining[1]
-                            release_part = remaining[2]
-                            version_str = f"{epoch}:{version_part}-{release_part}"
-                            return potential_name, version_str
-                        # Standard format (e.g., "26.1.9-1-x86_64")
-                        elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
-                            version_part = remaining[0]
-                            release_part = remaining[1]
-                            version_str = f"{version_part}-{release_part}"
-                            return potential_name, version_str
-        except Exception as e:
-            self.logger.debug(f"Could not parse filename {filename}: {e}")
-        
-        return None
     
     def _version_to_patterns(self, pkg_name: str, version: str) -> List[str]:
         """Convert version string to filename patterns"""
@@ -318,55 +463,3 @@ class CleanupManager:
             self.logger.debug(f"Could not extract version from {filename}: {e}")
         
         return None
-    
-    def _find_latest_version(self, versions: List[str]) -> str:
-        """
-        Find the latest version from a list using vercmp
-        
-        Args:
-            versions: List of version strings
-        
-        Returns:
-            The latest version string
-        """
-        if not versions:
-            return ""
-        
-        if len(versions) == 1:
-            return versions[0]
-        
-        # Try to use vercmp for accurate comparison
-        try:
-            latest = versions[0]
-            for i in range(1, len(versions)):
-                result = subprocess.run(
-                    ['vercmp', versions[i], latest],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                if result.returncode == 0:
-                    cmp_result = int(result.stdout.strip())
-                    if cmp_result > 0:
-                        latest = versions[i]
-            
-            return latest
-        except Exception as e:
-            # Fallback: use string comparison (less accurate but works for simple cases)
-            self.logger.warning(f"vercmp failed, using fallback version comparison: {e}")
-            return max(versions)
-    
-    def cleanup_temp_directories(self):
-        """Clean up temporary directories"""
-        temp_dirs = [
-            Path(self.config.get('mirror_temp_dir', '/tmp/repo_mirror')),
-            Path(self.config.get('sync_clone_dir', '/tmp/manjaro-awesome-gitclone')),
-        ]
-        
-        for temp_dir in temp_dirs:
-            if temp_dir.exists():
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    self.logger.debug(f"Cleaned up temporary directory: {temp_dir}")
-                except Exception as e:
-                    self.logger.warning(f"Could not clean up {temp_dir}: {e}")
