@@ -1,6 +1,6 @@
 """
-Manjaro Package Builder - Refactored Modular Architecture with Zero-Residue Policy
-Main entry point for the refactored modular system
+Manjaro Package Builder - Self-Healing Additive Architecture
+Main entry point with auto-recovery for database consistency
 """
 
 import os
@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import glob
+import tarfile
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional, Set
 
@@ -43,10 +44,10 @@ from modules.gpg.gpg_handler import GPGHandler
 
 
 class PackageBuilder:
-    """Main orchestrator - SERVER-FIRST ARCHITECTURE"""
+    """Main orchestrator - SELF-HEALING ADDITIVE ARCHITECTURE"""
     
     def __init__(self):
-        """Initialize PackageBuilder with server-first architecture"""
+        """Initialize PackageBuilder with self-healing architecture"""
         self.logger = get_logger(__name__)
         
         # Phase 1: Common utilities
@@ -139,7 +140,11 @@ class PackageBuilder:
         # Local staging directory for database operations
         self._staging_dir: Optional[Path] = None
         
-        self.logger.info("✅ PackageBuilder initialized with SERVER-FIRST architecture")
+        # Auto-recovery state
+        self._recovered_packages: List[str] = []
+        self._missing_from_db: List[str] = []
+        
+        self.logger.info("✅ PackageBuilder initialized with SELF-HEALING architecture")
     
     def _sync_pacman_databases_initial(self) -> bool:
         """
@@ -524,6 +529,155 @@ class PackageBuilder:
         
         return True
     
+    def _get_db_package_list(self) -> Set[str]:
+        """
+        Extract package list from existing database file
+        
+        Returns:
+            Set of package filenames (without path) in the database
+        """
+        repo_name = self.config.get('repo_name', '')
+        db_file = self._staging_dir / f"{repo_name}.db.tar.gz"
+        
+        if not db_file.exists():
+            self.logger.info("ℹ️ No database file found in staging")
+            return set()
+        
+        self.logger.info("📋 Extracting package list from existing database...")
+        
+        try:
+            # Use tar to list contents and find package entries
+            cmd = ["tar", "-tzf", str(db_file)]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if result.returncode != 0:
+                self.logger.warning(f"Failed to list database contents: {result.stderr}")
+                return set()
+            
+            # Parse tar output to find package entries
+            package_files = set()
+            for line in result.stdout.splitlines():
+                if line.strip() and '/' in line:
+                    # Extract filename from path like: awesome-git-4.0.r123.gabc123def-1-x86_64/pkgname/desc
+                    parts = line.split('/')
+                    if len(parts) >= 2 and parts[1].endswith('/desc'):
+                        # The directory name is the package filename
+                        package_files.add(parts[0])
+            
+            self.logger.info(f"📊 Database contains {len(package_files)} package entries")
+            if package_files:
+                self.logger.debug(f"Sample DB entries: {list(package_files)[:5]}")
+            
+            return package_files
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to extract package list from DB: {e}")
+            return set()
+    
+    def _discover_missing_packages(self) -> List[str]:
+        """
+        AUTO-RECOVERY: Compare remote inventory with database entries
+        
+        Returns:
+            List of package filenames missing from database
+        """
+        self.logger.info("🔍 Discovering packages missing from database...")
+        
+        # Get packages in database
+        db_packages = self._get_db_package_list()
+        
+        # Get remote inventory (physical files on VPS)
+        remote_inventory = self.ssh_client.get_cached_inventory(force_refresh=True)
+        
+        if not remote_inventory:
+            self.logger.info("ℹ️ No remote packages found")
+            return []
+        
+        # Filter for package files only
+        remote_packages = set()
+        for filename in remote_inventory.keys():
+            if filename.endswith('.pkg.tar.zst'):
+                remote_packages.add(filename)
+        
+        self.logger.info(f"📊 Remote inventory: {len(remote_packages)} package files")
+        
+        # Find packages on VPS that are NOT in database
+        missing_packages = []
+        for pkg_file in remote_packages:
+            if pkg_file not in db_packages:
+                missing_packages.append(pkg_file)
+                self.logger.info(f"⚠️ Missing from DB: {pkg_file}")
+        
+        self.logger.info(f"📊 Found {len(missing_packages)} packages missing from database")
+        
+        # Store for reporting
+        self._missing_from_db = missing_packages
+        
+        return missing_packages
+    
+    def _download_missing_packages(self, missing_packages: List[str]) -> int:
+        """
+        Download missing packages from VPS to staging
+        
+        Args:
+            missing_packages: List of package filenames to download
+        
+        Returns:
+            Number of successfully downloaded packages
+        """
+        if not missing_packages:
+            return 0
+        
+        self.logger.info(f"📥 Downloading {len(missing_packages)} missing packages from VPS...")
+        
+        downloaded_count = 0
+        
+        for pkg_filename in missing_packages:
+            try:
+                # Find full remote path
+                remote_inventory = self.ssh_client.get_cached_inventory()
+                remote_path = remote_inventory.get(pkg_filename)
+                
+                if not remote_path:
+                    self.logger.warning(f"Could not find remote path for {pkg_filename}")
+                    continue
+                
+                # Download using scp
+                scp_cmd = [
+                    "scp",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "ConnectTimeout=30",
+                    f"{self.config.get('vps_user')}@{self.config.get('vps_host')}:{remote_path}",
+                    str(self._staging_dir / pkg_filename)
+                ]
+                
+                result = subprocess.run(
+                    scp_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0:
+                    # Check if file was downloaded
+                    local_path = self._staging_dir / pkg_filename
+                    if local_path.exists() and local_path.stat().st_size > 0:
+                        self.logger.info(f"✅ Downloaded: {pkg_filename}")
+                        downloaded_count += 1
+                        
+                        # Add to recovered packages list
+                        self._recovered_packages.append(pkg_filename)
+                    else:
+                        self.logger.warning(f"Downloaded file is empty: {pkg_filename}")
+                else:
+                    self.logger.warning(f"Failed to download {pkg_filename}: {result.stderr}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error downloading {pkg_filename}: {e}")
+        
+        self.logger.info(f"✅ Downloaded {downloaded_count} missing packages")
+        return downloaded_count
+    
     def _move_new_packages_to_staging(self) -> List[Path]:
         """
         Move newly built packages to staging directory
@@ -567,7 +721,7 @@ class PackageBuilder:
     
     def _update_database_additive(self) -> bool:
         """
-        Additive database update: ONLY add new packages to existing database
+        Additive database update: Add ALL packages in staging to database
         
         Returns:
             True if successful
@@ -575,7 +729,7 @@ class PackageBuilder:
         repo_name = self.config.get('repo_name', '')
         
         self.logger.info("\n" + "=" * 60)
-        self.logger.info("ADDITIVE DATABASE UPDATE")
+        self.logger.info("ADDITIVE DATABASE UPDATE (SELF-HEALING)")
         self.logger.info("=" * 60)
         
         old_cwd = os.getcwd()
@@ -584,14 +738,14 @@ class PackageBuilder:
         try:
             db_file = f"{repo_name}.db.tar.gz"
             
-            # Check if we have an existing database
-            existing_db_files = list(glob.glob(f"{repo_name}.db.tar.gz*"))
-            new_packages = list(glob.glob("*.pkg.tar.zst"))
+            # Get all package files in staging
+            all_packages = list(glob.glob("*.pkg.tar.zst"))
             
-            if not new_packages:
-                self.logger.info("ℹ️ No new packages to add to database")
+            if not all_packages:
+                self.logger.info("ℹ️ No packages to add to database")
                 
-                # Still update the database if we have existing packages (force repair mode)
+                # Check if we have an existing database (force repair mode)
+                existing_db_files = list(glob.glob(f"{repo_name}.db.tar.gz*"))
                 if existing_db_files:
                     self.logger.info("🔧 Force repairing existing database...")
                     return self._force_repair_database(db_file)
@@ -599,74 +753,44 @@ class PackageBuilder:
                     self.logger.info("ℹ️ No existing database to repair")
                     return True
             
-            self.logger.info(f"📊 Found {len(new_packages)} new packages to add to database")
+            self.logger.info(f"📊 Total packages to process: {len(all_packages)}")
+            self.logger.info(f"  - Newly built: {len([p for p in all_packages if p not in self._recovered_packages])}")
+            self.logger.info(f"  - Recovered: {len([p for p in all_packages if p in self._recovered_packages])}")
             
-            # Check if we have an existing database
-            if existing_db_files:
-                self.logger.info(f"📂 Found existing database: {existing_db_files[0]}")
+            # Run repo-add with ALL packages (additive update)
+            if self.gpg_handler.gpg_enabled:
+                self.logger.info("🔏 Running repo-add with GPG signing (additive)...")
                 
-                # Run repo-add with ONLY new packages (additive update)
-                if self.gpg_handler.gpg_enabled:
-                    self.logger.info("🔏 Running repo-add with GPG signing (additive)...")
-                    
-                    # Set GNUPGHOME environment variable for non-interactive signing
-                    env = os.environ.copy()
-                    if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
-                        env['GNUPGHOME'] = self.gpg_handler.gpg_home
-                    
-                    # Use explicit package list to avoid removing old entries
-                    packages_str = ' '.join(new_packages)
-                    cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} {db_file} {packages_str}"
-                    
-                    result = subprocess.run(
-                        cmd,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        env=env,
-                        check=False
-                    )
+                # Set GNUPGHOME environment variable for non-interactive signing
+                env = os.environ.copy()
+                if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
+                    env['GNUPGHOME'] = self.gpg_handler.gpg_home
+                
+                # Build command
+                if self.gpg_handler.gpg_key_id:
+                    cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} --remove {db_file} *.pkg.tar.zst"
                 else:
-                    self.logger.info("🔧 Running repo-add without signing (additive)...")
-                    packages_str = ' '.join(new_packages)
-                    cmd = f"repo-add {db_file} {packages_str}"
-                    
-                    result = subprocess.run(
-                        cmd,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
+                    cmd = f"repo-add --sign --remove {db_file} *.pkg.tar.zst"
+                
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False
+                )
             else:
-                # First run: create new database with all packages
-                self.logger.info("🆕 Creating new database (first run)...")
+                self.logger.info("🔧 Running repo-add without signing (additive)...")
+                cmd = f"repo-add --remove {db_file} *.pkg.tar.zst"
                 
-                if self.gpg_handler.gpg_enabled:
-                    cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} {db_file} *.pkg.tar.zst"
-                    
-                    env = os.environ.copy()
-                    if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
-                        env['GNUPGHOME'] = self.gpg_handler.gpg_home
-                    
-                    result = subprocess.run(
-                        cmd,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        env=env,
-                        check=False
-                    )
-                else:
-                    cmd = f"repo-add {db_file} *.pkg.tar.zst"
-                    
-                    result = subprocess.run(
-                        cmd,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
             
             if result.returncode == 0:
                 self.logger.info("✅ Database updated successfully (additive)")
@@ -719,38 +843,18 @@ class PackageBuilder:
         self.logger.info("🔧 Force repairing existing database...")
         
         try:
-            # Extract existing database to get package list
-            temp_extract_dir = Path(tempfile.mkdtemp(prefix="db_extract_"))
-            
-            # Extract the database to get package list
-            extract_cmd = ["tar", "-xzf", db_file, "-C", str(temp_extract_dir)]
-            result = subprocess.run(extract_cmd, capture_output=True, text=True, check=False)
-            
-            if result.returncode != 0:
-                self.logger.warning(f"Could not extract database: {result.stderr}")
-                # Try alternative approach - recreate from scratch
-                return self._recreate_database_from_remote()
-            
-            # Get all package entries from extracted database
-            desc_files = list(temp_extract_dir.rglob("*/desc"))
-            
-            if not desc_files:
-                self.logger.warning("No package entries found in database")
-                shutil.rmtree(temp_extract_dir, ignore_errors=True)
-                return self._recreate_database_from_remote()
-            
-            self.logger.info(f"Found {len(desc_files)} package entries in existing database")
-            
-            # Clean up temp directory
-            shutil.rmtree(temp_extract_dir, ignore_errors=True)
-            
             # Recreate database with proper signing
             if self.gpg_handler.gpg_enabled:
-                cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} --remove {db_file} *.pkg.tar.zst"
+                self.logger.info("🔏 Re-signing existing database...")
                 
                 env = os.environ.copy()
                 if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
                     env['GNUPGHOME'] = self.gpg_handler.gpg_home
+                
+                if self.gpg_handler.gpg_key_id:
+                    cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} --remove {db_file} *.pkg.tar.zst"
+                else:
+                    cmd = f"repo-add --sign --remove {db_file} *.pkg.tar.zst"
                 
                 result = subprocess.run(
                     cmd,
@@ -761,6 +865,7 @@ class PackageBuilder:
                     check=False
                 )
             else:
+                self.logger.info("🔧 Recreating database without signing...")
                 cmd = f"repo-add --remove {db_file} *.pkg.tar.zst"
                 
                 result = subprocess.run(
@@ -780,77 +885,6 @@ class PackageBuilder:
                 
         except Exception as e:
             self.logger.error(f"Database repair error: {e}")
-            return self._recreate_database_from_remote()
-    
-    def _recreate_database_from_remote(self) -> bool:
-        """
-        Recreate database from scratch using remote packages
-        
-        Returns:
-            True if successful
-        """
-        self.logger.warning("🔄 Recreating database from scratch...")
-        
-        try:
-            # Get all packages from remote
-            remote_files = self.ssh_client.get_cached_inventory()
-            if not remote_files:
-                self.logger.error("❌ No remote packages found")
-                return False
-            
-            # Download all packages to staging
-            self.logger.info("📥 Downloading all packages from remote...")
-            
-            for remote_path in list(remote_files.values())[:10]:  # Limit for testing
-                filename = Path(remote_path).name
-                if filename.endswith('.pkg.tar.zst'):
-                    # Use scp to download
-                    scp_cmd = [
-                        "scp", "-o", "StrictHostKeyChecking=no",
-                        f"{self.config.get('vps_user')}@{self.config.get('vps_host')}:{remote_path}",
-                        str(self._staging_dir / filename)
-                    ]
-                    subprocess.run(scp_cmd, capture_output=True, check=False)
-            
-            # Create new database
-            repo_name = self.config.get('repo_name', '')
-            db_file = f"{repo_name}.db.tar.gz"
-            
-            if self.gpg_handler.gpg_enabled:
-                cmd = f"repo-add --sign --key {self.gpg_handler.gpg_key_id} {db_file} *.pkg.tar.zst"
-                
-                env = os.environ.copy()
-                if hasattr(self.gpg_handler, 'gpg_home') and self.gpg_handler.gpg_home:
-                    env['GNUPGHOME'] = self.gpg_handler.gpg_home
-                
-                result = subprocess.run(
-                    cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    check=False
-                )
-            else:
-                cmd = f"repo-add {db_file} *.pkg.tar.zst"
-                
-                result = subprocess.run(
-                    cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-            
-            if result.returncode == 0:
-                self.logger.info("✅ Database recreated successfully")
-                return True
-            else:
-                self.logger.error(f"Database recreation failed: {result.stderr[:500]}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Database recreation error: {e}")
             return False
     
     def _verify_database_entries(self, db_file: str) -> None:
@@ -870,47 +904,66 @@ class PackageBuilder:
         except Exception as e:
             self.logger.warning(f"Could not verify database: {e}")
     
-    def _upload_only_real_files(self) -> bool:
+    def _upload_updated_files(self) -> bool:
         """
-        Upload ONLY real files to VPS
+        Upload updated database and new packages to VPS
         
         Returns:
             True if successful
         """
-        self.logger.info("\n📤 Uploading real files to VPS...")
+        if not self._staging_dir or not self._staging_dir.exists():
+            self.logger.error("❌ Staging directory not found")
+            return False
+        
+        self.logger.info("\n📤 Uploading updated files to VPS...")
         
         files_to_upload = []
         
-        # Collect real package files (non-zero size)
+        # 1. Database files and signatures (ALWAYS upload these)
+        repo_patterns = [
+            f"{self.config.get('repo_name', '')}.db*",
+            f"{self.config.get('repo_name', '')}.files*",
+        ]
+        
+        for pattern in repo_patterns:
+            for file_path in self._staging_dir.glob(pattern):
+                if file_path.stat().st_size > 0:  # Skip empty files
+                    files_to_upload.append(file_path)
+        
+        # 2. NEW packages (not recovered) and their signatures
         for pkg_file in self._staging_dir.glob("*.pkg.tar.zst"):
             if pkg_file.stat().st_size > 0:
-                files_to_upload.append(pkg_file)
-                
-                # Include signature if it exists and has content
-                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
-                if sig_file.exists() and sig_file.stat().st_size > 0:
-                    files_to_upload.append(sig_file)
-        
-        self.logger.info(f"Found {len([f for f in files_to_upload if str(f).endswith('.pkg.tar.zst')])} real package files")
-        
-        # Collect database files
-        repo_name = self.config.get('repo_name', '')
-        for pattern in [f"{repo_name}.db*", f"{repo_name}.files*"]:
-            for db_file in self._staging_dir.glob(pattern):
-                if db_file.stat().st_size > 0:
-                    files_to_upload.append(db_file)
+                # Check if this is a recovered package (already on VPS)
+                if pkg_file.name not in self._recovered_packages:
+                    files_to_upload.append(pkg_file)
+                    
+                    # Include signature if it exists
+                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                    if sig_file.exists() and sig_file.stat().st_size > 0:
+                        files_to_upload.append(sig_file)
+                else:
+                    self.logger.debug(f"Skipping recovered package: {pkg_file.name}")
         
         if not files_to_upload:
             self.logger.warning("⚠️ No files to upload")
             return True
         
-        self.logger.info(f"📦 Total real files to upload: {len(files_to_upload)}")
+        self.logger.info(f"📦 Total files to upload: {len(files_to_upload)}")
         
+        # Log file details
+        for f in files_to_upload:
+            size_mb = f.stat().st_size / (1024 * 1024)
+            file_type = "PACKAGE" if ".pkg.tar.zst" in f.name else "DATABASE"
+            if f.name.endswith('.sig'):
+                file_type = "SIGNATURE"
+            self.logger.debug(f"  - {f.name} ({size_mb:.1f}MB) [{file_type}]")
+        
+        # Upload using rsync
         files_list = [str(f) for f in files_to_upload]
         upload_success = self.rsync_client.upload(files_list, self._staging_dir)
         
         if upload_success:
-            self.logger.info("✅ All real files uploaded successfully")
+            self.logger.info("✅ All files uploaded successfully")
             return True
         else:
             self.logger.error("❌ File upload failed")
@@ -928,52 +981,63 @@ class PackageBuilder:
     
     def _force_database_update(self) -> bool:
         """
-        FORCE database update with additive strategy
+        FORCE database update with self-healing additive strategy
         
         Returns:
             True if successful
         """
-        self.logger.info("\n🔧 FORCING database update (additive strategy)...")
+        self.logger.info("\n🔧 FORCING DATABASE UPDATE (SELF-HEALING)")
+        self.logger.info("=" * 60)
         
         try:
+            # Reset recovery state
+            self._recovered_packages = []
+            self._missing_from_db = []
+            
             # Step 1: Create staging directory
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 1: Create local staging directory")
-            self.logger.info("=" * 60)
+            self.logger.info("\n[1/7] Creating local staging directory")
+            self.logger.info("-" * 40)
             staging_dir = self._create_local_staging()
             
             # Step 2: Download existing database files
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 2: Download existing database files from VPS")
-            self.logger.info("=" * 60)
+            self.logger.info("\n[2/7] Downloading existing database files from VPS")
+            self.logger.info("-" * 40)
             self._download_existing_database_only()
             
-            # Step 3: Move any new packages to staging
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 3: Move new packages to staging")
-            self.logger.info("=" * 60)
+            # Step 3: AUTO-RECOVERY: Discover packages missing from database
+            self.logger.info("\n[3/7] AUTO-RECOVERY: Discovering missing packages")
+            self.logger.info("-" * 40)
+            missing_packages = self._discover_missing_packages()
+            
+            # Step 4: Download missing packages from VPS
+            if missing_packages:
+                self.logger.info("\n[4/7] Downloading missing packages from VPS")
+                self.logger.info("-" * 40)
+                downloaded = self._download_missing_packages(missing_packages)
+                self.logger.info(f"✅ Downloaded {downloaded} missing packages")
+            
+            # Step 5: Move newly built packages to staging
+            self.logger.info("\n[5/7] Moving newly built packages to staging")
+            self.logger.info("-" * 40)
             self._move_new_packages_to_staging()
             
-            # Step 4: Update database additively with GPG signing
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 4: Update database additively with GPG signing")
-            self.logger.info("=" * 60)
+            # Step 6: Update database additively with ALL packages
+            self.logger.info("\n[6/7] Updating database additively (self-healing)")
+            self.logger.info("-" * 40)
             if not self._update_database_additive():
                 self.logger.error("❌ Additive database update failed")
                 return False
             
-            # Step 5: Upload only real files
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 5: Upload updated files to VPS")
-            self.logger.info("=" * 60)
-            if not self._upload_only_real_files():
+            # Step 7: Upload updated files to VPS
+            self.logger.info("\n[7/7] Uploading updated files to VPS")
+            self.logger.info("-" * 40)
+            if not self._upload_updated_files():
                 self.logger.error("❌ File upload failed")
                 return False
             
-            # Step 6: Execute queued cleanup
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 6: Execute queued cleanup operations")
-            self.logger.info("=" * 60)
+            # Step 8: Execute queued cleanup
+            self.logger.info("\n[+] Executing queued cleanup operations")
+            self.logger.info("-" * 40)
             cleanup_success = self.version_tracker.commit_queued_deletions()
             
             if cleanup_success:
@@ -984,26 +1048,23 @@ class PackageBuilder:
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Force database update failed: {e}")
+            self.logger.error(f"❌ Self-healing database update failed: {e}")
             import traceback
             traceback.print_exc()
             return False
         finally:
-            self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 7: Cleanup staging directory")
-            self.logger.info("=" * 60)
             self._cleanup_staging()
     
     def run(self) -> int:
         """
-        Main execution workflow - SERVER-FIRST ARCHITECTURE
+        Main execution workflow - SELF-HEALING ARCHITECTURE
         
         Returns:
             Exit code (0 for success, 1 for failure)
         """
         try:
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("🚀 MANJARO PACKAGE BUILDER - SERVER-FIRST ARCHITECTURE")
+            self.logger.info("🚀 MANJARO PACKAGE BUILDER - SELF-HEALING ARCHITECTURE")
             self.logger.info("=" * 60)
             
             self.logger.info("\n🔧 Initial setup...")
@@ -1060,10 +1121,10 @@ class PackageBuilder:
             self._build_local_packages_server_first()
             
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("STEP 5: ADDITIVE DATABASE UPDATE (ALWAYS RUN)")
+            self.logger.info("STEP 5: SELF-HEALING DATABASE UPDATE (ALWAYS RUN)")
             self.logger.info("=" * 60)
             
-            # ALWAYS run database update, even if no new packages
+            # ALWAYS run self-healing database update
             db_update_success = self._force_database_update()
             
             if not db_update_success:
@@ -1088,7 +1149,9 @@ class PackageBuilder:
             self.logger.info(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             self.logger.info(f"VCS priority fix: ✅ Implemented")
             self.logger.info(f"Internal sanitization: ✅ {len(self._sanitized_files)} files renamed")
-            self.logger.info(f"Additive DB update: ✅ Implemented (no dummy files)")
+            self.logger.info(f"Self-healing DB update: ✅ Implemented")
+            self.logger.info(f"Packages recovered from VPS: {len(self._recovered_packages)}")
+            self.logger.info(f"Packages missing from DB: {len(self._missing_from_db)}")
             
             state_summary = self.version_tracker.get_state_summary()
             self.logger.info(f"Packages tracked: {state_summary['total_packages']}")
