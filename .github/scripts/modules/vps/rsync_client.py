@@ -2,6 +2,7 @@
 Rsync Client Module
 """
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from modules.common.shell_executor import ShellExecutor
@@ -21,12 +22,13 @@ class RsyncClient:
         """Download from remote"""
         local_dir.mkdir(parents=True, exist_ok=True)
         source = f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}"
+        # Added -v to ssh options inside rsync for consistency if debugging needed, and environment inheritance
         cmd = [
             "rsync", "-avz", "--quiet",
-            "-e", "ssh -o StrictHostKeyChecking=no",
+            "-e", "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30",
             source, str(local_dir)
         ]
-        res = self.shell_executor.run(cmd, check=False)
+        res = self.shell_executor.run(cmd, check=False, extra_env=os.environ.copy())
         return res.returncode == 0
 
     def upload(self, local_files: List[str], base_dir: Optional[Path] = None) -> bool:
@@ -36,8 +38,8 @@ class RsyncClient:
         target = f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
         cmd = [
             "rsync", "-avz", "--quiet",
-            "-e", "ssh -o StrictHostKeyChecking=no"
+            "-e", "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30"
         ] + local_files + [target]
         
-        res = self.shell_executor.run(cmd, check=False)
+        res = self.shell_executor.run(cmd, check=False, extra_env=os.environ.copy())
         return res.returncode == 0

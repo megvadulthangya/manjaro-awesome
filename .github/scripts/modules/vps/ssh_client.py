@@ -27,9 +27,8 @@ class SSHClient:
     def setup_ssh_config(self, ssh_key: str) -> bool:
         """
         Setup SSH config for builder user.
-        If ssh_key is empty/None, assumes the environment is already configured (e.g., SSH Agent).
+        If ssh_key is empty/None, assumes the environment is already configured.
         """
-        # Do not overwrite config if no key provided. Trust the shell environment.
         if not ssh_key or not ssh_key.strip():
             self.logger.info("No VPS_SSH_KEY provided. Assuming system SSH agent/config is active.")
             return True
@@ -59,25 +58,49 @@ class SSHClient:
             return False
 
     def test_connection(self) -> bool:
-        # FIX: Explicitly disable HostKeyChecking and use BatchMode to prevent prompts
-        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -q {self.vps_host} exit"
+        """
+        Test SSH connection with verbose logging and strict parameters.
+        Force environment inheritance to ensure SSH_AUTH_SOCK and other vars are passed.
+        """
+        target = f"{self.vps_user}@{self.vps_host}"
+        # Added -v for verbose, BatchMode to prevent hangs, StrictHostKeyChecking=no for runners
+        cmd = f"ssh -v -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 {target} exit"
+        
         try:
-            # Inherit environment variables to pass SSH_AUTH_SOCK and others
-            res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
+            # Force environment inheritance using os.environ.copy()
+            res = self.shell_executor.run(
+                cmd, 
+                shell=True, 
+                check=False, 
+                extra_env=os.environ.copy(), 
+                capture=True
+            )
+            
             if res.returncode == 0:
                 self.logger.info("✅ SSH connection established")
                 return True
             else:
                 self.logger.error(f"❌ SSH connection failed (Exit Code: {res.returncode})")
+                self.logger.error(f"Command: {cmd}")
+                
+                # MANDATORY: Log detailed stderr/stdout for debugging exit code 255
                 if res.stderr:
-                    self.logger.error(f"SSH Error Output: {res.stderr}")
+                    self.logger.error("SSH STDERR OUTPUT:")
+                    for line in res.stderr.splitlines():
+                        self.logger.error(f"  {line}")
+                
+                if res.stdout:
+                    self.logger.error("SSH STDOUT OUTPUT:")
+                    for line in res.stdout.splitlines():
+                        self.logger.error(f"  {line}")
+                        
                 return False
         except Exception as e:
             self.logger.error(f"SSH test exception: {e}")
             return False
 
     def ensure_directory(self) -> bool:
-        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'mkdir -p {self.remote_dir}'"
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_user}@{self.vps_host} 'mkdir -p {self.remote_dir}'"
         res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
         return res.returncode == 0
 
@@ -85,7 +108,7 @@ class SSHClient:
         if self._inventory_cache is not None and not force_refresh:
             return self._inventory_cache
             
-        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'ls -1 {self.remote_dir}'"
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_user}@{self.vps_host} 'ls -1 {self.remote_dir}'"
         try:
             res = self.shell_executor.run(cmd, shell=True, capture=True, check=False, extra_env=os.environ.copy())
             files = {}
@@ -104,6 +127,6 @@ class SSHClient:
         if not paths: return True
         # Join paths into a space separated string, quoted
         quoted = [f"'{p}'" for p in paths]
-        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'rm -f {' '.join(quoted)}'"
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_user}@{self.vps_host} 'rm -f {' '.join(quoted)}'"
         res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
         return res.returncode == 0
