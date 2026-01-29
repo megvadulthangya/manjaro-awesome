@@ -8,11 +8,10 @@ import glob
 import subprocess
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from modules.vps.ssh_client import SSHClient
 from modules.vps.rsync_client import RsyncClient
-from modules.gpg.gpg_handler import GPGHandler
 
 class DatabaseManager:
     """Manages the Pacman repository database"""
@@ -55,16 +54,15 @@ class DatabaseManager:
         
         success = True
         for pattern in patterns:
-            if not self.rsync_client.mirror_remote(pattern, self._staging_dir):
-                self.logger.warning(f"⚠️ Could not download {pattern} (might not exist yet)")
-                # Not necessarily a failure if it's a new repo
+            # We ignore errors here because if repo is new, these won't exist
+            self.rsync_client.mirror_remote(pattern, self._staging_dir)
         
         return success
 
     def update_database_additive(self) -> bool:
         """
         Update the database with packages in the staging directory.
-        Enforces GPG signing if configured.
+        CRITICAL: Enforces GPG signing if configured to prevent signature deadlock.
         """
         if not self._staging_dir:
             self.logger.error("❌ No staging directory active")
@@ -78,19 +76,27 @@ class DatabaseManager:
             pkgs = glob.glob("*.pkg.tar.zst")
             if not pkgs:
                 self.logger.info("ℹ️ No packages to add to database")
+                # Even if no packages, we might want to re-sign if signature was broken
+                # But typically we need at least one operation.
+                # If we downloaded DB, we can just return True.
                 return True
             
             db_file = f"{self.repo_name}.db.tar.gz"
             
             # Construct repo-add command
             # --remove: remove old entries for the same package
-            # --sign: sign the database
-            # --key: specify the key
             cmd = ["repo-add", "--remove"]
             
+            # STRICT SIGNATURE ENFORCEMENT
             if self.gpg_enabled:
+                if not self.gpg_key_id:
+                    self.logger.error("❌ GPG enabled but No Key ID provided!")
+                    return False
+                    
                 self.logger.info(f"🔐 Signing database with key {self.gpg_key_id}")
                 cmd.extend(["--sign", "--key", self.gpg_key_id])
+            else:
+                self.logger.warning("⚠️ GPG Signing is DISABLED. Clients may reject this repo.")
             
             cmd.append(db_file)
             cmd.extend(pkgs)
@@ -98,6 +104,7 @@ class DatabaseManager:
             self.logger.info(f"RUNNING: {' '.join(cmd)}")
             
             # Run repo-add
+            # We capture output to debug if it fails
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -120,8 +127,14 @@ class DatabaseManager:
             if self.gpg_enabled:
                 sig_file = Path(f"{db_file}.sig")
                 if not sig_file.exists():
-                    self.logger.error("❌ Database signature (.sig) missing!")
+                    self.logger.error("❌ Database signature (.sig) missing after repo-add!")
                     return False
+                
+                # Check files.tar.gz.sig too usually generated automatically
+                files_sig = Path(f"{self.repo_name}.files.tar.gz.sig")
+                if not files_sig.exists():
+                    self.logger.warning("⚠️ Files DB signature missing (non-critical but recommended)")
+                
                 self.logger.info("✅ Database signature verified")
 
             self.logger.info("✅ Database updated successfully")
