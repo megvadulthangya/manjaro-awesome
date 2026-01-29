@@ -1,7 +1,7 @@
 """
 GPG Handler Module
 Handles GPG key import, signing, and pacman-key operations.
-Implements 'Secret Sauce' legacy logic for proper key trust injection.
+Ported from Legacy Logic: Manual pacman-key integration and detached signing.
 """
 
 import os
@@ -38,13 +38,13 @@ class GPGHandler:
     def import_gpg_key(self) -> bool:
         """
         Import GPG private key into isolated keyring AND system pacman keyring.
-        Sets up the environment for subsequent signing operations.
+        Legacy 'Secret Sauce': Explicitly injects trust into /etc/pacman.d/gnupg.
         """
         if not self.gpg_enabled:
             self.logger.info("GPG Key not detected. Skipping signing setup.")
             return False
         
-        self.logger.info("🔐 Importing GPG private key...")
+        self.logger.info("🔐 Importing GPG private key (Legacy Flow)...")
         
         # Handle key data
         key_data = self.gpg_private_key
@@ -60,7 +60,7 @@ class GPGHandler:
         
         temp_gpg_home = None
         try:
-            # 1. Setup Isolated GPG Home for Signing
+            # 1. Setup Isolated GPG Home for Signing Operations
             temp_gpg_home = tempfile.mkdtemp(prefix="gpg_home_")
             env = self.base_env.copy()
             env['GNUPGHOME'] = temp_gpg_home
@@ -112,8 +112,9 @@ class GPGHandler:
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
                 return False
 
-            # 2. Integrate with Pacman Keyring (Legacy Secret Sauce)
-            self._setup_pacman_key(fingerprint, key_input, env)
+            # 2. Integrate with Pacman Keyring (The "Secret Sauce")
+            # This is critical for makepkg/yay to accept the repo during build
+            self._setup_pacman_key(fingerprint, env)
             
             self.gpg_home = temp_gpg_home
             self.gpg_env = env
@@ -126,12 +127,11 @@ class GPGHandler:
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
             return False
 
-    def _setup_pacman_key(self, fingerprint: str, key_bytes: bytes, env: Dict[str, str]):
+    def _setup_pacman_key(self, fingerprint: str, env: Dict[str, str]):
         """
-        Add key to pacman keyring and set trust.
-        Critical for avoiding 'invalid or corrupted database' errors.
+        Add key to pacman keyring and set trust manually.
         """
-        self.logger.info("🔐 integrating key into pacman keyring...")
+        self.logger.info("🔐 Integrating key into pacman keyring...")
         
         pub_key_path = None
         trust_path = None
@@ -147,7 +147,7 @@ class GPGHandler:
                     check=True
                 )
             
-            # Add to pacman-key
+            # Add to pacman-key (requires sudo)
             subprocess.run(
                 ['sudo', 'LC_ALL=C', 'pacman-key', '--add', pub_key_path],
                 capture_output=True,
@@ -159,7 +159,8 @@ class GPGHandler:
                 f.write(f"{fingerprint}:6:\n")
                 trust_path = f.name
             
-            # Import trust into /etc/pacman.d/gnupg
+            # Import trust DIRECTLY into /etc/pacman.d/gnupg
+            # This bypasses some pacman-key wrappers that might fail in containers
             subprocess.run(
                 [
                     'sudo', 'LC_ALL=C', 'gpg', 
@@ -193,12 +194,10 @@ class GPGHandler:
         Used AFTER repo-add to manually apply signatures.
         """
         if not self.gpg_enabled or not self.gpg_env:
-            self.logger.warning("⚠️ GPG not enabled or env missing, skipping signing")
             return False
             
         try:
             output_path = Path(output_dir)
-            # Standard repo-add output files
             targets = [
                 output_path / f"{repo_name}.db",
                 output_path / f"{repo_name}.files"
@@ -206,26 +205,28 @@ class GPGHandler:
             
             signed_count = 0
             for target in targets:
+                # Handle symlinks/tarballs
+                real_target = target
                 if not target.exists():
-                    # It might be that repo-add only created the archives, check for .tar.gz and sign that too if symlink fails
-                    target_archive = target.with_suffix('.tar.gz')
-                    if target_archive.exists():
-                        target = target_archive
+                    archive = target.with_suffix('.tar.gz')
+                    if archive.exists():
+                        real_target = archive
                     else:
                         continue
                 
-                sig_file = target.with_suffix(target.suffix + '.sig')
+                # Clean old sig
+                sig_file = real_target.with_suffix(real_target.suffix + '.sig')
                 if sig_file.exists():
                     sig_file.unlink()
                 
-                self.logger.info(f"✍️ Signing {target.name}...")
+                self.logger.info(f"✍️ Signing {real_target.name}...")
                 
                 res = subprocess.run(
                     [
                         'gpg', '--detach-sign', 
                         '--default-key', self.gpg_key_id, 
                         '--output', str(sig_file), 
-                        str(target)
+                        str(real_target)
                     ],
                     capture_output=True,
                     env=self.gpg_env,
@@ -235,7 +236,7 @@ class GPGHandler:
                 if res.returncode == 0:
                     signed_count += 1
                 else:
-                    self.logger.error(f"❌ Failed to sign {target.name}: {res.stderr.decode()}")
+                    self.logger.error(f"❌ Failed to sign {real_target.name}: {res.stderr.decode()}")
 
             return signed_count > 0
             
