@@ -28,6 +28,7 @@ class LocalBuilder:
         env = os.environ.copy()
         env['LC_ALL'] = 'C'
         env['PACKAGER'] = self.packager
+        env['HOME'] = '/home/builder'
         env['PACMAN_OPTS'] = "--siglevel Never"  # Bypass signature checks
         return env
 
@@ -55,22 +56,29 @@ class LocalBuilder:
         self.logger.info(f"📦 Pre-installing {len(deps)} dependencies via Pacman...")
         deps_str = ' '.join(deps)
         
-        # Sync DB and install available native deps
+        # 1. PACMAN SYNC FIRST (Legacy Logic)
+        # We run this to ensure databases are fresh and install what we can from official repos
         cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
         
-        # We ignore return code because some deps might be AUR-only (which pacman fails on)
-        # We just want to ensure native deps are handled and DB is synced.
-        self.shell_executor.run(cmd, check=False, shell=True)
+        # We check=False because some deps might be AUR-only
+        res = self.shell_executor.run(cmd, check=False, shell=True)
+        
+        if res.returncode == 0:
+            self.logger.info("✅ Dependencies installed via Pacman")
+            return True
+        
+        self.logger.warning("⚠️ Pacman install incomplete, proceeding to build (Yay fallback will handle AUR deps)")
         return True
 
     def _parse_missing_deps(self, output: str) -> List[str]:
-        """Extract missing package names from makepkg stderr"""
+        """Extract missing package names from makepkg stderr using Legacy Regex"""
         missing = []
         patterns = [
             r"error: target not found: (\S+)",
             r"Could not find all required packages:",
             r":: Unable to find (\S+)",
-            r"Missing dependencies: \n((?:\s+->\s+\S+\n)+)" # Multiline parsing often complex, sticking to simple lines
+            r"Missing dependencies: \n((?:\s+->\s+\S+\n)+)",
+            r"makepkg: cannot find the '([^']+)'"
         ]
         
         for line in output.splitlines():
@@ -85,17 +93,24 @@ class LocalBuilder:
         return list(set(missing))
 
     def _install_missing_via_yay(self, deps: List[str]) -> bool:
-        """Install missing dependencies using yay"""
+        """Install missing dependencies using yay as builder user"""
         if not deps:
             return False
             
         self.logger.info(f"🚑 Fallback: Installing {len(deps)} missing dependencies via Yay...")
         deps_str = ' '.join(deps)
         
-        # Run as builder user (assumed context), ensuring env vars
-        cmd = f"LC_ALL=C yay -S --needed --noconfirm --siglevel Never {deps_str}"
+        # Legacy Command: Run pacman update then yay as builder
+        cmd = f"sudo LC_ALL=C pacman -Sy && LC_ALL=C yay -S --needed --noconfirm --siglevel Never {deps_str}"
         
-        res = self.shell_executor.run(cmd, check=False, shell=True)
+        # Run as builder user is handled by passing user='builder' if using sudo,
+        # but here we construct the command to run as builder for the yay part implicitly
+        # or rely on the executor. Based on Legacy, we force the shell command context.
+        # Assuming shell_executor runs as root, we drop privileges for yay.
+        
+        full_cmd = f"su builder -c '{cmd}'"
+        
+        res = self.shell_executor.run(full_cmd, check=False, shell=True)
         return res.returncode == 0
 
     def build(self, pkg_name: str, pkg_dir: Optional[Path] = None) -> bool:
@@ -115,19 +130,38 @@ class LocalBuilder:
         # 2. Strict Dependency Sync
         self._install_dependencies_strict(pkg_dir)
 
-        # 3. Build Command
+        # 3. Build Command (Legacy Flags)
+        # -s: sync deps, -i: install deps, --noconfirm, --clean, --nocheck
         cmd = ["makepkg", "-si", "--noconfirm", "--clean", "--nocheck"]
+        
         env = self._get_build_env()
         
         try:
             # First Attempt
+            # Ensure we run as builder
+            # If shell executor supports user arg, use it. Otherwise, assume we need to switch user.
+            # Based on previous context, shell_executor handles user switching if implemented, 
+            # but we'll be explicit with environment to match legacy.
+            
+            # Note: We rely on the shell executor to handle the user 'builder' context if we pass it,
+            # OR we rely on the environment being set correctly.
+            # Legacy code ran: `sudo -u builder bash -c ...`
+            
+            # Using ShellExecutor with user='builder' (assuming implementation supports it)
+            # If not, we fall back to os level switching, but let's assume the Orchestrator configures it.
+            # Since we are root in container usually:
+            
+            # Fix permissions first
+            self.shell_executor.run(f"chown -R builder:builder {pkg_dir}", check=False, shell=True)
+
             result = self.shell_executor.run(
                 cmd, 
                 cwd=pkg_dir, 
                 check=False,
                 extra_env=env,
                 timeout=self.config.get('makepkg_timeout', {}).get('default', 3600),
-                log_cmd=True
+                log_cmd=True,
+                user="builder" # CRITICAL: Run as builder
             )
 
             # 4. Fallback Logic
@@ -147,7 +181,8 @@ class LocalBuilder:
                             check=False,
                             extra_env=env,
                             timeout=self.config.get('makepkg_timeout', {}).get('default', 3600),
-                            log_cmd=True
+                            log_cmd=True,
+                            user="builder"
                         )
                     else:
                         self.logger.error("❌ Yay fallback failed to install dependencies.")

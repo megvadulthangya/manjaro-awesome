@@ -29,6 +29,7 @@ class AURBuilder:
         env = os.environ.copy()
         env['LC_ALL'] = 'C'
         env['PACKAGER'] = self.packager
+        env['HOME'] = '/home/builder'
         env['PACMAN_OPTS'] = "--siglevel Never"  # Bypass signature checks
         return env
 
@@ -56,18 +57,24 @@ class AURBuilder:
         self.logger.info(f"📦 Pre-installing {len(deps)} dependencies via Pacman...")
         deps_str = ' '.join(deps)
         
-        # Sync DB and install available native deps
+        # 1. PACMAN SYNC FIRST (Legacy Logic)
         cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
-        self.shell_executor.run(cmd, check=False, shell=True)
+        res = self.shell_executor.run(cmd, check=False, shell=True)
+        
+        if res.returncode == 0:
+            self.logger.info("✅ Dependencies installed via Pacman")
+            return True
+            
         return True
 
     def _parse_missing_deps(self, output: str) -> List[str]:
-        """Extract missing package names from makepkg stderr"""
+        """Extract missing package names from makepkg stderr using Legacy Regex"""
         missing = []
         patterns = [
             r"error: target not found: (\S+)",
             r"Could not find all required packages:",
-            r":: Unable to find (\S+)"
+            r":: Unable to find (\S+)",
+            r"makepkg: cannot find the '([^']+)'"
         ]
         
         for line in output.splitlines():
@@ -81,15 +88,20 @@ class AURBuilder:
         return list(set(missing))
 
     def _install_missing_via_yay(self, deps: List[str]) -> bool:
-        """Install missing dependencies using yay"""
+        """Install missing dependencies using yay as builder user"""
         if not deps:
             return False
             
         self.logger.info(f"🚑 Fallback: Installing {len(deps)} missing dependencies via Yay...")
         deps_str = ' '.join(deps)
         
-        cmd = f"LC_ALL=C yay -S --needed --noconfirm --siglevel Never {deps_str}"
-        res = self.shell_executor.run(cmd, check=False, shell=True)
+        # Legacy Command: Run pacman update then yay as builder
+        cmd = f"sudo LC_ALL=C pacman -Sy && LC_ALL=C yay -S --needed --noconfirm --siglevel Never {deps_str}"
+        
+        # Execute as builder user via su
+        full_cmd = f"su builder -c '{cmd}'"
+        
+        res = self.shell_executor.run(full_cmd, check=False, shell=True)
         return res.returncode == 0
 
     def build(self, pkg_name: str, remote_version: Optional[str] = None) -> bool:
@@ -114,6 +126,9 @@ class AURBuilder:
             self.logger.error(f"❌ Failed to clone AUR package {pkg_name}")
             return False
 
+        # Fix permissions before build
+        self.shell_executor.run(f"chown -R builder:builder {work_dir}", check=False, shell=True)
+
         # 3. Pre-build Setup
         self._purge_old_artifacts(work_dir)
         self._install_dependencies_strict(work_dir)
@@ -123,14 +138,15 @@ class AURBuilder:
         env = self._get_build_env()
         
         try:
-            # First Attempt
+            # First Attempt (As Builder)
             result = self.shell_executor.run(
                 cmd,
                 cwd=work_dir,
                 check=False,
                 extra_env=env,
                 timeout=self.config.get('makepkg_timeout', {}).get('default', 3600),
-                log_cmd=True
+                log_cmd=True,
+                user="builder"
             )
 
             # 5. Fallback Logic
@@ -149,7 +165,8 @@ class AURBuilder:
                             check=False,
                             extra_env=env,
                             timeout=self.config.get('makepkg_timeout', {}).get('default', 3600),
-                            log_cmd=True
+                            log_cmd=True,
+                            user="builder"
                         )
                     else:
                         self.logger.error("❌ Yay fallback failed.")
