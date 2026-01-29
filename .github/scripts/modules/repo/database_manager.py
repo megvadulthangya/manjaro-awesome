@@ -1,14 +1,16 @@
 """
 Database Manager
 Handles repository database operations, signing, and consistency checks.
+Implements 'Zero-Residue' policy and manual signing flow.
 """
 import os
 import shutil
 import glob
 import subprocess
 import logging
+import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 from modules.vps.ssh_client import SSHClient
 from modules.vps.rsync_client import RsyncClient
@@ -26,9 +28,6 @@ class DatabaseManager:
         self.logger = logger or logging.getLogger(__name__)
         
         self.repo_name = config.get('repo_name', 'custom_repo')
-        self.gpg_key_id = config.get('gpg_key_id')
-        self.gpg_enabled = bool(config.get('gpg_private_key') and self.gpg_key_id)
-        
         self._staging_dir: Optional[Path] = None
 
     def create_staging_dir(self) -> Path:
@@ -48,21 +47,99 @@ class DatabaseManager:
             return False
             
         self.logger.info("📥 Downloading existing database...")
+        # We download everything to ensure we have the full state
         patterns = [
             f"{self.repo_name}.db*",
             f"{self.repo_name}.files*"
         ]
         
-        success = True
         for pattern in patterns:
             self.rsync_client.mirror_remote(pattern, self._staging_dir)
         
-        return success
+        return True
+
+    def _parse_pkg_filename(self, filename: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse package filename into (name, full_version).
+        Format: name-version-release-arch.pkg.tar.zst
+        """
+        if not filename.endswith('.pkg.tar.zst'):
+            return None, None
+            
+        parts = filename.split('-')
+        if len(parts) < 4:
+            return None, None
+            
+        # arch is last, release is second to last, version is third to last
+        # everything before is name
+        try:
+            version = parts[-3]
+            release = parts[-2]
+            name = "-".join(parts[:-3])
+            full_version = f"{version}-{release}"
+            return name, full_version
+        except Exception:
+            return None, None
+
+    def _enforce_zero_residue(self):
+        """
+        Scan staging directory and ensure only ONE version (the latest) exists for each package.
+        Deletes older duplicate versions.
+        """
+        if not self._staging_dir:
+            return
+
+        files = list(self._staging_dir.glob("*.pkg.tar.zst"))
+        pkg_map: Dict[str, List[Tuple[str, Path]]] = {}
+
+        # Group by package name
+        for f in files:
+            name, ver = self._parse_pkg_filename(f.name)
+            if name and ver:
+                if name not in pkg_map:
+                    pkg_map[name] = []
+                pkg_map[name].append((ver, f))
+
+        # Filter duplicates
+        for name, entries in pkg_map.items():
+            if len(entries) > 1:
+                # Sort using vercmp (external call required for accuracy)
+                # We'll use a bubble sort with vercmp since list is small
+                n = len(entries)
+                for i in range(n):
+                    for j in range(0, n-i-1):
+                        v1 = entries[j][0]
+                        v2 = entries[j+1][0]
+                        
+                        # Compare v1 and v2
+                        res = subprocess.run(
+                            ['vercmp', v1, v2],
+                            capture_output=True, text=True, env={'LC_ALL': 'C'}
+                        )
+                        # if v1 > v2, swap to push larger to end
+                        if res.returncode == 0 and int(res.stdout.strip()) > 0:
+                            entries[j], entries[j+1] = entries[j+1], entries[j]
+                
+                # Keep last (highest), remove others
+                keep = entries[-1]
+                remove = entries[:-1]
+                
+                self.logger.info(f"🧹 Zero-Residue: Keeping {keep[1].name}, removing {len(remove)} old versions.")
+                
+                for _, f_path in remove:
+                    f_path.unlink()
+                    # Also remove sig if exists
+                    sig = f_path.with_suffix(f_path.suffix + '.sig')
+                    if sig.exists():
+                        sig.unlink()
 
     def update_database_additive(self) -> bool:
         """
-        Update the database with packages in the staging directory.
-        CRITICAL: Validates file existence to prevent repo-add failure.
+        Update the database by regenerating it from staged packages.
+        1. Enforce Zero-Residue (remove duplicates).
+        2. Clean old DB files.
+        3. Run repo-add with shell wildcard.
+        4. Manually sign files.
         """
         if not self._staging_dir:
             self.logger.error("❌ No staging directory active")
@@ -72,63 +149,40 @@ class DatabaseManager:
         os.chdir(self._staging_dir)
         
         try:
-            # Identify new packages
-            raw_pkgs = glob.glob("*.pkg.tar.zst")
+            # 1. Enforce Zero-Residue
+            self._enforce_zero_residue()
             
-            # STRICT VALIDATION: Filter out missing or ghost files
-            pkgs = []
-            for p in raw_pkgs:
-                p_path = Path(p)
-                if p_path.exists() and p_path.is_file():
-                    pkgs.append(p)
-                else:
-                    self.logger.critical(f"⚠️ CRITICAL: Skipping non-existent file detected by glob: {p}")
-
+            # Check if any packages remain
+            pkgs = list(glob.glob("*.pkg.tar.zst"))
             if not pkgs:
-                self.logger.info("ℹ️ No valid packages to add to database")
-                if (self._staging_dir / f"{self.repo_name}.db.tar.gz").exists():
-                    return True
+                self.logger.info("ℹ️ No packages found in staging. Database update skipped.")
                 return True
             
-            db_file = f"{self.repo_name}.db.tar.gz"
+            # 2. Clean Start: Remove existing database files to force regeneration
+            db_files = [
+                f"{self.repo_name}.db",
+                f"{self.repo_name}.db.tar.gz",
+                f"{self.repo_name}.files",
+                f"{self.repo_name}.files.tar.gz"
+            ]
+            for f in db_files:
+                if os.path.exists(f):
+                    os.remove(f)
+
+            # 3. Run repo-add with Wildcard Support (shell=True)
+            # DO NOT use --sign here. We sign manually later.
+            db_target = f"{self.repo_name}.db.tar.gz"
+            cmd = f"repo-add {db_target} *.pkg.tar.zst"
             
-            # Construct repo-add command
-            cmd = ["repo-add", "--remove"]
-            
-            # Prepare Environment with GNUPGHOME
+            # Ensure proper environment
             env = os.environ.copy()
+            env['LC_ALL'] = 'C'
             
-            if self.gpg_enabled:
-                if not self.gpg_key_id:
-                    self.logger.error("❌ GPG enabled but No Key ID provided!")
-                    return False
-                
-                # Ensure key is imported and get environment
-                if not self.gpg_handler.gpg_env:
-                    self.logger.info("🔐 Importing GPG key for database signing...")
-                    if not self.gpg_handler.import_gpg_key():
-                        self.logger.error("❌ Failed to import GPG key")
-                        return False
-                
-                # Use the isolated environment
-                if self.gpg_handler.gpg_env:
-                    env = self.gpg_handler.gpg_env
-                    self.logger.info(f"🔐 Signing database with key {self.gpg_key_id}")
-                    cmd.extend(["--sign", "--key", self.gpg_key_id])
-                else:
-                    self.logger.error("❌ GPG environment invalid")
-                    return False
-            else:
-                self.logger.warning("⚠️ GPG Signing is DISABLED. Clients may reject this repo.")
+            self.logger.info(f"RUNNING: {cmd}")
             
-            cmd.append(db_file)
-            cmd.extend(pkgs)
-            
-            self.logger.info(f"RUNNING: {' '.join(cmd)}")
-            
-            # Run repo-add with explicit environment
             result = subprocess.run(
                 cmd,
+                shell=True,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -141,20 +195,21 @@ class DatabaseManager:
                 self.logger.error(f"STDERR: {result.stderr}")
                 return False
             
-            # Verify database files exist
-            if not Path(db_file).exists():
+            if not Path(db_target).exists():
                 self.logger.error("❌ Database file was not created")
                 return False
-                
-            # Verify signatures if enabled
-            if self.gpg_enabled:
-                sig_file = Path(f"{db_file}.sig")
-                if not sig_file.exists():
-                    self.logger.error("❌ Database signature (.sig) missing after repo-add!")
+            
+            # 4. Manual Signing
+            if self.gpg_handler.gpg_enabled:
+                self.logger.info("🔐 Manually signing database files...")
+                if not self.gpg_handler.sign_repository_files(self.repo_name, str(self._staging_dir)):
+                    self.logger.error("❌ Failed to sign database files")
                     return False
-                self.logger.info("✅ Database signature verified")
+                self.logger.info("✅ Database signed successfully")
+            else:
+                self.logger.warning("⚠️ GPG disabled, database unsigned")
 
-            self.logger.info("✅ Database updated successfully")
+            self.logger.info("✅ Database regeneration complete")
             return True
             
         except Exception as e:

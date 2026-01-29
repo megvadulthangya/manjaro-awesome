@@ -1,6 +1,7 @@
 """
 GPG Handler Module
-Handles GPG key import, signing, and pacman-key operations
+Handles GPG key import, signing, and pacman-key operations.
+Implements 'Secret Sauce' legacy logic for proper key trust injection.
 """
 
 import os
@@ -30,40 +31,44 @@ class GPGHandler:
         self.gpg_home = None
         self.gpg_env = None
         
-        # Safe logging - no sensitive information
-        if self.gpg_key_id:
-            self.logger.info(f"GPG Check: Key ID: YES, Key Data: {'YES' if self.gpg_private_key else 'NO'}")
-        else:
-            self.logger.info("GPG Check: No Key ID configured")
+        # Base environment with LC_ALL=C
+        self.base_env = os.environ.copy()
+        self.base_env['LC_ALL'] = 'C'
     
     def import_gpg_key(self) -> bool:
-        """Import GPG private key and set trust level"""
+        """
+        Import GPG private key into isolated keyring AND system pacman keyring.
+        Sets up the environment for subsequent signing operations.
+        """
         if not self.gpg_enabled:
-            self.logger.info("GPG Key not detected. Skipping signing.")
+            self.logger.info("GPG Key not detected. Skipping signing setup.")
             return False
         
-        self.logger.info("Importing GPG private key...")
+        self.logger.info("🔐 Importing GPG private key...")
         
-        # Handle both string and bytes
+        # Handle key data
         key_data = self.gpg_private_key
         if isinstance(key_data, bytes):
-            key_data_str = key_data.decode('utf-8')
+            key_data = key_data.decode('utf-8')
         else:
-            key_data_str = str(key_data)
+            key_data = str(key_data)
         
-        if not key_data_str or '-----BEGIN PGP PRIVATE KEY BLOCK-----' not in key_data_str:
+        if not key_data or '-----BEGIN PGP PRIVATE KEY BLOCK-----' not in key_data:
             self.logger.error("❌ Invalid GPG private key format.")
             self.gpg_enabled = False
             return False
         
+        temp_gpg_home = None
         try:
+            # 1. Setup Isolated GPG Home for Signing
             temp_gpg_home = tempfile.mkdtemp(prefix="gpg_home_")
-            env = os.environ.copy()
+            env = self.base_env.copy()
             env['GNUPGHOME'] = temp_gpg_home
             
-            key_input = key_data if isinstance(key_data, bytes) else key_data.encode('utf-8')
+            key_input = key_data.encode('utf-8')
             
-            import_process = subprocess.run(
+            # Import into temp keyring
+            import_res = subprocess.run(
                 ['gpg', '--batch', '--import'],
                 input=key_input,
                 capture_output=True,
@@ -71,13 +76,13 @@ class GPGHandler:
                 check=False
             )
             
-            if import_process.returncode != 0:
-                self.logger.error(f"Failed to import GPG key: {import_process.stderr}")
+            if import_res.returncode != 0:
+                self.logger.error(f"❌ Failed to import GPG key: {import_res.stderr.decode()}")
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
                 return False
-            
-            # Get fingerprint and set trust
-            list_process = subprocess.run(
+                
+            # Get Fingerprint
+            list_res = subprocess.run(
                 ['gpg', '--list-keys', '--with-colons', self.gpg_key_id],
                 capture_output=True,
                 text=True,
@@ -86,12 +91,13 @@ class GPGHandler:
             )
             
             fingerprint = None
-            if list_process.returncode == 0:
-                for line in list_process.stdout.split('\n'):
+            if list_res.returncode == 0:
+                for line in list_res.stdout.split('\n'):
                     if line.startswith('fpr:'):
                         parts = line.split(':')
                         if len(parts) > 9:
                             fingerprint = parts[9]
+                            # Set ownertrust in temp keyring
                             subprocess.run(
                                 ['gpg', '--import-ownertrust'],
                                 input=f"{fingerprint}:6:\n".encode('utf-8'),
@@ -101,85 +107,143 @@ class GPGHandler:
                             )
                             break
             
-            if fingerprint:
-                self._setup_pacman_key(fingerprint, env)
+            if not fingerprint:
+                self.logger.error("❌ Could not determine GPG fingerprint")
+                shutil.rmtree(temp_gpg_home, ignore_errors=True)
+                return False
+
+            # 2. Integrate with Pacman Keyring (Legacy Secret Sauce)
+            self._setup_pacman_key(fingerprint, key_input, env)
             
             self.gpg_home = temp_gpg_home
             self.gpg_env = env
+            self.logger.info("✅ GPG key imported and trusted in pacman keyring")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error importing GPG key: {e}")
-            if 'temp_gpg_home' in locals():
+            self.logger.error(f"❌ Error importing GPG key: {e}")
+            if temp_gpg_home and os.path.exists(temp_gpg_home):
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
             return False
 
-    def _setup_pacman_key(self, fingerprint: str, env: Dict[str, str]):
-        """Helper to add key to pacman keyring"""
+    def _setup_pacman_key(self, fingerprint: str, key_bytes: bytes, env: Dict[str, str]):
+        """
+        Add key to pacman keyring and set trust.
+        Critical for avoiding 'invalid or corrupted database' errors.
+        """
+        self.logger.info("🔐 integrating key into pacman keyring...")
+        
+        pub_key_path = None
+        trust_path = None
+        
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.asc', delete=False) as pub_key_file:
-                # FIX: Removed stdout=pub_key_file argument when capture_output=True is not used
-                # We direct stdout to the file object
+            # Export public key
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.asc', delete=False) as f:
+                pub_key_path = f.name
                 subprocess.run(
                     ['gpg', '--armor', '--export', fingerprint],
-                    text=True,
+                    stdout=f,
                     env=env,
-                    check=True,
-                    stdout=pub_key_file
+                    check=True
                 )
-                pub_key_path = pub_key_file.name
             
+            # Add to pacman-key
             subprocess.run(
-                ['sudo', 'pacman-key', '--add', pub_key_path],
+                ['sudo', 'LC_ALL=C', 'pacman-key', '--add', pub_key_path],
                 capture_output=True,
                 check=False
             )
             
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.trust', delete=False) as trust_file:
-                trust_file.write(f"{fingerprint}:6:\n")
-                trust_path = trust_file.name
-                
+            # Create trust file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.trust', delete=False) as f:
+                f.write(f"{fingerprint}:6:\n")
+                trust_path = f.name
+            
+            # Import trust into /etc/pacman.d/gnupg
             subprocess.run(
-                ['sudo', 'gpg', '--homedir', '/etc/pacman.d/gnupg', '--batch', '--import-ownertrust', trust_path],
+                [
+                    'sudo', 'LC_ALL=C', 'gpg', 
+                    '--homedir', '/etc/pacman.d/gnupg', 
+                    '--batch', 
+                    '--import-ownertrust', 
+                    trust_path
+                ],
                 capture_output=True,
                 check=False
             )
             
-            os.unlink(pub_key_path)
-            os.unlink(trust_path)
+            # Refresh pacman-key
+            subprocess.run(
+                ['sudo', 'LC_ALL=C', 'pacman-key', '--updatedb'],
+                capture_output=True,
+                check=False
+            )
             
         except Exception as e:
-            self.logger.warning(f"Pacman key setup warning: {e}")
+            self.logger.warning(f"⚠️ Pacman key setup warning: {e}")
+        finally:
+            if pub_key_path and os.path.exists(pub_key_path):
+                os.unlink(pub_key_path)
+            if trust_path and os.path.exists(trust_path):
+                os.unlink(trust_path)
 
     def sign_repository_files(self, repo_name: str, output_dir: str) -> bool:
-        """Sign repository database files"""
+        """
+        Sign repository database files (.db and .files).
+        Used AFTER repo-add to manually apply signatures.
+        """
         if not self.gpg_enabled or not self.gpg_env:
+            self.logger.warning("⚠️ GPG not enabled or env missing, skipping signing")
             return False
             
         try:
             output_path = Path(output_dir)
-            files = [output_path / f"{repo_name}.db", output_path / f"{repo_name}.files"]
+            # Standard repo-add output files
+            targets = [
+                output_path / f"{repo_name}.db",
+                output_path / f"{repo_name}.files"
+            ]
             
-            signed = 0
-            for f in files:
-                if not f.exists(): continue
+            signed_count = 0
+            for target in targets:
+                if not target.exists():
+                    # It might be that repo-add only created the archives, check for .tar.gz and sign that too if symlink fails
+                    target_archive = target.with_suffix('.tar.gz')
+                    if target_archive.exists():
+                        target = target_archive
+                    else:
+                        continue
                 
-                sig_file = f.with_suffix(f.suffix + '.sig')
+                sig_file = target.with_suffix(target.suffix + '.sig')
+                if sig_file.exists():
+                    sig_file.unlink()
+                
+                self.logger.info(f"✍️ Signing {target.name}...")
+                
                 res = subprocess.run(
-                    ['gpg', '--detach-sign', '--default-key', self.gpg_key_id, '--output', str(sig_file), str(f)],
+                    [
+                        'gpg', '--detach-sign', 
+                        '--default-key', self.gpg_key_id, 
+                        '--output', str(sig_file), 
+                        str(target)
+                    ],
                     capture_output=True,
                     env=self.gpg_env,
                     check=False
                 )
+                
                 if res.returncode == 0:
-                    signed += 1
+                    signed_count += 1
+                else:
+                    self.logger.error(f"❌ Failed to sign {target.name}: {res.stderr.decode()}")
+
+            return signed_count > 0
             
-            return signed > 0
         except Exception as e:
-            self.logger.warning(f"Signing error: {e}")
+            self.logger.error(f"❌ Signing error: {e}")
             return False
 
     def cleanup(self):
         """Clean up GPG home"""
-        if self.gpg_home:
+        if self.gpg_home and os.path.exists(self.gpg_home):
             shutil.rmtree(self.gpg_home, ignore_errors=True)
