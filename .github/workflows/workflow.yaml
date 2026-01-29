@@ -55,7 +55,7 @@ jobs:
 #
   build-and-deploy:
     name: Build and Deploy Packages
-    needs: cleanup
+#    needs: cleanup
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
