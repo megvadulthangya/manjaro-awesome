@@ -8,28 +8,18 @@ import os
 import subprocess
 import logging
 import requests
-import json
 from pathlib import Path
-from typing import Tuple, Optional, Any, Dict
+from typing import Tuple, Optional, Any
 
 class VersionManager:
     """Manages package version extraction, comparison, and parsing"""
     
     def __init__(self, shell_executor: Any, logger: Optional[logging.Logger] = None):
-        """
-        Initialize VersionManager
-        
-        Args:
-            shell_executor: ShellExecutor instance
-            logger: Optional logger instance
-        """
         self.shell_executor = shell_executor
         self.logger = logger or logging.getLogger(__name__)
     
     def extract_from_pkgbuild(self, pkg_dir: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """
-        Extract version information from PKGBUILD using makepkg --printsrcinfo
-        """
+        """Extract version from PKGBUILD using makepkg --printsrcinfo"""
         try:
             result = subprocess.run(
                 ['makepkg', '--printsrcinfo'],
@@ -43,31 +33,10 @@ class VersionManager:
             if result.returncode == 0 and result.stdout:
                 return self._parse_srcinfo_content(result.stdout)
             
-            self.logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
             return None, None, None
-            
         except Exception as e:
             self.logger.error(f"Error extracting version: {e}")
             return None, None, None
-
-    def extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
-        """
-        Extract version from .SRCINFO file or generate it
-        """
-        srcinfo_path = pkg_dir / ".SRCINFO"
-        
-        if srcinfo_path.exists():
-            try:
-                with open(srcinfo_path, 'r') as f:
-                    return self._parse_srcinfo_content(f.read())
-            except Exception:
-                pass
-        
-        pkgver, pkgrel, epoch = self.extract_from_pkgbuild(pkg_dir)
-        if pkgver and pkgrel:
-            return pkgver, pkgrel, epoch
-        
-        raise ValueError("Could not extract version from SRCINFO or PKGBUILD")
 
     def _parse_srcinfo_content(self, content: str) -> Tuple[str, str, Optional[str]]:
         """Parse SRCINFO content"""
@@ -92,10 +61,7 @@ class VersionManager:
         return pkgver, pkgrel, epoch
 
     def update_pkgbuild_version(self, pkg_dir: Path, new_pkgver: str, new_pkgrel: str = "1") -> bool:
-        """
-        Update pkgver and pkgrel in PKGBUILD file using regex and update checksums.
-        Handles both static and dynamic version updates.
-        """
+        """Update pkgver and pkgrel in PKGBUILD file using regex"""
         pkgbuild_path = pkg_dir / "PKGBUILD"
         if not pkgbuild_path.exists():
             return False
@@ -104,37 +70,23 @@ class VersionManager:
             with open(pkgbuild_path, 'r') as f:
                 content = f.read()
             
-            # Update pkgver (handle various formats)
-            content = re.sub(r'pkgver=.*', f'pkgver={new_pkgver}', content, count=1)
-            # Reset pkgrel to specified value
-            content = re.sub(r'pkgrel=.*', f'pkgrel={new_pkgrel}', content, count=1)
+            # Handle variable substitution or direct assignment
+            content = re.sub(r'(^|\s)pkgver=[^\s]*', f'\\1pkgver={new_pkgver}', content)
+            content = re.sub(r'(^|\s)pkgrel=[^\s]*', f'\\1pkgrel={new_pkgrel}', content)
             
             with open(pkgbuild_path, 'w') as f:
                 f.write(content)
                 
-            self.logger.info(f"✅ Updated PKGBUILD to version {new_pkgver}-{new_pkgrel}")
+            self.logger.info(f"✅ Updated PKGBUILD to {new_pkgver}-{new_pkgrel}")
             
             # Update checksums
             self.logger.info("🔄 Updating checksums...")
             try:
-                # Use updpkgsums if available
-                upd_res = self.shell_executor.run(
-                    ["updpkgsums"], 
-                    cwd=pkg_dir, 
-                    check=False,
-                    log_cmd=False
-                )
-                if upd_res.returncode == 0:
-                    self.logger.info("✅ Checksums updated")
-                else:
-                    self.logger.warning("⚠️ updpkgsums failed, build might fail on validity check")
-                    # Fallback: Try makepkg -g if updpkgsums fails? 
-                    # Usually better to let build fail if checksums are wrong than bypass security blindly.
+                subprocess.run(["updpkgsums"], cwd=pkg_dir, check=False)
             except Exception:
-                self.logger.warning("⚠️ updpkgsums not available or failed")
+                pass
                 
             return True
-            
         except Exception as e:
             self.logger.error(f"Failed to update PKGBUILD: {e}")
             return False
@@ -146,18 +98,8 @@ class VersionManager:
         return f"{pkgver}-{pkgrel}"
 
     def check_upstream_version(self, pkg_name: str, current_version: str) -> Tuple[bool, Optional[str]]:
-        """
-        Check if upstream (AUR) has a newer version.
-        
-        Args:
-            pkg_name: Package name
-            current_version: Current known version (local or remote)
-            
-        Returns:
-            Tuple (has_update, new_version)
-        """
+        """Check AUR RPC for updates"""
         try:
-            # RPC call to AUR
             url = f"https://aur.archlinux.org/rpc/?v=5&type=info&arg[]={pkg_name}"
             response = requests.get(url, timeout=10)
             
@@ -169,39 +111,44 @@ class VersionManager:
                     
                     # Compare
                     if aur_version != current_version:
-                        # Use vercmp to be sure it's newer
-                        cmp_res = self.shell_executor.run(
+                        cmp_res = subprocess.run(
                             ['vercmp', aur_version, current_version],
-                            capture=True, check=False, log_cmd=False
+                            capture_output=True, text=True, check=False
                         )
                         if cmp_res.returncode == 0 and int(cmp_res.stdout.strip()) > 0:
-                            self.logger.info(f"🆕 Upstream update found: {aur_version} > {current_version}")
                             return True, aur_version
-                        else:
-                            self.logger.info(f"ℹ️ Upstream ({aur_version}) is not newer than {current_version}")
-                            return False, aur_version
             
             return False, None
-            
-        except Exception as e:
-            self.logger.warning(f"⚠️ Failed to check upstream for {pkg_name}: {e}")
+        except Exception:
             return False, None
 
-    def get_git_latest_tag(self, repo_url: str) -> Optional[str]:
-        """Get latest tag from a git repo (for VCS packages if needed)"""
+    def get_local_git_version(self, pkg_dir: Path) -> Optional[str]:
+        """
+        Run pkgver() function if it exists to get dynamic version.
+        Useful for -git packages.
+        """
         try:
-            res = self.shell_executor.run(
-                ["git", "ls-remote", "--tags", "--refs", "--sort=-v:refname", repo_url],
-                capture=True, check=False
+            # Check if PKGBUILD has pkgver() function
+            with open(pkg_dir / "PKGBUILD", 'r') as f:
+                if "pkgver()" not in f.read():
+                    return None
+            
+            # Run makepkg -od to download sources (needed for pkgver())
+            subprocess.run(
+                ["makepkg", "-od", "--noconfirm"], 
+                cwd=pkg_dir, check=False, capture_output=True
             )
-            if res.returncode == 0 and res.stdout:
-                # Get first tag line
-                lines = res.stdout.strip().splitlines()
-                if lines:
-                    # format: hash refs/tags/v1.0.0
-                    tag_ref = lines[0].split('\t')[-1]
-                    tag = tag_ref.replace('refs/tags/', '')
-                    return tag
+            
+            # Run makepkg --printsrcinfo again to get dynamic version
+            # This triggers pkgver() execution
+            res = subprocess.run(
+                ["makepkg", "--printsrcinfo"],
+                cwd=pkg_dir, capture_output=True, text=True, check=False
+            )
+            
+            if res.returncode == 0:
+                ver, rel, ep = self._parse_srcinfo_content(res.stdout)
+                return self.get_full_version_string(ver, rel, ep)
             return None
         except Exception:
             return None
