@@ -1,60 +1,146 @@
 """
 Database Manager
+Handles repository database operations, signing, and consistency checks.
 """
-import shutil
-import tempfile
 import os
+import shutil
 import glob
+import subprocess
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
 from modules.vps.ssh_client import SSHClient
 from modules.vps.rsync_client import RsyncClient
+from modules.gpg.gpg_handler import GPGHandler
 
 class DatabaseManager:
-    """Manages repo database"""
+    """Manages the Pacman repository database"""
     
-    def __init__(self, config: Dict[str, Any], ssh_client: SSHClient, rsync_client: RsyncClient, logger: Optional[logging.Logger] = None):
+    def __init__(self, config: Dict[str, Any], ssh_client: SSHClient, 
+                 rsync_client: RsyncClient, logger: Optional[logging.Logger] = None):
         self.config = config
         self.ssh_client = ssh_client
         self.rsync_client = rsync_client
         self.logger = logger or logging.getLogger(__name__)
-        self.repo_name = config.get('repo_name', 'repo')
+        
+        self.repo_name = config.get('repo_name', 'custom_repo')
+        self.gpg_key_id = config.get('gpg_key_id')
+        self.gpg_enabled = bool(config.get('gpg_private_key') and self.gpg_key_id)
+        
         self._staging_dir: Optional[Path] = None
 
     def create_staging_dir(self) -> Path:
-        self._staging_dir = Path(tempfile.mkdtemp(prefix="repo_staging_"))
+        """Create a clean staging directory"""
+        import tempfile
+        self._staging_dir = Path(tempfile.mkdtemp(prefix=f"{self.repo_name}_staging_"))
         return self._staging_dir
 
     def cleanup_staging_dir(self):
+        """Remove the staging directory"""
         if self._staging_dir and self._staging_dir.exists():
-            shutil.rmtree(self._staging_dir)
+            shutil.rmtree(self._staging_dir, ignore_errors=True)
 
-    def download_existing_database(self):
-        if not self._staging_dir: return
-        pattern = f"{self.repo_name}.db*"
-        self.rsync_client.mirror_remote(pattern, self._staging_dir)
-        # Also .files
-        self.rsync_client.mirror_remote(f"{self.repo_name}.files*", self._staging_dir)
+    def download_existing_database(self) -> bool:
+        """Download existing database files from VPS to staging"""
+        if not self._staging_dir:
+            return False
+            
+        self.logger.info("📥 Downloading existing database...")
+        # Download db, db.sig, files, files.sig
+        patterns = [
+            f"{self.repo_name}.db*",
+            f"{self.repo_name}.files*"
+        ]
+        
+        success = True
+        for pattern in patterns:
+            if not self.rsync_client.mirror_remote(pattern, self._staging_dir):
+                self.logger.warning(f"⚠️ Could not download {pattern} (might not exist yet)")
+                # Not necessarily a failure if it's a new repo
+        
+        return success
 
     def update_database_additive(self) -> bool:
-        # Assumes packages are already in staging
-        if not self._staging_dir: return False
+        """
+        Update the database with packages in the staging directory.
+        Enforces GPG signing if configured.
+        """
+        if not self._staging_dir:
+            self.logger.error("❌ No staging directory active")
+            return False
         
         cwd = os.getcwd()
         os.chdir(self._staging_dir)
+        
         try:
-            db_file = f"{self.repo_name}.db.tar.gz"
+            # Identify new packages
             pkgs = glob.glob("*.pkg.tar.zst")
-            if not pkgs: return True
+            if not pkgs:
+                self.logger.info("ℹ️ No packages to add to database")
+                return True
             
-            cmd = f"repo-add {db_file} {' '.join(pkgs)}"
-            os.system(cmd) # Simplified for brevity, normally shell_executor
+            db_file = f"{self.repo_name}.db.tar.gz"
+            
+            # Construct repo-add command
+            # --remove: remove old entries for the same package
+            # --sign: sign the database
+            # --key: specify the key
+            cmd = ["repo-add", "--remove"]
+            
+            if self.gpg_enabled:
+                self.logger.info(f"🔐 Signing database with key {self.gpg_key_id}")
+                cmd.extend(["--sign", "--key", self.gpg_key_id])
+            
+            cmd.append(db_file)
+            cmd.extend(pkgs)
+            
+            self.logger.info(f"RUNNING: {' '.join(cmd)}")
+            
+            # Run repo-add
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode != 0:
+                self.logger.error("❌ repo-add failed!")
+                self.logger.error(f"STDOUT: {result.stdout}")
+                self.logger.error(f"STDERR: {result.stderr}")
+                return False
+            
+            # Verify database files exist
+            if not Path(db_file).exists():
+                self.logger.error("❌ Database file was not created")
+                return False
+                
+            # Verify signatures if enabled
+            if self.gpg_enabled:
+                sig_file = Path(f"{db_file}.sig")
+                if not sig_file.exists():
+                    self.logger.error("❌ Database signature (.sig) missing!")
+                    return False
+                self.logger.info("✅ Database signature verified")
+
+            self.logger.info("✅ Database updated successfully")
             return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Database update exception: {e}")
+            return False
         finally:
             os.chdir(cwd)
 
     def upload_updated_files(self) -> bool:
-        if not self._staging_dir: return False
+        """Upload all files from staging to VPS"""
+        if not self._staging_dir:
+            return False
+            
         files = glob.glob(str(self._staging_dir / "*"))
+        if not files:
+            return True
+            
+        self.logger.info(f"📤 Uploading {len(files)} files to remote...")
         return self.rsync_client.upload(files)
