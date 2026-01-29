@@ -66,6 +66,15 @@ class PackageBuilder:
         self.artifact_manager = ArtifactManager(self.config, self.logger)
         self.recovery_manager = RecoveryManager(self.config, self.ssh_client, self.logger)
         
+        # 5. Build Tracker
+        tracker_dir = self.repo_root / self.config.get('build_tracking_dir', '.build_tracking')
+        self.build_tracker = BuildTracker(
+            tracker_dir,
+            self.version_tracker,
+            self.version_manager,
+            self.logger
+        )
+        
         # Pass GPG Handler to Database Manager
         self.database_manager = DatabaseManager(
             self.config, self.ssh_client, self.rsync_client, self.gpg_handler, self.logger
@@ -74,7 +83,6 @@ class PackageBuilder:
             self.config, self.version_tracker, self.ssh_client, self.rsync_client, self.logger
         )
         
-        self.build_tracker = None
         self.local_packages: List[str] = []
         self.aur_packages: List[str] = []
         self._staging_dir = None
@@ -138,9 +146,7 @@ class PackageBuilder:
             if filename.startswith(f"{pkg_name}-"):
                 parts = filename.split('-')
                 # pkgname-ver-rel-arch.pkg...
-                # Iterate backwards to find split points
                 if len(parts) >= 4:
-                    # Quick extraction: name-ver-rel-arch
                     try:
                         arch = parts[-1].split('.')[0]
                         rel = parts[-2]
@@ -171,8 +177,6 @@ class PackageBuilder:
 
             # 1. UPSTREAM: Calculate dynamic version (Local Source)
             upstream_ver = self.version_manager.get_local_git_version(pkg_dir)
-            
-            # Fallback to static PKGBUILD version if dynamic failed
             if not upstream_ver:
                 v, r, e = self.version_manager.extract_from_pkgbuild(pkg_dir)
                 if v and r:
@@ -183,18 +187,29 @@ class PackageBuilder:
             
             self.logger.info(f"🧐 CHECK {pkg}: Upstream='{upstream_ver}' | Remote='{remote_ver or 'None'}'")
             
-            # 3. COMPARE: Upstream vs Remote
+            # 3. COMPARE & TRACK
             needs_build = False
+            
+            # Also check BuildTracker to determine if local files changed even if remote is same
+            tracker_says_build, tracking_data = self.build_tracker.should_build(pkg, pkg_dir)
+            
             if not remote_ver:
                 needs_build = True
                 self.logger.info(f"🆕 Package {pkg} is new")
             elif upstream_ver and self.version_manager.compare_versions(upstream_ver, remote_ver) > 0:
                 self.logger.info(f"⬆️ Upgrade available: {upstream_ver} > {remote_ver}")
                 needs_build = True
+            elif tracker_says_build:
+                self.logger.info(f"📝 Local changes detected by tracker for {pkg}")
+                needs_build = True
             
             if needs_build:
                 if self._attempt_build_with_fallback(local_builder, pkg, pkg_dir):
                     self._has_changes = True
+                    # PERSIST TRACKING DATA ON SUCCESS
+                    # Re-calculate tracking data to ensure it matches built artifact
+                    _, new_data = self.build_tracker.should_build(pkg, pkg_dir)
+                    self.build_tracker.save_tracking(pkg, new_data)
             else:
                 self.logger.info(f"✅ {pkg} is up-to-date")
 
@@ -207,15 +222,11 @@ class PackageBuilder:
         )
         
         for pkg in self.aur_packages:
-            # 1. REMOTE
             remote_ver = self._get_remote_version_raw(pkg)
-            
-            # 2. UPSTREAM (AUR RPC)
             upstream_ver = self.version_manager.check_upstream_version(pkg)
             
             self.logger.info(f"🧐 CHECK AUR {pkg}: Upstream='{upstream_ver}' | Remote='{remote_ver or 'None'}'")
             
-            # 3. COMPARE
             needs_build = False
             if not remote_ver:
                 needs_build = True
@@ -225,7 +236,6 @@ class PackageBuilder:
                 needs_build = True
             
             if needs_build:
-                # For AUR, pkg_dir is managed by builder, pass None
                 if self._attempt_build_with_fallback(aur_builder, pkg, None):
                     self._has_changes = True
 
@@ -245,7 +255,7 @@ class PackageBuilder:
         # Determine directory for parsing SRCINFO
         target_dir = pkg_dir
         if not target_dir:
-            # Assume AUR build dir
+            # Assume AUR build dir if local pkg_dir is None
             target_dir = self.config.get('aur_build_dir') / pkg_name
         
         if target_dir and target_dir.exists():
@@ -256,8 +266,8 @@ class PackageBuilder:
             if deps:
                 self.logger.info(f"📦 Installing dependencies via Yay: {', '.join(deps)}")
                 try:
-                    # Sync DB and install deps
-                    cmd = f"yay -Sy --noconfirm --needed {' '.join(deps)}"
+                    # FIX: Use absolute path and list format for safety
+                    cmd = ["/usr/bin/yay", "-Sy", "--noconfirm", "--needed"] + deps
                     self.shell_executor.run(cmd, check=False)
                     
                     self.logger.info("🔄 Retrying build after dependency installation...")
@@ -291,7 +301,7 @@ class PackageBuilder:
         if missing:
             self.recovery_manager.download_missing(missing, self._staging_dir)
         
-        # Update DB (DatabaseManager now handles GNUPGHOME internally)
+        # Update DB
         if not self.database_manager.update_database_additive():
             self.logger.error("Failed to update database")
             return False

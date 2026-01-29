@@ -62,7 +62,7 @@ class DatabaseManager:
     def update_database_additive(self) -> bool:
         """
         Update the database with packages in the staging directory.
-        CRITICAL: Enforces GPG signing with explicit GNUPGHOME isolation.
+        CRITICAL: Validates file existence before repo-add and enforces GPG.
         """
         if not self._staging_dir:
             self.logger.error("❌ No staging directory active")
@@ -73,9 +73,19 @@ class DatabaseManager:
         
         try:
             # Identify new packages
-            pkgs = glob.glob("*.pkg.tar.zst")
+            raw_pkgs = glob.glob("*.pkg.tar.zst")
+            
+            # STRICT VALIDATION: Filter out missing or ghost files
+            pkgs = []
+            for p in raw_pkgs:
+                p_path = Path(p)
+                if p_path.exists() and p_path.is_file():
+                    pkgs.append(p)
+                else:
+                    self.logger.critical(f"⚠️ CRITICAL: Skipping non-existent file detected by glob: {p}")
+
             if not pkgs:
-                self.logger.info("ℹ️ No packages to add to database")
+                self.logger.info("ℹ️ No valid packages to add to database")
                 if (self._staging_dir / f"{self.repo_name}.db.tar.gz").exists():
                     return True
                 return True
