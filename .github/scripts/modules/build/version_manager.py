@@ -1,13 +1,16 @@
 """
 Version management for package building
-Handles version extraction, comparison, and PKGBUILD updates
+Handles version extraction, comparison, PKGBUILD updates, and Upstream Checks.
 """
 
 import re
+import os
 import subprocess
 import logging
+import requests
+import json
 from pathlib import Path
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, Dict
 
 class VersionManager:
     """Manages package version extraction, comparison, and parsing"""
@@ -26,12 +29,6 @@ class VersionManager:
     def extract_from_pkgbuild(self, pkg_dir: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Extract version information from PKGBUILD using makepkg --printsrcinfo
-        
-        Args:
-            pkg_dir: Package directory
-            
-        Returns:
-            Tuple (pkgver, pkgrel, epoch)
         """
         try:
             result = subprocess.run(
@@ -56,12 +53,6 @@ class VersionManager:
     def extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
         """
         Extract version from .SRCINFO file or generate it
-        
-        Args:
-            pkg_dir: Package directory
-            
-        Returns:
-            Tuple (pkgver, pkgrel, epoch)
         """
         srcinfo_path = pkg_dir / ".SRCINFO"
         
@@ -72,7 +63,6 @@ class VersionManager:
             except Exception:
                 pass
         
-        # Fallback to generation
         pkgver, pkgrel, epoch = self.extract_from_pkgbuild(pkg_dir)
         if pkgver and pkgrel:
             return pkgver, pkgrel, epoch
@@ -101,17 +91,9 @@ class VersionManager:
         
         return pkgver, pkgrel, epoch
 
-    def update_pkgbuild_version(self, pkg_dir: Path, new_pkgver: str, new_pkgrel: str) -> bool:
+    def update_pkgbuild_version(self, pkg_dir: Path, new_pkgver: str, new_pkgrel: str = "1") -> bool:
         """
-        Update pkgver and pkgrel in PKGBUILD file using regex
-        
-        Args:
-            pkg_dir: Package directory
-            new_pkgver: New pkgver
-            new_pkgrel: New pkgrel
-            
-        Returns:
-            True if successful
+        Update pkgver and pkgrel in PKGBUILD file using regex and update checksums
         """
         pkgbuild_path = pkg_dir / "PKGBUILD"
         if not pkgbuild_path.exists():
@@ -121,13 +103,32 @@ class VersionManager:
             with open(pkgbuild_path, 'r') as f:
                 content = f.read()
             
+            # Update pkgver
             content = re.sub(r'(pkgver\s*=\s*)[^\s#\n]+', f'\\g<1>{new_pkgver}', content)
+            # Reset pkgrel to 1 or specified value
             content = re.sub(r'(pkgrel\s*=\s*)[^\s#\n]+', f'\\g<1>{new_pkgrel}', content)
             
             with open(pkgbuild_path, 'w') as f:
                 f.write(content)
                 
-            self.logger.info(f"Updated PKGBUILD: {new_pkgver}-{new_pkgrel}")
+            self.logger.info(f"✅ Updated PKGBUILD to version {new_pkgver}-{new_pkgrel}")
+            
+            # Update checksums
+            self.logger.info("🔄 Updating checksums...")
+            try:
+                upd_res = self.shell_executor.run(
+                    ["updpkgsums"], 
+                    cwd=pkg_dir, 
+                    check=False,
+                    log_cmd=False
+                )
+                if upd_res.returncode == 0:
+                    self.logger.info("✅ Checksums updated")
+                else:
+                    self.logger.warning("⚠️ updpkgsums failed, build might fail on validity check")
+            except Exception:
+                self.logger.warning("⚠️ updpkgsums not available or failed")
+                
             return True
             
         except Exception as e:
@@ -140,24 +141,63 @@ class VersionManager:
             return f"{epoch}:{pkgver}-{pkgrel}"
         return f"{pkgver}-{pkgrel}"
 
-    def compare_versions(self, remote_version: Optional[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+    def check_upstream_version(self, pkg_name: str, current_version: str) -> Tuple[bool, Optional[str]]:
         """
-        Compare versions. Returns True if local is newer (needs build).
-        """
-        if not remote_version:
-            return True
-            
-        current = self.get_full_version_string(pkgver, pkgrel, epoch)
+        Check if upstream (AUR) has a newer version.
         
+        Args:
+            pkg_name: Package name
+            current_version: Current known version (local or remote)
+            
+        Returns:
+            Tuple (has_update, new_version)
+        """
+        try:
+            # RPC call to AUR
+            url = f"https://aur.archlinux.org/rpc/?v=5&type=info&arg[]={pkg_name}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['resultcount'] > 0:
+                    result = data['results'][0]
+                    aur_version = result['Version']
+                    
+                    # Compare
+                    if aur_version != current_version:
+                        # Use vercmp to be sure it's newer
+                        cmp_res = self.shell_executor.run(
+                            ['vercmp', aur_version, current_version],
+                            capture=True, check=False, log_cmd=False
+                        )
+                        if cmp_res.returncode == 0 and int(cmp_res.stdout.strip()) > 0:
+                            self.logger.info(f"🆕 Upstream update found: {aur_version} > {current_version}")
+                            return True, aur_version
+                        else:
+                            self.logger.info(f"ℹ️ Upstream ({aur_version}) is not newer than {current_version}")
+                            return False, aur_version
+            
+            return False, None
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ Failed to check upstream for {pkg_name}: {e}")
+            return False, None
+
+    def get_git_latest_tag(self, repo_url: str) -> Optional[str]:
+        """Get latest tag from a git repo (for VCS packages if needed)"""
         try:
             res = self.shell_executor.run(
-                ['vercmp', current, remote_version],
-                capture=True, check=False, log_cmd=False
+                ["git", "ls-remote", "--tags", "--refs", "--sort=-v:refname", repo_url],
+                capture=True, check=False
             )
-            if res.returncode == 0:
-                # 1 if current > remote
-                return int(res.stdout.strip()) > 0
+            if res.returncode == 0 and res.stdout:
+                # Get first tag line
+                lines = res.stdout.strip().splitlines()
+                if lines:
+                    # format: hash refs/tags/v1.0.0
+                    tag_ref = lines[0].split('\t')[-1]
+                    tag = tag_ref.replace('refs/tags/', '')
+                    return tag
+            return None
         except Exception:
-            pass
-            
-        return current != remote_version
+            return None

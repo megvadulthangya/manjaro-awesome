@@ -8,10 +8,11 @@ import glob
 import subprocess
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from modules.vps.ssh_client import SSHClient
 from modules.vps.rsync_client import RsyncClient
+from modules.gpg.gpg_handler import GPGHandler
 
 class DatabaseManager:
     """Manages the Pacman repository database"""
@@ -62,7 +63,7 @@ class DatabaseManager:
     def update_database_additive(self) -> bool:
         """
         Update the database with packages in the staging directory.
-        CRITICAL: Enforces GPG signing if configured to prevent signature deadlock.
+        Enforces GPG signing if configured.
         """
         if not self._staging_dir:
             self.logger.error("❌ No staging directory active")
@@ -76,10 +77,12 @@ class DatabaseManager:
             pkgs = glob.glob("*.pkg.tar.zst")
             if not pkgs:
                 self.logger.info("ℹ️ No packages to add to database")
-                # Even if no packages, we might want to re-sign if signature was broken
-                # But typically we need at least one operation.
-                # If we downloaded DB, we can just return True.
-                return True
+                # Ensure we at least have valid DB files even if empty
+                if not (self._staging_dir / f"{self.repo_name}.db.tar.gz").exists():
+                     self.logger.info("⚠️ No DB file found, creating empty DB")
+                     # Proceed to run repo-add with no packages to init DB
+                else:
+                    return True
             
             db_file = f"{self.repo_name}.db.tar.gz"
             
@@ -104,7 +107,6 @@ class DatabaseManager:
             self.logger.info(f"RUNNING: {' '.join(cmd)}")
             
             # Run repo-add
-            # We capture output to debug if it fails
             result = subprocess.run(
                 cmd,
                 capture_output=True,

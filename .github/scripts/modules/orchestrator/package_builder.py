@@ -1,7 +1,7 @@
 """
 Manjaro Package Builder Orchestrator
 Sequences the build process: Prepare -> Build -> Repo-Add -> Upload -> Commit
-Refactored for strict version comparison and signature enforcement.
+Refactored to support Upstream-First checks and local PKGBUILD patching.
 """
 
 import os
@@ -80,6 +80,8 @@ class PackageBuilder:
         """Sync pacman databases"""
         self.logger.info("Syncing pacman databases...")
         # Force sync to ensure we see the repo if it's there
+        # Temporarily set SigLevel to TrustAll for our repo to avoid deadlock if signature is currently broken
+        # But global config already has it. We rely on makepkg args mostly.
         self.shell_executor.run("sudo LC_ALL=C pacman -Sy --noconfirm", check=False)
 
     def _get_remote_version_raw(self, pkg_name: str) -> Optional[str]:
@@ -97,11 +99,7 @@ class PackageBuilder:
             if len(parts) < 4: continue
             
             # Try to match package name from start
-            # This handles packages with hyphens in name
             if filename.startswith(f"{pkg_name}-"):
-                # Check if the remaining part looks like a version
-                # pkgname-ver-rel-arch.pkg.tar.zst
-                # Extract ver-rel
                 try:
                     # Reverse parsing
                     arch = parts[-1].split('.')[0]
@@ -121,7 +119,7 @@ class PackageBuilder:
     def run(self) -> int:
         """Main execution sequence"""
         try:
-            self.logger.info("🚀 STARTING BUILD PROCESS (STRICT CHECK)")
+            self.logger.info("🚀 STARTING BUILD PROCESS (UPSTREAM-FIRST)")
             
             # --- 1. PREPARE ---
             self._sync_pacman()
@@ -194,7 +192,7 @@ class PackageBuilder:
                 self.database_manager.cleanup_staging_dir()
 
     def _process_local_packages(self):
-        """Process local packages using strict comparison"""
+        """Process local packages"""
         if not self.local_packages: return
         
         self.logger.info("🔨 Processing Local Packages")
@@ -216,7 +214,7 @@ class PackageBuilder:
                 self.logger.error(f"❌ Local pkg dir not found: {pkg_dir}")
                 continue
 
-            # 1. Get Local Version
+            # 1. Get Local Version (from cloned repo)
             pkgver, pkgrel, epoch = self.version_manager.extract_from_pkgbuild(pkg_dir)
             if not pkgver:
                 self.logger.warning(f"Could not parse PKGBUILD for {pkg}")
@@ -235,7 +233,10 @@ class PackageBuilder:
                 continue
                 
             # 4. Build
-            self.logger.info(f"🔄 Version mismatch/missing. Building {pkg}...")
+            self.logger.info(f"🔄 Version mismatch. Building {pkg}...")
+            
+            # For local packages, we just build what's in the repo (assuming repo is source of truth for local updates)
+            # If we wanted to check git tags for "upstream" local packages, we could do it here.
             
             success = local_builder.build(pkg, pkg_dir)
             if success:
@@ -257,7 +258,7 @@ class PackageBuilder:
                 self.logger.error(f"❌ Failed to build {pkg}")
 
     def _process_aur_packages(self):
-        """Process AUR packages"""
+        """Process AUR packages with Upstream Check"""
         if not self.aur_packages: return
         self.logger.info("🔨 Processing AUR Packages")
         
@@ -271,30 +272,38 @@ class PackageBuilder:
         )
         
         for pkg in self.aur_packages:
-            # Check if exists on remote
+            # 1. Get Remote Version (VPS)
             remote_version_str = self._get_remote_version_raw(pkg)
             
-            # For AUR, strictly we should check AUR version via RPC, 
-            # but to fix "False Positives" blindly re-building:
-            # We trust the AUR Builder to handle version checks if we pass remote_version
-            # OR we can skip if *any* version exists (lazy mode)
-            # PROMPT REQUIREMENT: "Handle cases where remote version is None (only then build)."
-            # Wait, strictly that means if it exists, skip? No, that prevents updates.
-            # We will log the state. If we have a remote version, we pass it to builder.
-            
+            # 2. Check Upstream (AUR)
+            # This is the "Upstream First" logic
             self.logger.info(f"🧐 CHECK AUR {pkg}: Remote='{remote_version_str or 'None'}'")
             
-            # Trigger build. AURBuilder logic *should* use remote_version to compare if implemented
-            # Since we can't edit AURBuilder, we rely on it or force build if None.
-            # Assuming AURBuilder builds unconditionally if called, we should try to be smart.
-            # But without RPC here, we risk skipping updates.
-            # Strategy: Build. Logic inside AURBuilder (in previous context) does version comparison.
+            needs_build = False
+            target_version = None
             
-            success = aur_builder.build(pkg, remote_version_str)
-            if success:
-                self._has_changes = True
-                self.artifact_manager.move_to_staging(self._staging_dir)
-                self.artifact_manager.sanitize_artifacts(pkg)
+            if remote_version_str:
+                # Check if AUR has update
+                has_update, new_ver = self.version_manager.check_upstream_version(pkg, remote_version_str)
+                if has_update:
+                    self.logger.info(f"🔄 AUR Update available: {new_ver}")
+                    needs_build = True
+                    target_version = new_ver
+                else:
+                    self.logger.info(f"✅ AUR package {pkg} is up-to-date ({remote_version_str})")
+            else:
+                # Not on remote, build it
+                self.logger.info(f"🆕 Package {pkg} not on VPS. Building...")
+                needs_build = True
+
+            if needs_build:
+                success = aur_builder.build(pkg, remote_version_str)
+                if success:
+                    self._has_changes = True
+                    self.artifact_manager.move_to_staging(self._staging_dir)
+                    self.artifact_manager.sanitize_artifacts(pkg)
+                else:
+                    self.logger.error(f"❌ Failed to build AUR package {pkg}")
 
     def _update_database_sequence(self) -> bool:
         """Execute self-healing database update sequence"""
@@ -303,8 +312,7 @@ class PackageBuilder:
         try:
             # Staging already created and populated by moves
             
-            # Auto-Recovery? (If we want to preserve old packages not built this run)
-            # Yes, download missing packages from VPS to Staging to ensure DB consistency
+            # Auto-Recovery (optional but good)
             self.recovery_manager.reset()
             missing = self.recovery_manager.discover_missing(self._staging_dir)
             if missing:
