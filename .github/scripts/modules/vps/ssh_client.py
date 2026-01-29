@@ -4,6 +4,7 @@ SSH Client Module
 import logging
 import shutil
 import time
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from modules.common.shell_executor import ShellExecutor
@@ -28,7 +29,7 @@ class SSHClient:
         Setup SSH config for builder user.
         If ssh_key is empty/None, assumes the environment is already configured (e.g., SSH Agent).
         """
-        # FIX: Do not overwrite config if no key provided. Trust the shell environment.
+        # Do not overwrite config if no key provided. Trust the shell environment.
         if not ssh_key or not ssh_key.strip():
             self.logger.info("No VPS_SSH_KEY provided. Assuming system SSH agent/config is active.")
             return True
@@ -58,33 +59,35 @@ class SSHClient:
             return False
 
     def test_connection(self) -> bool:
-        # FIX: Use BatchMode and ConnectTimeout to fail fast if config is wrong
-        cmd = f"ssh -o BatchMode=yes -o ConnectTimeout=10 -q {self.vps_host} exit"
+        # FIX: Explicitly disable HostKeyChecking and use BatchMode to prevent prompts
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -q {self.vps_host} exit"
         try:
-            # We explicitly allow shell=True here to utilize the system's SSH config resolution
-            res = self.shell_executor.run(cmd, shell=True, check=False)
+            # Inherit environment variables to pass SSH_AUTH_SOCK and others
+            res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
             if res.returncode == 0:
                 self.logger.info("✅ SSH connection established")
                 return True
             else:
                 self.logger.error(f"❌ SSH connection failed (Exit Code: {res.returncode})")
+                if res.stderr:
+                    self.logger.error(f"SSH Error Output: {res.stderr}")
                 return False
         except Exception as e:
             self.logger.error(f"SSH test exception: {e}")
             return False
 
     def ensure_directory(self) -> bool:
-        cmd = f"ssh -o BatchMode=yes {self.vps_host} 'mkdir -p {self.remote_dir}'"
-        res = self.shell_executor.run(cmd, shell=True, check=False)
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'mkdir -p {self.remote_dir}'"
+        res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
         return res.returncode == 0
 
     def get_cached_inventory(self, force_refresh: bool = False) -> Dict[str, str]:
         if self._inventory_cache is not None and not force_refresh:
             return self._inventory_cache
             
-        cmd = f"ssh -o BatchMode=yes {self.vps_host} 'ls -1 {self.remote_dir}'"
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'ls -1 {self.remote_dir}'"
         try:
-            res = self.shell_executor.run(cmd, shell=True, capture=True, check=False)
+            res = self.shell_executor.run(cmd, shell=True, capture=True, check=False, extra_env=os.environ.copy())
             files = {}
             if res.returncode == 0 and res.stdout:
                 for line in res.stdout.splitlines():
@@ -101,6 +104,6 @@ class SSHClient:
         if not paths: return True
         # Join paths into a space separated string, quoted
         quoted = [f"'{p}'" for p in paths]
-        cmd = f"ssh -o BatchMode=yes {self.vps_host} 'rm -f {' '.join(quoted)}'"
-        res = self.shell_executor.run(cmd, shell=True, check=False)
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_host} 'rm -f {' '.join(quoted)}'"
+        res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
         return res.returncode == 0

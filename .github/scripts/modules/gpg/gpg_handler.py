@@ -118,7 +118,8 @@ class GPGHandler:
         """Helper to add key to pacman keyring"""
         try:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.asc', delete=False) as pub_key_file:
-                # FIX: Removed capture_output=True because stdout is redirected to file
+                # FIX: Removed stdout=pub_key_file argument when capture_output=True is not used
+                # We direct stdout to the file object
                 subprocess.run(
                     ['gpg', '--armor', '--export', fingerprint],
                     text=True,
