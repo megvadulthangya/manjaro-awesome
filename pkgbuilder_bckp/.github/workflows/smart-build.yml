@@ -1,0 +1,102 @@
+name: Manjaro Repo Smart Builder
+
+on:
+  workflow_dispatch:
+  #schedule:
+   # - cron: '0 4 * * *'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prepare Environment (Install Build Essentials)
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          
+          # Telepítjük a csomagokat - EXTRA CSOMAGOK HOZZÁADVA
+          pacman -Syu --noconfirm --needed \
+            git rsync openssh base-devel jq \
+            appstream appstream-glib \
+            rust cargo \
+            meson ninja cmake \
+            python \
+            gtk3 gtk4 \
+            imagemagick \
+            po4a \
+            bc \
+            fontconfig \
+            libxml2 \
+            clang llvm lld \
+            curl wget ca-certificates \
+            gtk-doc docbook-xsl libxslt \
+            atk cairo pango gdk-pixbuf2 libxcursor libxinerama libxrandr \
+            libxi libxcomposite libxdamage libxkbcommon wayland \
+            python-docutils python-mako python-markdown \
+            gobject-introspection  # ⬅️ Ezek a gtk2 build-hez kellenek
+          
+          # Debug kikapcsolása és tömörítés javítása
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+
+          # Builder user létrehozása
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Rendszerszintű Git feloldás
+          git config --system --add safe.directory '*'
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
+          # Jogosultságok
+          chown -R builder:builder .
+
+      - name: Hálózati diagnosztika
+        run: |
+          echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
+          echo "1. Letöltő eszközök:"
+          command -v curl && curl --version | head -1
+          command -v wget && wget --version | head -1
+          echo ""
+          echo "2. GitHub elérhetőség teszt:"
+          timeout 10 curl -I https://github.com || echo "curl timeout"
+          echo ""
+          echo "3. GNOME repo elérhetőség:"
+          timeout 10 curl -I "https://github.com/GNOME/gtk/archive/refs/tags/2.24.33.tar.gz" || echo "curl timeout"
+          echo ""
+          echo "4. AUR elérhetőség teszt:"
+          timeout 10 curl -I "https://aur.archlinux.org" || echo "curl timeout"
+          echo "=== DIAGNOSZTIKA VÉGE ==="
+
+      - name: Setup SSH for Builder
+        run: |
+          mkdir -p /home/builder/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
+          chmod 600 /home/builder/.ssh/id_ed25519
+          
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts
+          
+          chown -R builder:builder /home/builder/.ssh
+
+      - name: Debug Directory Structure
+        run: |
+          echo "=== MAPPASZERKEZET ==="
+          ls -la
+          echo "=== PKGBUILD KERESÉS ==="
+          find . -name "PKGBUILD" -type f | head -10
+
+      - name: Run Smart Build Script
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          # Hozzáadjuk a GitHub PAT-ot (opcionális, de javítja a rate limit-et)
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          chmod +x ./ci-smart-build.sh
+          su builder -c ./ci-smart-build.sh

@@ -1,0 +1,107 @@
+name: Manjaro Repo Smart Builder 2
+
+on:
+  workflow_dispatch:
+#  schedule:
+#    - cron: '0 4 * * *'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prepare Environment (Intelligens alapcsomagok)
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          
+          # ALAPVETŐ csomagok (mindig kellenek)
+          pacman -Syu --noconfirm --needed \
+            git rsync openssh base-devel jq sudo \
+            curl wget ca-certificates \
+            appstream appstream-glib \
+            meson ninja cmake \
+            python python-pip \
+            gtk-doc docbook-xsl libxslt \
+            gobject-introspection \
+            autoconf automake libtool pkg-config \
+            patch make gcc binutils \
+            file which tar gzip bzip2 xz zstd \
+            unzip p7zip gnupg \
+            dbus polkit \
+            systemd systemd-sysvcompat \
+            pacman-contrib arch-install-scripts \
+            shellcheck  # Shell script ellenőrzés
+            
+          # Builder user létrehozása
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Rendszerszintű Git feloldás
+          git config --system --add safe.directory '*'
+          export GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+          
+          # Jogosultságok
+          chown -R builder:builder .
+
+          # Debug kikapcsolása és tömörítés javítása
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          
+          # Shell script syntax check a biztonság kedvéért
+          echo "=== SHELL SCRIPT SYNTAX CHECK ==="
+          if command -v shellcheck > /dev/null 2>&1; then
+            find . -name "*.sh" -type f -exec shellcheck {} \; || true
+          fi
+
+      - name: Hálózati diagnosztika
+        run: |
+          echo "=== HÁLÓZATI DIAGNOSZTIKA ==="
+          echo "1. Letöltő eszközök:"
+          curl -s https://ipinfo.io/json | grep -E '"country"|"region"|"city"'
+          command -v curl && curl --version | head -1
+          command -v wget && wget --version | head -1
+          echo ""
+          echo "2. GitHub elérhetőség teszt:"
+          timeout 10 curl -I https://github.com || echo "curl timeout"
+          echo ""
+          echo "3. GNOME repo elérhetőség:"
+          timeout 10 curl -I "https://github.com/GNOME/gtk/archive/refs/tags/2.24.33.tar.gz" || echo "curl timeout"
+          echo ""
+          echo "4. AUR elérhetőség teszt:"
+          timeout 10 curl -I "https://aur.archlinux.org" || echo "curl timeout"
+          echo "=== DIAGNOSZTIKA VÉGE ==="
+
+
+
+      - name: Setup SSH for Builder
+        run: |
+          mkdir -p /home/builder/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | base64 -d > /home/builder/.ssh/id_ed25519
+          chmod 600 /home/builder/.ssh/id_ed25519
+          
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> /home/builder/.ssh/known_hosts
+          ssh-keyscan -H github.com >> /home/builder/.ssh/known_hosts
+          
+          chown -R builder:builder /home/builder/.ssh
+
+      - name: Run Intelligent Build Script
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          # Opcionális: GitHub PAT jobb rate limit-hez
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          chmod +x ./ci-intelligent-build.sh
+          
+          # Syntax check először
+          echo "=== SYNTAX CHECK ==="
+          bash -n ./ci-intelligent-build.sh && echo "✓ Syntax OK" || echo "✗ Syntax error"
+          
+          # Futtatás
+          su builder -c ./ci-intelligent-build.sh
