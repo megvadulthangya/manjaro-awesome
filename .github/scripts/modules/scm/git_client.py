@@ -46,6 +46,16 @@ class GitClient:
         """
         pass
 
+    def _get_git_env(self) -> Dict[str, str]:
+        """
+        Prepare environment variables for Git commands.
+        Injects GIT_SSH_COMMAND to disable strict host checking.
+        """
+        env = os.environ.copy()
+        # Force SSH to disable strict host key checking for git operations
+        env['GIT_SSH_COMMAND'] = "ssh -o StrictHostKeyChecking=no -o BatchMode=yes"
+        return env
+
     def clone_repo(self) -> bool:
         """
         Clone the repository using system authentication
@@ -79,10 +89,10 @@ class GitClient:
                 str(self.clone_dir)
             ]
             
-            # Run git clone inheriting os.environ
+            # Run git clone inheriting os.environ and setting GIT_SSH_COMMAND
             result = subprocess.run(
                 clone_cmd,
-                env=os.environ.copy(),
+                env=self._get_git_env(),
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -159,11 +169,14 @@ class GitClient:
         old_cwd = os.getcwd()
         os.chdir(self.clone_dir)
         
+        # Prepare environment with SSH config
+        git_env = self._get_git_env()
+        
         try:
             # Check if there are any changes
             status_result = subprocess.run(
                 ['git', 'status', '--porcelain'],
-                env=os.environ.copy(),
+                env=git_env,
                 capture_output=True,
                 text=True,
                 check=False
@@ -185,7 +198,7 @@ class GitClient:
             self.logger.info("➕ Adding changes...")
             add_result = subprocess.run(
                 ['git', 'add', '.'],
-                env=os.environ.copy(),
+                env=git_env,
                 capture_output=True,
                 text=True,
                 check=False
@@ -201,7 +214,7 @@ class GitClient:
             
             commit_result = subprocess.run(
                 ['git', 'commit', '-m', commit_message],
-                env=os.environ.copy(),
+                env=git_env,
                 capture_output=True,
                 text=True,
                 check=False
@@ -218,7 +231,7 @@ class GitClient:
             self.logger.info("📤 Pushing to remote...")
             push_result = subprocess.run(
                 ['git', 'push', 'origin', 'main'],
-                env=os.environ.copy(),
+                env=git_env,
                 capture_output=True,
                 text=True,
                 check=False,
