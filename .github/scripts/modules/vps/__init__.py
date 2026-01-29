@@ -1,5 +1,7 @@
 """
-VPS and remote operations modules
+VPS Modules
 """
+from .ssh_client import SSHClient
+from .rsync_client import RsyncClient
 
-# Placeholder for VPS modules - will be implemented in Phase 4
+__all__ = ['SSHClient', 'RsyncClient']

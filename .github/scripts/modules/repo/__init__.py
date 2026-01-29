@@ -1,5 +1,9 @@
 """
-Repository management modules
+Repository Modules
 """
+from .database_manager import DatabaseManager
+from .version_tracker import VersionTracker
+from .cleanup_manager import CleanupManager
+from .recovery_manager import RecoveryManager
 
-# Placeholder for repository modules - will be implemented in Phase 3
+__all__ = ['DatabaseManager', 'VersionTracker', 'CleanupManager', 'RecoveryManager']

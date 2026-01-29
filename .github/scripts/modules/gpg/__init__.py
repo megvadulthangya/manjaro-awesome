@@ -1,5 +1,5 @@
 """
-GPG and signing operations
+GPG Modules
 """
-
-# GPG handler already exists, will be moved in a later phase
+from .gpg_handler import GPGHandler
+__all__ = ['GPGHandler']

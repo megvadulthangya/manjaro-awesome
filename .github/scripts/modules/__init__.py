@@ -1,5 +1,3 @@
 """
-Package Builder Modules
+Package Builder Modules Package
 """
-
-# This file makes the modules directory a Python package
