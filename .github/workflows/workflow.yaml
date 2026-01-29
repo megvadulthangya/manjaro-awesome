@@ -12,47 +12,47 @@ on:
       - '**/PKGBUILD'
 
 jobs:
-  cleanup:
-    name: Cleanup Disk Space
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Disk usage BEFORE cleanup
-        run: |
-          echo "=== DF -h BEFORE ==="
-          df -h
-          echo "=== FREE -h BEFORE ==="
-          free -h
-          echo "=== LSBLK ==="
-          lsblk
-
-      - name: Free Disk Space (Comprehensive Cleanup)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-          remove-android: true
-          remove-dotnet: true
-          remove-haskell: true
-          remove-docker: true
-          force-remove-all-additional-packages: true
-
-      - name: Disk usage AFTER cleanup
-        run: |
-          echo "=== DF -h AFTER ==="
-          df -h
-          echo "=== FREE -h AFTER ==="
-          free -h
-
-
+#  cleanup:
+#    name: Cleanup Disk Space
+#    runs-on: ubuntu-latest
+#    
+#    steps:
+#      - name: Checkout Code
+#        uses: actions/checkout@v4
+#
+#      - name: Disk usage BEFORE cleanup
+#        run: |
+#          echo "=== DF -h BEFORE ==="
+#          df -h
+#          echo "=== FREE -h BEFORE ==="
+#          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
+#
+#      - name: Free Disk Space (Comprehensive Cleanup)
+#        uses: jlumbroso/free-disk-space@main
+#        with:
+#          tool-cache: true
+#          android: true
+#          dotnet: true
+#          haskell: true
+#          large-packages: true
+#          docker-images: true
+#          swap-storage: true
+#          remove-android: true
+#          remove-dotnet: true
+#          remove-haskell: true
+#          remove-docker: true
+#          force-remove-all-additional-packages: true
+#
+#      - name: Disk usage AFTER cleanup
+#        run: |
+#          echo "=== DF -h AFTER ==="
+#          df -h
+#          echo "=== FREE -h AFTER ==="
+#          free -h
+#
+#
   build-and-deploy:
     name: Build and Deploy Packages
     needs: cleanup
