@@ -93,7 +93,8 @@ class VersionManager:
 
     def update_pkgbuild_version(self, pkg_dir: Path, new_pkgver: str, new_pkgrel: str = "1") -> bool:
         """
-        Update pkgver and pkgrel in PKGBUILD file using regex and update checksums
+        Update pkgver and pkgrel in PKGBUILD file using regex and update checksums.
+        Handles both static and dynamic version updates.
         """
         pkgbuild_path = pkg_dir / "PKGBUILD"
         if not pkgbuild_path.exists():
@@ -103,10 +104,10 @@ class VersionManager:
             with open(pkgbuild_path, 'r') as f:
                 content = f.read()
             
-            # Update pkgver
-            content = re.sub(r'(pkgver\s*=\s*)[^\s#\n]+', f'\\g<1>{new_pkgver}', content)
-            # Reset pkgrel to 1 or specified value
-            content = re.sub(r'(pkgrel\s*=\s*)[^\s#\n]+', f'\\g<1>{new_pkgrel}', content)
+            # Update pkgver (handle various formats)
+            content = re.sub(r'pkgver=.*', f'pkgver={new_pkgver}', content, count=1)
+            # Reset pkgrel to specified value
+            content = re.sub(r'pkgrel=.*', f'pkgrel={new_pkgrel}', content, count=1)
             
             with open(pkgbuild_path, 'w') as f:
                 f.write(content)
@@ -116,6 +117,7 @@ class VersionManager:
             # Update checksums
             self.logger.info("🔄 Updating checksums...")
             try:
+                # Use updpkgsums if available
                 upd_res = self.shell_executor.run(
                     ["updpkgsums"], 
                     cwd=pkg_dir, 
@@ -126,6 +128,8 @@ class VersionManager:
                     self.logger.info("✅ Checksums updated")
                 else:
                     self.logger.warning("⚠️ updpkgsums failed, build might fail on validity check")
+                    # Fallback: Try makepkg -g if updpkgsums fails? 
+                    # Usually better to let build fail if checksums are wrong than bypass security blindly.
             except Exception:
                 self.logger.warning("⚠️ updpkgsums not available or failed")
                 
