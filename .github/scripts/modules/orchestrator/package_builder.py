@@ -136,7 +136,6 @@ class PackageBuilder:
             
             # --- CLEANUP ---
             self.gpg_handler.cleanup()
-            self.git_client.cleanup_ssh()
             self.build_state.mark_complete()
             
             self.logger.info("✅ BUILD COMPLETED SUCCESSFULLY")
@@ -145,7 +144,6 @@ class PackageBuilder:
         except Exception as e:
             self.logger.error(f"❌ BUILD FAILED: {e}")
             self.gpg_handler.cleanup()
-            self.git_client.cleanup_ssh()
             return 1
 
     def _process_local_packages(self):
@@ -184,12 +182,6 @@ class PackageBuilder:
                         'last_hash': tracking_data.get('last_hash'),
                         'last_version': version_str
                     })
-                    # Save tracking in temp clone dir so it gets committed
-                    # BuildTracker needs to be pointed to temp clone tracking dir
-                    # Re-instantiate BuildTracker or update path?
-                    # The tracking_dir passed to BuildTracker in __init__ was self.config['build_tracking_dir']
-                    # which is .github/scripts/.build_tracking in the repo root.
-                    # We need it to be inside the temp clone to commit it.
                     
                     # Fix: Point build tracker to clone dir for saving
                     temp_tracker_dir = self.git_client.clone_dir / ".build_tracking"
@@ -212,13 +204,7 @@ class PackageBuilder:
         self.logger.info("🔨 Processing AUR Packages")
         
         for pkg in self.aur_packages:
-            # Check server first
-            # (Simplified: AUR builder handles check internally or we do it here)
-            # Existing AURBuilder logic does checking against remote_version if passed.
-            # We don't have remote version easily available without querying.
-            # We'll rely on AURBuilder's logic or check version tracker.
-            
-            # For this refactor, we just run the builder
+            # Rely on AURBuilder and VersionTracker internally
             success = self.aur_builder.build(pkg, None)
             if success:
                 self.artifact_manager.sanitize_artifacts(pkg)

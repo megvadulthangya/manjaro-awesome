@@ -1,12 +1,11 @@
 """
 Git client for repository synchronization and operations
-Handles SSH authentication, cloning, and pushing changes
+Relies on system SSH agent/environment for authentication.
 """
 
 import os
 import shutil
 import subprocess
-import tempfile
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -15,7 +14,7 @@ from typing import Dict, Optional, Any
 from modules.common.shell_executor import ShellExecutor
 
 class GitClient:
-    """Handles Git operations with SSH authentication"""
+    """Handles Git operations relying on system authentication"""
 
     def __init__(self, config: Dict[str, Any], shell_executor: ShellExecutor, logger: Optional[logging.Logger] = None):
         """
@@ -30,110 +29,32 @@ class GitClient:
         self.shell_executor = shell_executor
         self.logger = logger or logging.getLogger(__name__)
 
-        self.ssh_key = config.get('ci_push_ssh_key', '')
         self.repo_url = config.get('ssh_repo_url', '')
         self.clone_dir = Path(config.get('sync_clone_dir', '/tmp/manjaro-awesome-gitclone'))
         self.packager_env = config.get('packager_env', 'Maintainer <no-reply@gshoots.hu>')
-        
-        # State
-        self._git_ssh_temp_key: Optional[Path] = None
-        self._git_ssh_env: Optional[Dict[str, str]] = None
-        self._is_setup = False
 
     def setup_ssh(self) -> bool:
         """
-        Setup Git SSH authentication using configured key
-        
-        Returns:
-            True if successful
+        No-op: Relies on system SSH agent and environment variables.
         """
-        if not self.ssh_key:
-            self.logger.error("❌ CI_PUSH_SSH_KEY not configured")
-            return False
-        
-        try:
-            # Create temporary directory for SSH key
-            temp_ssh_dir = Path(tempfile.mkdtemp(prefix="git_ssh_"))
-            self._git_ssh_temp_key = temp_ssh_dir / "id_ed25519"
-            
-            # Write SSH key to file
-            with open(self._git_ssh_temp_key, 'w') as f:
-                f.write(self.ssh_key)
-            
-            # Set proper permissions
-            self._git_ssh_temp_key.chmod(0o600)
-            
-            # Create known_hosts with github.com key
-            known_hosts = temp_ssh_dir / "known_hosts"
-            ssh_keyscan_cmd = [
-                "ssh-keyscan",
-                "-t", "ed25519",
-                "github.com"
-            ]
-            
-            result = subprocess.run(
-                ssh_keyscan_cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            if result.returncode == 0 and result.stdout:
-                with open(known_hosts, 'w') as f:
-                    f.write(result.stdout)
-                known_hosts.chmod(0o644)
-            else:
-                # Fallback: accept host key without verification
-                with open(known_hosts, 'w') as f:
-                    f.write("github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
-            
-            # Create Git SSH command
-            git_ssh_cmd = (
-                f"ssh -o IdentitiesOnly=yes "
-                f"-o IdentityFile={self._git_ssh_temp_key} "
-                f"-o UserKnownHostsFile={known_hosts} "
-                f"-o StrictHostKeyChecking=yes "
-                f"-o ConnectTimeout=30"
-            )
-            
-            self._git_ssh_env = os.environ.copy()
-            self._git_ssh_env['GIT_SSH_COMMAND'] = git_ssh_cmd
-            
-            self._is_setup = True
-            self.logger.info("✅ Git SSH authentication configured")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Failed to setup Git SSH: {e}")
-            self.cleanup_ssh()
-            return False
+        self.logger.info("Using system SSH agent/environment for Git authentication")
+        return True
 
     def cleanup_ssh(self):
-        """Clean up temporary Git SSH key"""
-        if self._git_ssh_temp_key and self._git_ssh_temp_key.exists():
-            try:
-                temp_dir = self._git_ssh_temp_key.parent
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                self._git_ssh_temp_key = None
-                self._git_ssh_env = None
-                self._is_setup = False
-                self.logger.debug("🧹 Cleaned up Git SSH temporary files")
-            except Exception as e:
-                self.logger.warning(f"Failed to cleanup Git SSH: {e}")
+        """
+        No-op: No temporary keys to clean up.
+        """
+        pass
 
     def clone_repo(self) -> bool:
         """
-        Clone the repository using configured SSH settings
+        Clone the repository using system authentication
         
         Returns:
             True if successful
         """
-        if not self._is_setup:
-            if not self.setup_ssh():
-                return False
-
         self.logger.info("\n" + "=" * 60)
-        self.logger.info("GIT SYNC: Setting up temporary repository clone")
+        self.logger.info("GIT SYNC: Cloning repository")
         self.logger.info("=" * 60)
         
         # Clean up existing temp clone if exists
@@ -150,7 +71,7 @@ class GitClient:
         self.logger.info(f"Clone directory: {self.clone_dir}")
         
         try:
-            # Use git command directly with SSH environment
+            # Use git command directly with system environment
             clone_cmd = [
                 'git', 'clone',
                 '--depth', '1',
@@ -158,10 +79,10 @@ class GitClient:
                 str(self.clone_dir)
             ]
             
-            # Run git clone with SSH environment
+            # Run git clone inheriting os.environ
             result = subprocess.run(
                 clone_cmd,
-                env=self._git_ssh_env,
+                env=os.environ.copy(),
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -231,10 +152,6 @@ class GitClient:
             self.logger.error("Temporary clone not set up")
             return False
         
-        if not self._git_ssh_env:
-            self.logger.error("Git SSH environment not configured")
-            return False
-        
         self.logger.info("\n" + "=" * 60)
         self.logger.info("GIT: Committing and pushing changes")
         self.logger.info("=" * 60)
@@ -246,7 +163,7 @@ class GitClient:
             # Check if there are any changes
             status_result = subprocess.run(
                 ['git', 'status', '--porcelain'],
-                env=self._git_ssh_env,
+                env=os.environ.copy(),
                 capture_output=True,
                 text=True,
                 check=False
@@ -268,7 +185,7 @@ class GitClient:
             self.logger.info("➕ Adding changes...")
             add_result = subprocess.run(
                 ['git', 'add', '.'],
-                env=self._git_ssh_env,
+                env=os.environ.copy(),
                 capture_output=True,
                 text=True,
                 check=False
@@ -284,7 +201,7 @@ class GitClient:
             
             commit_result = subprocess.run(
                 ['git', 'commit', '-m', commit_message],
-                env=self._git_ssh_env,
+                env=os.environ.copy(),
                 capture_output=True,
                 text=True,
                 check=False
@@ -301,7 +218,7 @@ class GitClient:
             self.logger.info("📤 Pushing to remote...")
             push_result = subprocess.run(
                 ['git', 'push', 'origin', 'main'],
-                env=self._git_ssh_env,
+                env=os.environ.copy(),
                 capture_output=True,
                 text=True,
                 check=False,
