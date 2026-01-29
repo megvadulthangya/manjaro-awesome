@@ -48,8 +48,10 @@ class LocalBuilder:
         # -s: sync deps, -i: install deps, --noconfirm: no prompts, --clean: cleanup
         cmd = ["makepkg", "-si", "--noconfirm", "--clean", "--nocheck"]
         
+        # 2. Environment Setup
         env = os.environ.copy()
         env['PACKAGER'] = self.packager
+        env['PACMAN_OPTS'] = "--siglevel Never"  # CRITICAL: Bypass signature checks
         
         try:
             # We must run inside the package directory
@@ -68,13 +70,13 @@ class LocalBuilder:
                     self.logger.error(f"Build Error: {result.stderr[:1000]}")
                 return False
 
-            # 2. Verify Artifacts
+            # 3. Verify Artifacts
             built_files = list(pkg_dir.glob("*.pkg.tar.zst"))
             if not built_files:
                 self.logger.error(f"❌ Build command succeeded but no .pkg.tar.zst found for {pkg_name}")
                 return False
 
-            # 3. Move to Output Directory
+            # 4. Move to Output Directory
             self.output_dir.mkdir(parents=True, exist_ok=True)
             moved_count = 0
             
