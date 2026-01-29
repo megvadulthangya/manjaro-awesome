@@ -62,7 +62,7 @@ class DatabaseManager:
     def update_database_additive(self) -> bool:
         """
         Update the database with packages in the staging directory.
-        CRITICAL: Validates file existence before repo-add and enforces GPG.
+        CRITICAL: Validates file existence to prevent repo-add failure.
         """
         if not self._staging_dir:
             self.logger.error("❌ No staging directory active")
@@ -113,8 +113,6 @@ class DatabaseManager:
                 # Use the isolated environment
                 if self.gpg_handler.gpg_env:
                     env = self.gpg_handler.gpg_env
-                    gnupg_home = env.get('GNUPGHOME')
-                    self.logger.debug(f"DEBUG: GNUPGHOME is set to: {gnupg_home}")
                     self.logger.info(f"🔐 Signing database with key {self.gpg_key_id}")
                     cmd.extend(["--sign", "--key", self.gpg_key_id])
                 else:

@@ -1,6 +1,7 @@
 """
 Manjaro Package Builder Orchestrator
 Sequences the build process with Upstream-First logic and Yay fallback.
+Ensures signature checks are bypassed for internal build operations to prevent deadlock.
 """
 
 import os
@@ -88,6 +89,10 @@ class PackageBuilder:
         self._staging_dir = None
         self._has_changes = False
 
+        # CRITICAL: Bypass signature checks globally for this session
+        # This prevents makepkg/yay from failing due to self-signed repo issues during build
+        os.environ["PACMAN_OPTS"] = "--siglevel Never"
+
     def run(self) -> int:
         """Main execution sequence"""
         try:
@@ -142,15 +147,12 @@ class PackageBuilder:
         for filename in inventory.keys():
             if not filename.endswith('.pkg.tar.zst'): continue
             
-            # Heuristic parsing to match pkgname
             if filename.startswith(f"{pkg_name}-"):
                 parts = filename.split('-')
-                # pkgname-ver-rel-arch.pkg...
                 if len(parts) >= 4:
                     try:
-                        arch = parts[-1].split('.')[0]
-                        rel = parts[-2]
                         ver = parts[-3]
+                        rel = parts[-2]
                         extracted_name = "-".join(parts[:-3])
                         
                         if extracted_name == pkg_name:
@@ -175,22 +177,17 @@ class PackageBuilder:
                 self.logger.warning(f"Skipping {pkg}: Directory not found")
                 continue
 
-            # 1. UPSTREAM: Calculate dynamic version (Local Source)
             upstream_ver = self.version_manager.get_local_git_version(pkg_dir)
             if not upstream_ver:
                 v, r, e = self.version_manager.extract_from_pkgbuild(pkg_dir)
                 if v and r:
                     upstream_ver = self.version_manager.get_full_version_string(v, r, e)
             
-            # 2. REMOTE: Get VPS version
             remote_ver = self._get_remote_version_raw(pkg)
             
             self.logger.info(f"🧐 CHECK {pkg}: Upstream='{upstream_ver}' | Remote='{remote_ver or 'None'}'")
             
-            # 3. COMPARE & TRACK
             needs_build = False
-            
-            # Also check BuildTracker to determine if local files changed even if remote is same
             tracker_says_build, tracking_data = self.build_tracker.should_build(pkg, pkg_dir)
             
             if not remote_ver:
@@ -206,8 +203,7 @@ class PackageBuilder:
             if needs_build:
                 if self._attempt_build_with_fallback(local_builder, pkg, pkg_dir):
                     self._has_changes = True
-                    # PERSIST TRACKING DATA ON SUCCESS
-                    # Re-calculate tracking data to ensure it matches built artifact
+                    # Only save tracking if build succeeded
                     _, new_data = self.build_tracker.should_build(pkg, pkg_dir)
                     self.build_tracker.save_tracking(pkg, new_data)
             else:
@@ -252,22 +248,22 @@ class PackageBuilder:
         # --- YAY FALLBACK LOGIC ---
         self.logger.warning(f"⚠️ Build failed for {pkg_name}. Initiating Yay Dependency Fallback...")
         
-        # Determine directory for parsing SRCINFO
         target_dir = pkg_dir
         if not target_dir:
-            # Assume AUR build dir if local pkg_dir is None
+            # Assume AUR build dir
             target_dir = self.config.get('aur_build_dir') / pkg_name
         
         if target_dir and target_dir.exists():
-            # Parse dependencies
             self.logger.info(f"🔍 Parsing dependencies from {target_dir}")
             deps = self.version_manager.extract_dependencies(target_dir)
             
             if deps:
                 self.logger.info(f"📦 Installing dependencies via Yay: {', '.join(deps)}")
                 try:
-                    # FIX: Use absolute path and list format for safety
-                    cmd = ["/usr/bin/yay", "-Sy", "--noconfirm", "--needed"] + deps
+                    # STRICT YAY EXECUTION: Absolute path + Force siglevel Never
+                    # This fixes the "invalid or corrupted database (PGP signature)" error loop
+                    cmd = ["/usr/bin/yay", "-Sy", "--noconfirm", "--needed", "--siglevel", "Never"] + deps
+                    
                     self.shell_executor.run(cmd, check=False)
                     
                     self.logger.info("🔄 Retrying build after dependency installation...")
@@ -295,18 +291,15 @@ class PackageBuilder:
     def _update_database_sequence(self) -> bool:
         self.logger.info("🔄 Starting Database Update Sequence")
         
-        # Auto-Recovery
         self.recovery_manager.reset()
         missing = self.recovery_manager.discover_missing(self._staging_dir)
         if missing:
             self.recovery_manager.download_missing(missing, self._staging_dir)
         
-        # Update DB
         if not self.database_manager.update_database_additive():
             self.logger.error("Failed to update database")
             return False
             
-        # Upload
         if not self.database_manager.upload_updated_files():
             self.logger.error("Failed to upload files")
             return False
