@@ -20,6 +20,7 @@ class SSHClient:
         self.vps_user = config.get('vps_user', '')
         self.vps_host = config.get('vps_host', '')
         self.remote_dir = config.get('remote_dir', '')
+        # We define the path but do not force its usage in commands/config
         self.ssh_key_path = Path("/home/builder/.ssh/id_ed25519")
         
         self._inventory_cache: Optional[Dict[str, str]] = None
@@ -27,25 +28,20 @@ class SSHClient:
     def setup_ssh_config(self, ssh_key: str) -> bool:
         """
         Setup SSH config for builder user.
-        If ssh_key is empty/None, assumes the environment is already configured.
+        Configures Host alias but relies on SSH Agent for identity (no IdentityFile).
         """
-        if not ssh_key or not ssh_key.strip():
-            self.logger.info("No VPS_SSH_KEY provided. Assuming system SSH agent/config is active.")
-            return True
-
         try:
             ssh_dir = Path("/home/builder/.ssh")
             ssh_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             
-            if ssh_key:
-                with open(self.ssh_key_path, "w") as f:
-                    f.write(ssh_key)
-                self.ssh_key_path.chmod(0o600)
+            # We do NOT write the key to disk or reference it in config
+            # to avoid libcrypto errors. We trust the shell environment/agent.
             
             config_content = f"""Host {self.vps_host}
   HostName {self.vps_host}
   User {self.vps_user}
-  IdentityFile {self.ssh_key_path}
+  # IdentityFile commented out to enforce agent usage
+  # IdentityFile {self.ssh_key_path}
   StrictHostKeyChecking no
   ConnectTimeout 30
 """
@@ -59,15 +55,14 @@ class SSHClient:
 
     def test_connection(self) -> bool:
         """
-        Test SSH connection with verbose logging and strict parameters.
-        Force environment inheritance to ensure SSH_AUTH_SOCK and other vars are passed.
+        Test SSH connection using agent authentication.
         """
+        # Command structure strictly per requirements
         target = f"{self.vps_user}@{self.vps_host}"
-        # Added -v for verbose, BatchMode to prevent hangs, StrictHostKeyChecking=no for runners
-        cmd = f"ssh -v -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 {target} exit"
+        cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 {target} \"exit\""
         
         try:
-            # Force environment inheritance using os.environ.copy()
+            # Force environment inheritance for SSH_AUTH_SOCK
             res = self.shell_executor.run(
                 cmd, 
                 shell=True, 
@@ -83,7 +78,7 @@ class SSHClient:
                 self.logger.error(f"❌ SSH connection failed (Exit Code: {res.returncode})")
                 self.logger.error(f"Command: {cmd}")
                 
-                # MANDATORY: Log detailed stderr/stdout for debugging exit code 255
+                # Verbose error logging
                 if res.stderr:
                     self.logger.error("SSH STDERR OUTPUT:")
                     for line in res.stderr.splitlines():
@@ -125,7 +120,6 @@ class SSHClient:
 
     def delete_remote_files(self, paths: List[str]) -> bool:
         if not paths: return True
-        # Join paths into a space separated string, quoted
         quoted = [f"'{p}'" for p in paths]
         cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {self.vps_user}@{self.vps_host} 'rm -f {' '.join(quoted)}'"
         res = self.shell_executor.run(cmd, shell=True, check=False, extra_env=os.environ.copy())
