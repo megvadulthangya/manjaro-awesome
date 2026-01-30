@@ -110,6 +110,20 @@ class GPGHandler:
                                 logger.info("✅ Set ultimate trust for GPG key")
                             break
             
+            # CRITICAL FIX: Initialize pacman-key if not already initialized
+            if not os.path.exists('/etc/pacman.d/gnupg'):
+                logger.info("Initializing pacman keyring...")
+                init_process = subprocess.run(
+                    ['sudo', 'pacman-key', '--init'],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if init_process.returncode == 0:
+                    logger.info("✅ Pacman keyring initialized")
+                else:
+                    logger.warning(f"⚠️ Pacman-key init warning: {init_process.stderr[:200]}")
+            
             # Export public key and add to pacman-key WITHOUT interactive terminal
             if fingerprint:
                 try:
@@ -138,6 +152,31 @@ class GPGHandler:
                         logger.error(f"Failed to add key to pacman-key: {add_process.stderr}")
                     else:
                         logger.info("✅ Key added to pacman-key")
+                    
+                    # CRITICAL FIX: Update pacman-key database and populate keyring
+                    logger.info("Updating pacman-key database...")
+                    update_process = subprocess.run(
+                        ['sudo', 'pacman-key', '--updatedb'],
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if update_process.returncode == 0:
+                        logger.info("✅ Pacman-key database updated")
+                    else:
+                        logger.warning(f"⚠️ Pacman-key update warning: {update_process.stderr[:200]}")
+                    
+                    logger.info("Populating pacman keyring...")
+                    populate_process = subprocess.run(
+                        ['sudo', 'pacman-key', '--populate'],
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if populate_process.returncode == 0:
+                        logger.info("✅ Pacman keyring populated")
+                    else:
+                        logger.warning(f"⚠️ Pacman-key populate warning: {populate_process.stderr[:200]}")
                     
                     # Import ownertrust into pacman keyring
                     logger.info("Setting ultimate trust in pacman keyring...")

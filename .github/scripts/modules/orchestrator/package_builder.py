@@ -247,10 +247,10 @@ class PackageBuilder:
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
             
-            # CRITICAL FIX: Run pacman -Sy after enabling repository to synchronize databases
+            # CRITICAL FIX: Run pacman -Syy after enabling repository to force refresh
             if exists and has_packages:
                 logger.info("🔄 Synchronizing pacman databases after enabling repository...")
-                cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+                cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
                 result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
                 if result.returncode == 0:
                     logger.info("✅ Pacman databases synchronized successfully")
@@ -274,8 +274,8 @@ class PackageBuilder:
             logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
         
-        # Run pacman -Sy
-        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        # CRITICAL FIX: Use Syy to force refresh instead of Sy
+        cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
         result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
         
         if result.returncode == 0:
@@ -452,9 +452,9 @@ class PackageBuilder:
                 if missing_deps:
                     logger.info(f"Found missing dependencies: {missing_deps}")
                     
-                    # Try to install missing dependencies with yay
+                    # CRITICAL FIX: Use Syy for dependency resolution
                     deps_str = ' '.join(missing_deps)
-                    yay_cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+                    yay_cmd = f"LC_ALL=C yay -Syy --needed --noconfirm {deps_str}"
                     yay_result = self.shell_executor.run_command(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
                     
                     if yay_result.returncode == 0:
@@ -614,9 +614,9 @@ class PackageBuilder:
                 if missing_deps:
                     logger.info(f"Found missing dependencies: {missing_deps}")
                     
-                    # Try to install missing dependencies with yay
+                    # CRITICAL FIX: Use Syy for dependency resolution
                     deps_str = ' '.join(missing_deps)
-                    yay_cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+                    yay_cmd = f"LC_ALL=C yay -Syy --needed --noconfirm {deps_str}"
                     yay_result = self.shell_executor.run_command(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
                     
                     if yay_result.returncode == 0:
