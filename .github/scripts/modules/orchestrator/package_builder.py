@@ -1,5 +1,6 @@
 """
 Package Builder Module - Main orchestrator for package building coordination
+WITH CACHE-AWARE BUILDING
 """
 
 import os
@@ -44,7 +45,7 @@ from modules.repo.version_tracker import VersionTracker
 
 
 class PackageBuilder:
-    """Main orchestrator that coordinates between modules for package building"""
+    """Main orchestrator that coordinates between modules for package building WITH CACHE SUPPORT"""
     
     def __init__(self):
         # Run pre-flight environment validation
@@ -75,6 +76,9 @@ class PackageBuilder:
         self.packager_id = python_config['packager_id']
         self.debug_mode = python_config['debug_mode']
         
+        # Cache configuration
+        self.use_cache = os.getenv('USE_CACHE', 'false').lower() == 'true'
+        
         # Create directories
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
@@ -95,6 +99,8 @@ class PackageBuilder:
             "local_success": 0,
             "aur_failed": 0,
             "local_failed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
         }
     
     def _init_modules(self):
@@ -141,6 +147,15 @@ class PackageBuilder:
             
             logger.info("✅ All modules initialized successfully")
             
+            # Log cache status
+            if self.use_cache:
+                logger.info("🔧 CACHE: Cache-aware building ENABLED")
+                # Check cache status
+                built_count = len(list(self.output_dir.glob("*.pkg.tar.*")))
+                logger.info(f"🔧 CACHE: Found {built_count} cached package files in output_dir")
+            else:
+                logger.info("🔧 CACHE: Cache-aware building DISABLED")
+            
         except NameError as e:
             logger.error(f"❌ NameError during module initialization: {e}")
             logger.error("This indicates missing imports in module files")
@@ -171,6 +186,88 @@ class PackageBuilder:
             except ImportError:
                 logger.error("Cannot load package lists from packages.py. Exiting.")
                 sys.exit(1)
+    
+    def _check_cache_for_package(self, pkg_name: str, is_aur: bool) -> Tuple[bool, Optional[str]]:
+        """
+        Check if package is available in cache and up-to-date.
+        
+        Args:
+            pkg_name: Package name
+            is_aur: Whether it's an AUR package
+        
+        Returns:
+            Tuple of (cached: bool, version: Optional[str])
+        """
+        if not self.use_cache:
+            return False, None
+        
+        # Check built packages cache first
+        cache_patterns = [
+            f"{self.output_dir}/{pkg_name}-*.pkg.tar.*",
+            f"{self.output_dir}/*{pkg_name}*.pkg.tar.*"
+        ]
+        
+        cached_files = []
+        for pattern in cache_patterns:
+            cached_files.extend(glob.glob(pattern))
+        
+        if cached_files:
+            # Extract version from cached file
+            for cached_file in cached_files:
+                try:
+                    # Parse version from filename
+                    filename = os.path.basename(cached_file)
+                    base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+                    parts = base.split('-')
+                    
+                    # Try to extract version
+                    for i in range(len(parts) - 2, 0, -1):
+                        possible_name = '-'.join(parts[:i])
+                        if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
+                            if len(parts) >= i + 3:
+                                version_part = parts[i]
+                                release_part = parts[i+1]
+                                if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
+                                    epoch_part = parts[i]
+                                    version_part = parts[i+1]
+                                    release_part = parts[i+2]
+                                    cached_version = f"{epoch_part}:{version_part}-{release_part}"
+                                    
+                                    # Extract components for comparison
+                                    epoch = epoch_part
+                                    pkgver = version_part
+                                    pkgrel = release_part
+                                else:
+                                    cached_version = f"{version_part}-{release_part}"
+                                    
+                                    # Extract components for comparison
+                                    epoch = None
+                                    pkgver = version_part
+                                    pkgrel = release_part
+                                
+                                # Check if this cached version is newer than remote
+                                remote_version = self.get_remote_version(pkg_name)
+                                if remote_version:
+                                    # Compare versions
+                                    should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
+                                    if not should_build:
+                                        logger.info(f"📦 CACHE HIT: {pkg_name} (cached: {cached_version}, remote: {remote_version}) - SKIP BUILD")
+                                        self.stats["cache_hits"] += 1
+                                        return True, cached_version
+                                    else:
+                                        logger.info(f"📦 CACHE STALE: {pkg_name} (cached: {cached_version}, remote: {remote_version}) - NEEDS REBUILD")
+                                        self.stats["cache_misses"] += 1
+                                        return False, None
+                                else:
+                                    # No remote version, cache is valid
+                                    logger.info(f"📦 CACHE HIT: {pkg_name} (cached: {cached_version}, no remote) - SKIP BUILD")
+                                    self.stats["cache_hits"] += 1
+                                    return True, cached_version
+                except Exception as e:
+                    logger.debug(f"Could not parse version from cached file {cached_file}: {e}")
+        
+        self.stats["cache_misses"] += 1
+        return False, None
     
     def _apply_repository_state(self, exists: bool, has_packages: bool):
         """Apply repository state with proper SigLevel based on discovery - CRITICAL FIX: Run pacman -Sy after enabling repository"""
@@ -685,18 +782,38 @@ class PackageBuilder:
             return False
     
     def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
-        """Build a single package"""
+        """Build a single package WITH CACHE CHECK"""
         print(f"\n--- Processing: {pkg_name} ({'AUR' if is_aur else 'Local'}) ---")
         
+        # Check cache first
+        cached, cached_version = self._check_cache_for_package(pkg_name, is_aur)
+        if cached:
+            logger.info(f"✅ Using cached package: {pkg_name} ({cached_version})")
+            self.built_packages.append(f"{pkg_name} ({cached_version}) [CACHED]")
+            
+            # Register target version for cleanup
+            self.version_tracker.register_package_target_version(pkg_name, cached_version)
+            
+            # Record statistics
+            if is_aur:
+                self.stats["aur_success"] += 1
+                self.build_tracker.record_built_package(pkg_name, cached_version, is_aur=True)
+            else:
+                self.stats["local_success"] += 1
+                self.build_tracker.record_built_package(pkg_name, cached_version, is_aur=False)
+            
+            return True
+        
+        # If not cached, proceed with normal build
         if is_aur:
             return self._build_aur_package(pkg_name)
         else:
             return self._build_local_package(pkg_name)
     
     def build_packages(self) -> int:
-        """Build packages"""
+        """Build packages with cache-aware optimization"""
         print("\n" + "=" * 60)
-        print("Building packages")
+        print("Building packages (Cache-aware)")
         print("=" * 60)
         
         local_packages, aur_packages = self.get_package_lists()
@@ -705,12 +822,13 @@ class PackageBuilder:
         print(f"   Local packages: {len(local_packages)}")
         print(f"   AUR packages: {len(aur_packages)}")
         print(f"   Total packages: {len(local_packages) + len(aur_packages)}")
+        print(f"   Cache enabled: {self.use_cache}")
         
         print(f"\n🔨 Building {len(aur_packages)} AUR packages")
         for pkg in aur_packages:
             if self._build_single_package(pkg, is_aur=True):
-                self.stats["aur_success"] += 1
-                self.build_tracker.record_built_package(pkg, "unknown", is_aur=True)
+                # Success already recorded in _build_single_package
+                pass
             else:
                 self.stats["aur_failed"] += 1
                 self.build_tracker.record_failed_package(is_aur=True)
@@ -718,8 +836,8 @@ class PackageBuilder:
         print(f"\n🔨 Building {len(local_packages)} local packages")
         for pkg in local_packages:
             if self._build_single_package(pkg, is_aur=False):
-                self.stats["local_success"] += 1
-                self.build_tracker.record_built_package(pkg, "unknown", is_aur=False)
+                # Success already recorded in _build_single_package
+                pass
             else:
                 self.stats["local_failed"] += 1
                 self.build_tracker.record_failed_package(is_aur=False)
@@ -774,9 +892,9 @@ class PackageBuilder:
         return self.artifact_manager.create_artifact_archive(self.output_dir, log_path)
     
     def run(self):
-        """Main execution with simplified repository discovery and proper GPG integration"""
+        """Main execution with cache-aware building"""
         print("\n" + "=" * 60)
-        print("🚀 MANJARO PACKAGE BUILDER (MODULAR ARCHITECTURE)")
+        print("🚀 MANJARO PACKAGE BUILDER (MODULAR ARCHITECTURE WITH CACHE)")
         print("=" * 60)
         
         try:
@@ -785,6 +903,12 @@ class PackageBuilder:
             print(f"Repository name: {self.repo_name}")
             print(f"Output directory: {self.output_dir}")
             print(f"PACKAGER identity: {self.packager_id}")
+            print(f"Cache optimization: {'ENABLED' if self.use_cache else 'DISABLED'}")
+            
+            # Display initial cache status
+            if self.use_cache:
+                built_count = len(list(self.output_dir.glob("*.pkg.tar.*")))
+                print(f"📦 Initial cache contains {built_count} package files")
             
             # STEP 0: Initialize GPG FIRST if enabled
             print("\n" + "=" * 60)
@@ -817,15 +941,27 @@ class PackageBuilder:
             self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
+            # But check cache first
             if remote_packages:
                 print("\n" + "=" * 60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
                 print("=" * 60)
                 
-                if not self.rsync_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir):
-                    logger.error("❌ FAILED to mirror remote packages locally")
-                    logger.error("Cannot proceed without local package mirror")
-                    return 1
+                # Check if we already have cached mirror
+                cached_mirror_files = list(self.mirror_temp_dir.glob("*.pkg.tar.*"))
+                if cached_mirror_files and self.use_cache:
+                    print(f"📦 Using cached VPS mirror with {len(cached_mirror_files)} files")
+                    # Copy cached files to output directory
+                    for cached_file in cached_mirror_files:
+                        dest = self.output_dir / cached_file.name
+                        if not dest.exists():
+                            shutil.copy2(cached_file, dest)
+                else:
+                    # No cache, perform fresh mirror
+                    if not self.rsync_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir):
+                        logger.error("❌ FAILED to mirror remote packages locally")
+                        logger.error("Cannot proceed without local package mirror")
+                        return 1
             else:
                 logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
             
@@ -836,9 +972,9 @@ class PackageBuilder:
             if existing_db_files:
                 self.database_manager.fetch_existing_database(existing_db_files)
             
-            # Build packages
+            # Build packages with cache optimization
             print("\n" + "=" * 60)
-            print("STEP 5: PACKAGE BUILDING (SRCINFO VERSIONING)")
+            print("STEP 5: PACKAGE BUILDING (CACHE-AWARE SRCINFO VERSIONING)")
             print("=" * 60)
             
             total_built = self.build_packages()
@@ -906,6 +1042,8 @@ class PackageBuilder:
                 print(f"   Local packages built: {self.stats['local_success']}")
                 print(f"   Local packages failed: {self.stats['local_failed']}")
                 print(f"   Total skipped: {len(self.skipped_packages)}")
+                print(f"   Cache hits: {self.stats['cache_hits']}")
+                print(f"   Cache misses: {self.stats['cache_misses']}")
                 
                 if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
                     print("⚠️ Some packages failed to build")
@@ -931,13 +1069,16 @@ class PackageBuilder:
             summary = self.build_tracker.get_summary()
             
             print("\n" + "=" * 60)
-            print("📊 BUILD SUMMARY")
+            print("📊 BUILD SUMMARY WITH CACHE STATISTICS")
             print("=" * 60)
             print(f"Duration: {elapsed:.1f}s")
             print(f"AUR packages:    {summary['aur_success']} (failed: {summary['aur_failed']})")
             print(f"Local packages:  {summary['local_success']} (failed: {summary['local_failed']})")
             print(f"Total built:     {summary['total_built']}")
             print(f"Skipped:         {summary['skipped']}")
+            print(f"Cache hits:      {self.stats['cache_hits']}")
+            print(f"Cache misses:    {self.stats['cache_misses']}")
+            print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             print(f"PACKAGER:        {self.packager_id}")
             print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")

@@ -51,8 +51,7 @@ jobs:
 #          df -h
 #          echo "=== FREE -h AFTER ==="
 #          free -h
-#
-#
+
   build-and-deploy:
     name: Build and Deploy Packages
 #    needs: cleanup
@@ -86,6 +85,50 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ================== CACHE: Pacman Package Cache ==================
+      # Cache for system packages to avoid re-downloading pacman packages every run
+      - name: Restore Pacman Package Cache
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-cache-
+
+      # ================== CACHE: Yay AUR Cache ==================
+      # Cache for AUR packages to avoid re-downloading AUR dependencies
+      - name: Restore Yay AUR Cache
+        uses: actions/cache@v4
+        with:
+          path: /home/builder/.cache/yay
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          restore-keys: |
+            ${{ runner.os }}-yay-cache-
+
+      # ================== CACHE: VPS Repository Mirror ==================
+      # Cache for remote VPS packages to avoid re-downloading from VPS every run
+      - name: Restore VPS Repository Mirror Cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/repo_mirror
+          key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
+          restore-keys: |
+            ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-
+            ${{ runner.os }}-vps-mirror-cache-
+
+      # ================== CACHE: Built Packages ==================
+      # Cache for previously built packages to avoid rebuilding unchanged packages
+      - name: Restore Built Packages Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            built_packages
+            build_aur
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
+            ${{ runner.os }}-built-packages-cache-
 
       - name: Install Python and Dependencies
         run: |
@@ -123,6 +166,14 @@ jobs:
       - name: Prepare Environment
         run: |
           echo "=== Starting Environment Preparation ==="
+          
+          # Display cache status
+          echo "📊 Cache Status Report:"
+          echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Yay cache: $(du -sh /home/builder/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
+          echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           
           # Skip key signing issues for system updates
           echo "Setting up pacman without key signing for updates..."
@@ -162,7 +213,7 @@ jobs:
           # Set ownership
           chown -R builder:builder "$(pwd)"
           
-          # Create build directories with correct permissions
+          # Create build directories with correct permissions (if they don't exist from cache)
           mkdir -p "$(pwd)/build_aur"
           chown -R builder:builder "$(pwd)/build_aur"
           mkdir -p "$(pwd)/built_packages"
@@ -321,21 +372,27 @@ jobs:
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
           
-          # Install yay for AUR dependencies
-          echo "=== Installing yay ==="
-          chmod 777 /tmp
-          cd /tmp
-          sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
-          cd yay-bin
-          sudo -u builder makepkg -si --noconfirm
-          cd /
-          rm -rf /tmp/yay-bin
-          
-          # Test yay installation
-          if sudo -u builder yay --version; then
-            echo "✅ yay installed successfully"
+          # Install yay for AUR dependencies (only if not cached)
+          echo "=== Checking yay installation ==="
+          if ! command -v yay &> /dev/null; then
+            echo "Installing yay..."
+            chmod 777 /tmp
+            cd /tmp
+            sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+            cd yay-bin
+            sudo -u builder makepkg -si --noconfirm
+            cd /
+            rm -rf /tmp/yay-bin
+            
+            # Test yay installation
+            if sudo -u builder yay --version; then
+              echo "✅ yay installed successfully"
+            else
+              echo "❌ yay installation failed"
+            fi
           else
-            echo "❌ yay installation failed"
+            echo "✅ yay already installed (from cache)"
+            sudo -u builder yay --version
           fi
           
           echo "✅ Build dependencies installed"
@@ -471,10 +528,7 @@ jobs:
           
           echo "✅ GPG and pacman-key initialization complete"
 
-
-
-
-      - name: Run Builder with SRCINFO Versioning
+      - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -488,11 +542,19 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GITHUB_REPO: ${{ github.repository }}.git
           PYTHONPATH: ${{ github.workspace }}/.github/scripts
+          USE_CACHE: "true"  # Enable cache-aware building
         run: |
-          echo "=== Starting Builder with SRCINFO Versioning ==="
+          echo "=== Starting Builder with Cache Optimization ==="
           
           # Make builder script executable
           chmod +x .github/scripts/builder.py
+          
+          echo "📊 Cache Status Before Build:"
+          echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages in cache: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "  - VPS mirror cache: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - USE_CACHE environment variable: $USE_CACHE"
           
           echo "Current directory: $(pwd)"
           echo "Repository: $GITHUB_REPO"
@@ -543,7 +605,7 @@ jobs:
           fi
           
           echo ""
-          echo "=== Running Builder Script ==="
+          echo "=== Running Builder Script with Cache Support ==="
           
           # Run as builder user with PYTHONPATH set for modular imports
           su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
@@ -564,7 +626,37 @@ jobs:
           
           exit $BUILD_STATUS
 
-      # NOTE: Removed "Sanitize Artifact Filenames" step - now handled internally by Python
+      # ================== SAVE CACHES ==================
+      # Save caches after successful build (or even on failure for debugging)
+      - name: Save Pacman Package Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+
+      - name: Save Yay AUR Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /home/builder/.cache/yay
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+
+      - name: Save VPS Repository Mirror Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /tmp/repo_mirror
+          key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
+
+      - name: Save Built Packages Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            built_packages
+            build_aur
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
 
       - name: Upload Build Artifacts
         if: always()
@@ -578,22 +670,38 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      - name: Cleanup Temporary Directories
+      - name: Upload Cache Status Report
         if: always()
         run: |
-          echo "=== Cleaning temporary directories ==="
+          echo "=== Cache Status Report After Build ==="
+          echo "Pacman cache saved: $(du -sh /var/cache/pacman/pkg 2>/dev/null | cut -f1 || echo '0')"
+          echo "Built packages in cache: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "VPS mirror cache: $(du -sh /tmp/repo_mirror 2>/dev/null | cut -f1 || echo '0')"
+          echo ""
+          echo "📊 Cache keys used:"
+          echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
+          echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
+          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}"
+          echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}"
+
+      - name: Cleanup Temporary Directories (Preserve Cache)
+        if: always()
+        run: |
+          echo "=== Cleaning temporary directories (preserving cache) ==="
           
-          # Cleanup builder temporary directories
-          rm -rf /tmp/repo_mirror* /tmp/manjaro-awesome-gitclone* 2>/dev/null || true
+          # Cleanup builder temporary directories (but not cache directories)
           rm -rf /tmp/gpg_home_* 2>/dev/null || true
           rm -rf /tmp/*.pkg.tar.* 2>/dev/null || true
           
-          # Cleanup builder home directories
-          rm -rf /home/builder/.cache /home/builder/.local 2>/dev/null || true
+          # Cleanup builder home directories (but keep yay cache)
+          rm -rf /home/builder/.cache/mozilla 2>/dev/null || true
+          rm -rf /home/builder/.cache/pip 2>/dev/null || true
+          rm -rf /home/builder/.cache/thumbnails 2>/dev/null || true
           
-          # Cleanup workspace temporary files
-          find . -name "*.pkg.tar.*" -type f -delete 2>/dev/null || true
+          # Cleanup workspace temporary files (but not built packages)
           find . -name ".SRCINFO" -type f -delete 2>/dev/null || true
           find /tmp -name "yay-*" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.log" -type f -not -name "builder.log" -not -name "build_output.log" -delete 2>/dev/null || true
           
-          echo "✅ Temporary directories cleaned"
+          echo "✅ Temporary directories cleaned (caches preserved for next run)"
