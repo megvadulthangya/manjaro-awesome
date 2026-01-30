@@ -13,23 +13,34 @@ import glob
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from scripts.modules.common.logging_utils import setup_logging
-from scripts.modules.common.config_loader import ConfigLoader
-from scripts.modules.common.environment import EnvironmentValidator
-from scripts.modules.common.shell_executor import ShellExecutor
-from scripts.modules.build.artifact_manager import ArtifactManager
-from scripts.modules.build.aur_builder import AURBuilder
-from scripts.modules.build.local_builder import LocalBuilder
-from scripts.modules.build.version_manager import VersionManager
-from scripts.modules.build.build_tracker import BuildTracker
-from scripts.modules.gpg.gpg_handler import GPGHandler
-from scripts.modules.vps.ssh_client import SSHClient
-from scripts.modules.vps.rsync_client import RsyncClient
-from scripts.modules.repo.cleanup_manager import CleanupManager
-from scripts.modules.repo.database_manager import DatabaseManager
-from scripts.modules.repo.version_tracker import VersionTracker
+# Add parent directory to path for imports
+script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
-logger = setup_logging()
+# Import our modules - adjust imports to work from the modules directory
+try:
+    from modules.common.logging_utils import setup_logger
+    logger = setup_logger(__name__)
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+    logging.basicConfig(level=logging.INFO)
+
+from modules.common.config_loader import ConfigLoader
+from modules.common.environment import EnvironmentValidator
+from modules.common.shell_executor import ShellExecutor
+from modules.build.artifact_manager import ArtifactManager
+from modules.build.aur_builder import AURBuilder
+from modules.build.local_builder import LocalBuilder
+from modules.build.version_manager import VersionManager
+from modules.build.build_tracker import BuildTracker
+from modules.gpg.gpg_handler import GPGHandler
+from modules.vps.ssh_client import SSHClient
+from modules.vps.rsync_client import RsyncClient
+from modules.repo.cleanup_manager import CleanupManager
+from modules.repo.database_manager import DatabaseManager
+from modules.repo.version_tracker import VersionTracker
 
 
 class PackageBuilder:
@@ -141,14 +152,25 @@ class PackageBuilder:
     def get_package_lists(self):
         """Get package lists from packages.py or exit if not available"""
         try:
-            import scripts.packages as packages
+            # First try to import from the current directory
+            import packages
             print("📦 Using package lists from packages.py")
             local_packages_list, aur_packages_list = packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
             print(f">>> DEBUG: Found {len(local_packages_list + aur_packages_list)} packages to check")
             return local_packages_list, aur_packages_list
         except ImportError:
-            logger.error("Cannot load package lists from packages.py. Exiting.")
-            sys.exit(1)
+            try:
+                # Try to import from parent directory
+                import sys
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                import scripts.packages as packages
+                print("📦 Using package lists from packages.py")
+                local_packages_list, aur_packages_list = packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
+                print(f">>> DEBUG: Found {len(local_packages_list + aur_packages_list)} packages to check")
+                return local_packages_list, aur_packages_list
+            except ImportError:
+                logger.error("Cannot load package lists from packages.py. Exiting.")
+                sys.exit(1)
     
     def _apply_repository_state(self, exists: bool, has_packages: bool):
         """Apply repository state with proper SigLevel based on discovery - CRITICAL FIX: Run pacman -Sy after enabling repository"""
