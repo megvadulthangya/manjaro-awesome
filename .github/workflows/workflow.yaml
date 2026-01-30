@@ -95,7 +95,7 @@ jobs:
 
       - name: Run Preflight Checker
         run: |
-          python3 .github/scripts/checker.py
+          python3 .github/scripts/syntax.py
 
       - name: Fix PKGBUILD Epoch Issues
         run: |

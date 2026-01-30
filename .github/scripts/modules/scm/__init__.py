@@ -1,7 +1,3 @@
 """
-Source Control Management modules package
+Source Code Management module
 """
-
-from .git_client import GitClient
-
-__all__ = ['GitClient']
