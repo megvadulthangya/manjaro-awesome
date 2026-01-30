@@ -67,9 +67,11 @@ class ArtifactManager:
             with tarfile.open(archive_path, "w:gz") as tar:
                 # Add all built package files
                 for pkg_file in built_packages_path.glob("*.pkg.tar.*"):
-                    arcname = f"packages/{pkg_file.name}"
+                    # Sanitize filename for tar (remove colon characters)
+                    sanitized_name = pkg_file.name.replace(":", "_")
+                    arcname = f"packages/{sanitized_name}"
                     tar.add(pkg_file, arcname=arcname)
-                    logger.debug(f"Added to archive: {pkg_file.name}")
+                    logger.debug(f"Added to archive: {pkg_file.name} as {sanitized_name}")
                 
                 # Add log file if it exists
                 if log_path.exists():
@@ -115,6 +117,9 @@ class ArtifactManager:
                     logger.info(f"  Databases: {len(databases)} files")
                     logger.info(f"  Signatures: {len(signatures)} files")
                 
+                # Clean up original files with colons after archiving
+                self._cleanup_colon_files(built_packages_path)
+                
                 return archive_path
             else:
                 logger.error("❌ Failed to create artifact archive")
@@ -126,3 +131,20 @@ class ArtifactManager:
             if archive_path.exists():
                 archive_path.unlink(missing_ok=True)
             return None
+    
+    def _cleanup_colon_files(self, directory: Path):
+        """Remove files with colon characters after they've been archived"""
+        logger.info("🧹 Cleaning up files with colon characters...")
+        
+        removed_count = 0
+        for file_path in directory.glob("*.pkg.tar.*"):
+            if ":" in file_path.name:
+                try:
+                    file_path.unlink(missing_ok=True)
+                    removed_count += 1
+                    logger.debug(f"Removed file with colon: {file_path.name}")
+                except Exception as e:
+                    logger.warning(f"Could not remove {file_path}: {e}")
+        
+        if removed_count > 0:
+            logger.info(f"✅ Removed {removed_count} files with colon characters")
