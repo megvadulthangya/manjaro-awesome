@@ -1,94 +1,129 @@
 """
-Shell executor module
+Shell command executor with comprehensive logging and timeout handling
 """
+
 import os
 import subprocess
 import logging
-from pathlib import Path
-from typing import List, Optional, Union, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class ShellExecutor:
-    """Executes shell commands with logging"""
+    """Execute shell commands with comprehensive logging"""
     
-    def __init__(self, debug_mode: bool = False, default_timeout: int = 1800):
+    def __init__(self, debug_mode=False):
         self.debug_mode = debug_mode
-        self.default_timeout = default_timeout
-        self.logger = logging.getLogger(__name__)
-
-    def run(
-        self,
-        cmd: Union[str, List[str]],
-        cwd: Optional[Union[str, Path]] = None,
-        capture: bool = True,
-        check: bool = True,
-        shell: bool = True,
-        user: Optional[str] = None,
-        log_cmd: bool = False,
-        timeout: Optional[int] = None,
-        extra_env: Optional[Dict[str, str]] = None,
-        **kwargs
-    ) -> subprocess.CompletedProcess:
-        
-        if timeout is None:
-            timeout = self.default_timeout
-            
-        if isinstance(cmd, list):
-            cmd_str = ' '.join(cmd)
-            if 'shell' not in kwargs:
-                shell = False
-        else:
-            cmd_str = cmd
-            if 'shell' not in kwargs:
-                shell = True
-                
+    
+    def run(self, cmd, cwd=None, capture=True, check=True, shell=True, 
+            user=None, log_cmd=False, timeout=1800, extra_env=None):
+        """Run command with comprehensive logging, timeout, and optional extra environment variables"""
         if log_cmd or self.debug_mode:
-            self._log_command(cmd_str)
-
-        cwd_path = Path(cwd) if cwd else Path.cwd()
+            if self.debug_mode:
+                print(f"🔧 [DEBUG] RUNNING COMMAND: {cmd}", flush=True)
+            else:
+                logger.info(f"RUNNING COMMAND: {cmd}")
+        
+        if cwd is None:
+            cwd = os.getcwd()
+        
+        # Prepare environment
         env = os.environ.copy()
-        env['LC_ALL'] = 'C'
         if extra_env:
             env.update(extra_env)
+        env['LC_ALL'] = 'C'
+        
+        if user:
+            env['HOME'] = f'/home/{user}'
+            env['USER'] = user
             
-        subprocess_kwargs = {
-            'cwd': cwd_path,
-            'shell': shell,
-            'check': check,
-            'env': env,
-            'timeout': timeout,
-            'text': True,
-            'encoding': 'utf-8',
-            'errors': 'ignore',
-            'capture_output': capture
-        }
-        subprocess_kwargs.update(kwargs)
-        
-        # User switching logic would go here if needed (e.g. sudo)
-        # For this refactor, we assume running as builder/root or handled via sudo in cmd string
-        
-        try:
-            result = subprocess.run(cmd, **subprocess_kwargs)
-            if log_cmd or self.debug_mode:
-                self._log_output(result)
-            return result
-        except subprocess.TimeoutExpired as e:
-            self.logger.error(f"Command timed out: {cmd_str}")
-            raise
-        except subprocess.CalledProcessError as e:
-            if log_cmd or self.debug_mode:
-                self.logger.error(f"Command failed: {cmd_str}")
-                if e.stdout: self.logger.error(f"STDOUT: {e.stdout}")
-                if e.stderr: self.logger.error(f"STDERR: {e.stderr}")
-            if check:
+            try:
+                sudo_cmd = ['sudo', '-u', user]
+                if shell:
+                    sudo_cmd.extend(['bash', '-c', f'cd "{cwd}" && {cmd}'])
+                else:
+                    sudo_cmd.extend(cmd)
+                
+                result = subprocess.run(
+                    sudo_cmd,
+                    capture_output=capture,
+                    text=True,
+                    check=check,
+                    env=env,
+                    timeout=timeout
+                )
+                
+                self._log_result(cmd, result)
+                return result
+                
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                self._log_error(error_msg, None)
                 raise
-            return subprocess.CompletedProcess(e.cmd, e.returncode, e.stdout, e.stderr)
-
-    def _log_command(self, cmd: str):
-        if self.debug_mode:
-            print(f"🔧 [DEBUG] RUNNING: {cmd}")
+            except subprocess.CalledProcessError as e:
+                self._log_result(cmd, e)
+                if check:
+                    raise
+                return e
         else:
-            self.logger.info(f"RUNNING: {cmd}")
-
-    def _log_output(self, result: subprocess.CompletedProcess):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=cwd,
+                    shell=shell,
+                    capture_output=capture,
+                    text=True,
+                    check=check,
+                    env=env,
+                    timeout=timeout
+                )
+                
+                self._log_result(cmd, result)
+                return result
+                
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"⚠️ Command timed out after {timeout} seconds: {cmd}"
+                self._log_error(error_msg, None)
+                raise
+            except subprocess.CalledProcessError as e:
+                self._log_result(cmd, e)
+                if check:
+                    raise
+                return e
+    
+    def _log_result(self, cmd, result):
+        """Log command result"""
         if self.debug_mode:
-            print(f"🔧 [DEBUG] EXIT: {result.returncode}")
+            if hasattr(result, 'stdout') and result.stdout:
+                print(f"🔧 [DEBUG] STDOUT:\n{result.stdout}", flush=True)
+            if hasattr(result, 'stderr') and result.stderr:
+                print(f"🔧 [DEBUG] STDERR:\n{result.stderr}", flush=True)
+            if hasattr(result, 'returncode'):
+                print(f"🔧 [DEBUG] EXIT CODE: {result.returncode}", flush=True)
+            
+            # If command failed and we're in debug mode, print full output
+            if hasattr(result, 'returncode') and result.returncode != 0:
+                print(f"❌ [DEBUG] COMMAND FAILED: {cmd}", flush=True)
+                if hasattr(result, 'stdout') and result.stdout and len(result.stdout) > 500:
+                    print(f"❌ [DEBUG] FULL STDOUT (truncated):\n{result.stdout[:2000]}", flush=True)
+                if hasattr(result, 'stderr') and result.stderr and len(result.stderr) > 500:
+                    print(f"❌ [DEBUG] FULL STDERR (truncated):\n{result.stderr[:2000]}", flush=True)
+        else:
+            if hasattr(result, 'stdout') and result.stdout:
+                logger.info(f"STDOUT: {result.stdout[:500]}")
+            if hasattr(result, 'stderr') and result.stderr:
+                logger.info(f"STDERR: {result.stderr[:500]}")
+            if hasattr(result, 'returncode'):
+                logger.info(f"EXIT CODE: {result.returncode}")
+    
+    def _log_error(self, error_msg, result):
+        """Log error message"""
+        if self.debug_mode:
+            print(f"❌ [DEBUG] {error_msg}", flush=True)
+        else:
+            logger.error(error_msg)
+        
+        if result and hasattr(result, 'stderr') and result.stderr:
+            if self.debug_mode:
+                print(f"❌ [DEBUG] ERROR DETAILS: {result.stderr[:500]}", flush=True)
+            else:
+                logger.error(f"Error details: {result.stderr[:500]}")

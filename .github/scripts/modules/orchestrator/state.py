@@ -1,34 +1,41 @@
 """
-Build State
+Build state management
 """
-import time
-import logging
-from typing import Dict, Any, List, Optional
+
+import json
+from datetime import datetime
 
 class BuildState:
-    """Tracks build outcomes"""
+    """Manages build state persistence"""
     
-    def __init__(self, logger: Optional[logging.Logger] = None):
-        self.logger = logger or logging.getLogger(__name__)
-        self.built: List[str] = []
-        self.skipped: List[str] = []
-        self.failed: List[str] = []
-
-    def add_built(self, pkg: str, ver: str, is_aur: bool = False):
-        self.built.append(pkg)
+    def __init__(self, state_file="build_state.json"):
+        self.state_file = state_file
+        self.state = self._load_state()
     
-    def add_skipped(self, pkg: str, ver: str, is_aur: bool = False, reason: str = ""):
-        self.skipped.append(pkg)
-
-    def add_failed(self, pkg: str, ver: str, is_aur: bool = False, error_message: str = ""):
-        self.failed.append(pkg)
-
-    def mark_complete(self):
-        pass
-
-    def get_summary(self) -> Dict[str, Any]:
-        return {
-            'built': len(self.built),
-            'skipped': len(self.skipped),
-            'failed': len(self.failed)
-        }
+    def _load_state(self):
+        """Load state from file"""
+        try:
+            with open(self.state_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+    
+    def save_state(self):
+        """Save state to file"""
+        with open(self.state_file, 'w') as f:
+            json.dump(self.state, f, indent=2)
+    
+    def set(self, key, value):
+        """Set a state value"""
+        self.state[key] = value
+        self.state['last_updated'] = datetime.now().isoformat()
+        self.save_state()
+    
+    def get(self, key, default=None):
+        """Get a state value"""
+        return self.state.get(key, default)
+    
+    def clear(self):
+        """Clear all state"""
+        self.state = {}
+        self.save_state()

@@ -1,23 +1,28 @@
 """
-Cleanup Manager
+Cleanup manager for repository maintenance
 """
+
+import os
+import subprocess
 import logging
-from typing import Dict, Any, Optional
-from modules.repo.version_tracker import VersionTracker
-from modules.vps.ssh_client import SSHClient
-from modules.vps.rsync_client import RsyncClient
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 class CleanupManager:
-    """Manages cleanup of old versions"""
+    """Manages repository cleanup operations"""
     
-    def __init__(self, config: Dict[str, Any], version_tracker: VersionTracker, ssh_client: SSHClient, rsync_client: RsyncClient, logger: Optional[logging.Logger] = None):
+    def __init__(self, config):
         self.config = config
-        self.version_tracker = version_tracker
-        self.ssh_client = ssh_client
-        self.logger = logger or logging.getLogger(__name__)
-
-    def cleanup_server(self):
-        """Remove files not in target versions"""
-        # Simplistic implementation relying on VersionTracker state
-        # Real implementation would diff remote inventory vs target versions
-        pass
+        self.debug_mode = config.get('debug_mode', False)
+    
+    def cleanup_old_packages(self, package_list):
+        """Clean up old packages from repository"""
+        if self.debug_mode:
+            print(f"🔧 [DEBUG] Cleaning up old packages", flush=True)
+        else:
+            logger.info("Cleaning up old packages")
+        
+        # Implementation would go here
+        # This is a simplified version
+        return True

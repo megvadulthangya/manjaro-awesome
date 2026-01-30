@@ -1,5 +1,5 @@
 """
-Source Control Management modules
+Source Control Management modules package
 """
 
 from .git_client import GitClient

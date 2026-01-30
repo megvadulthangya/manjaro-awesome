@@ -1,45 +1,70 @@
 """
-Rsync Client Module
+Rsync client for file transfers
 """
-import logging
+
 import os
+import subprocess
+import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-from modules.common.shell_executor import ShellExecutor
+
+logger = logging.getLogger(__name__)
 
 class RsyncClient:
-    """Handles Rsync operations"""
+    """Handles file transfers using rsync"""
     
-    def __init__(self, config: Dict[str, Any], shell_executor: ShellExecutor, logger: Optional[logging.Logger] = None):
+    def __init__(self, config):
         self.config = config
-        self.shell_executor = shell_executor
-        self.logger = logger or logging.getLogger(__name__)
-        self.vps_user = config.get('vps_user')
-        self.vps_host = config.get('vps_host')
-        self.remote_dir = config.get('remote_dir')
-
-    def mirror_remote(self, remote_pattern: str, local_dir: Path, temp_dir: Optional[Path] = None) -> bool:
-        """Download from remote"""
-        local_dir.mkdir(parents=True, exist_ok=True)
-        source = f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/{remote_pattern}"
-        # Added -v to ssh options inside rsync for consistency if debugging needed, and environment inheritance
-        cmd = [
-            "rsync", "-avz", "--quiet",
-            "-e", "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30",
-            source, str(local_dir)
-        ]
-        res = self.shell_executor.run(cmd, check=False, extra_env=os.environ.copy())
-        return res.returncode == 0
-
-    def upload(self, local_files: List[str], base_dir: Optional[Path] = None) -> bool:
-        """Upload to remote"""
-        if not local_files: return True
+        self.debug_mode = config.get('debug_mode', False)
+    
+    def upload_packages(self, source_dir):
+        """Upload packages to VPS"""
+        if self.debug_mode:
+            print(f"🔧 [DEBUG] Uploading packages from {source_dir}", flush=True)
+        else:
+            logger.info(f"Uploading packages from {source_dir}")
         
-        target = f"{self.vps_user}@{self.vps_host}:{self.remote_dir}/"
-        cmd = [
-            "rsync", "-avz", "--quiet",
-            "-e", "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30"
-        ] + local_files + [target]
+        # Build rsync command
+        vps_user = self.config['vps_user']
+        vps_host = self.config['vps_host']
+        remote_dir = self.config['remote_dir']
         
-        res = self.shell_executor.run(cmd, check=False, extra_env=os.environ.copy())
-        return res.returncode == 0
+        rsync_cmd = f"""
+        rsync -avz \
+          --progress \
+          --stats \
+          {source_dir}/*.pkg.tar.* \
+          {source_dir}/{self.config['repo_name']}.* \
+          '{vps_user}@{vps_host}:{remote_dir}/'
+        """
+        
+        if self.debug_mode:
+            print(f"🔧 [DEBUG] Running rsync command: {rsync_cmd}", flush=True)
+        
+        try:
+            result = subprocess.run(
+                rsync_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                if self.debug_mode:
+                    print(f"🔧 [DEBUG] Rsync upload successful", flush=True)
+                else:
+                    logger.info("✅ Rsync upload successful")
+                return True
+            else:
+                if self.debug_mode:
+                    print(f"❌ [DEBUG] Rsync upload failed: {result.stderr}", flush=True)
+                else:
+                    logger.error(f"Rsync upload failed: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            if self.debug_mode:
+                print(f"❌ [DEBUG] Rsync execution error: {e}", flush=True)
+            else:
+                logger.error(f"Rsync execution error: {e}")
+            return False

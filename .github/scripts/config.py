@@ -1,85 +1,80 @@
 """
 Configuration file for Manjaro Package Builder
-Central source of truth for all configuration values.
+All variables and secrets are defined here - ZERO HARDCODING elsewhere
 """
 
 import os
-from pathlib import Path
 
-# --- DYNAMIC REPOSITORY CONFIGURATION ---
-# Get repository URL from environment or default
-GITHUB_REPO = os.getenv("GITHUB_REPO", "megvadulthangya/manjaro-awesome.git")
+# ============================================================================
+# GITHUB SECRETS - Load from environment variables (set in GitHub Secrets)
+# ============================================================================
 
-# Extract repository name dynamically from URL
-# e.g., "user/repo.git" -> "repo"
-_repo_basename = os.path.basename(GITHUB_REPO)
-if _repo_basename.endswith('.git'):
-    _repo_basename = _repo_basename[:-4]
+# SSH and VPS configuration
+VPS_USER = os.getenv("VPS_USER", "")
+VPS_HOST = os.getenv("VPS_HOST", "")
+VPS_SSH_KEY = os.getenv("VPS_SSH_KEY", "")  # Private SSH key for VPS access
+REMOTE_DIR = os.getenv("REMOTE_DIR", "")    # Remote directory on VPS
 
-# Allow explicit override, otherwise use extracted name
-REPO_NAME = os.getenv("REPO_NAME", _repo_basename)
+# Repository configuration
+REPO_NAME = os.getenv("REPO_NAME", "")      # Repository name (e.g., "manjaro-awesome")
+REPO_SERVER_URL = os.getenv("REPO_SERVER_URL", "")  # Full URL to repository
 
-# Database name usually matches repo name
-REPO_DB_NAME = REPO_NAME
+# GPG configuration (optional)
+GPG_KEY_ID = os.getenv("GPG_KEY_ID", "")    # GPG key ID for signing
+GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY", "")  # GPG private key
 
-# --- PATHS (DYNAMIC) ---
-# All temporary paths include the repo name to avoid collisions
-MIRROR_TEMP_DIR = f"/tmp/{REPO_NAME}_mirror"
-SYNC_CLONE_DIR = f"/tmp/{REPO_NAME}_gitclone"
-
-# Local directories
-OUTPUT_DIR = "built_packages"
-BUILD_TRACKING_DIR = ".build_tracking"
-AUR_BUILD_DIR = "build_aur"
-
-# --- IDENTITIES & SECRETS ---
 # Packager identity
 PACKAGER_ID = os.getenv("PACKAGER_ENV", "Maintainer <no-reply@gshoots.hu>")
 
-# VPS Configuration (Loaded from Secrets)
-VPS_USER = os.getenv("VPS_USER", "")
-VPS_HOST = os.getenv("VPS_HOST", "")
-VPS_SSH_KEY = os.getenv("VPS_SSH_KEY", "")
-REMOTE_DIR = os.getenv("REMOTE_DIR", "")
+# ============================================================================
+# BUILD CONFIGURATION
+# ============================================================================
 
-# Git SSH Key for synchronization
-CI_PUSH_SSH_KEY = os.getenv("CI_PUSH_SSH_KEY", "")
-SSH_REPO_URL = f"git@github.com:{GITHUB_REPO}"
+# Local directories
+OUTPUT_DIR = "built_packages"               # Local output directory
+BUILD_TRACKING_DIR = ".buildtracking"       # Build tracking directory
 
-# GPG Configuration
-GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY", "")
-GPG_KEY_ID = os.getenv("GPG_KEY_ID", "")
+# AUR configuration
+AUR_URLS = [
+    "https://aur.archlinux.org/{pkg_name}.git",
+    "git://aur.archlinux.org/{pkg_name}.git"
+]
 
-# --- BUILD CONFIGURATION ---
+# Build directory names
+AUR_BUILD_DIR = "build_aur"
+
+# Temporary directories (POSIX invariant)
+MIRROR_TEMP_DIR = "/tmp/repo_mirror"
+SYNC_CLONE_DIR = "/tmp/manjaro-awesome-gitclone"
+
+# SSH options
 SSH_OPTIONS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "ConnectTimeout=30",
     "-o", "BatchMode=yes"
 ]
 
-# AUR Configuration
-AUR_URLS = [
-    "https://aur.archlinux.org/{pkg_name}.git",
-    "git://aur.archlinux.org/{pkg_name}.git"
-]
-
 # Build timeouts (seconds)
 MAKEPKG_TIMEOUT = {
-    "default": 3600,
-    "large_packages": 7200,
+    "default": 3600,        # 1 hour for normal packages
+    "large_packages": 7200, # 2 hours for large packages
+    "simplescreenrecorder": 5400,  # 1.5 hours
 }
 
-# Dependency mappings
+# Special dependency mappings
 SPECIAL_DEPENDENCIES = {
     "gtk2": ["gtk-doc", "docbook-xsl", "libxslt", "gobject-introspection"],
     "awesome-git": ["lua", "lgi", "imagemagick", "asciidoc"],
+    "awesome-freedesktop-git": ["lua", "lgi", "imagemagick", "asciidoc"],
+    "lain-git": ["lua", "lgi", "imagemagick", "asciidoc"],
+    "simplescreenrecorder": ["jack2"],
 }
 
-# Required tools
+# Required build tools
 REQUIRED_BUILD_TOOLS = [
     "make", "gcc", "pkg-config", "autoconf", "automake", 
     "libtool", "cmake", "meson", "ninja", "patch"
 ]
 
-# Debug mode
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+# Debug mode - when True, bypass logger for critical build output
+DEBUG_MODE = True

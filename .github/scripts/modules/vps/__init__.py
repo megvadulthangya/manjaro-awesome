@@ -1,7 +1,9 @@
 """
-VPS Modules
+VPS modules package
 """
-from .ssh_client import SSHClient
-from .rsync_client import RsyncClient
 
-__all__ = ['SSHClient', 'RsyncClient']
+from .db_manager import DBManager
+from .rsync_client import RsyncClient
+from .ssh_client import SSHClient
+
+__all__ = ['DBManager', 'RsyncClient', 'SSHClient']
