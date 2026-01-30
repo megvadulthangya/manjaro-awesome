@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
-      options: |
+      options: >-
         --volume ${{ github.workspace }}/pacman_cache:/var/cache/pacman/pkg
         --volume ${{ github.workspace }}/yay_cache:/home/builder/.cache/yay
         --volume ${{ github.workspace }}/vps_cache:/tmp/repo_mirror
