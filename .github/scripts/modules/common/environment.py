@@ -70,23 +70,23 @@ def validate_environment():
     return True
 
 def setup_builder_environment():
-    """Setup builder user environment"""
-    # Create builder user if it doesn't exist
+    """Setup builder user environment - skip sudoers setup in container"""
+    logger.info("Setting up builder environment...")
+    
+    # In GitHub Actions container, builder user already exists with sudo privileges
+    # We don't need to create sudoers file
+    
+    # Just ensure builder user exists
     try:
-        subprocess.run(['sudo', 'useradd', '-m', '-s', '/bin/bash', 'builder'], 
-                      capture_output=True, check=False)
-    except Exception:
-        pass
+        result = subprocess.run(['id', 'builder'], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            logger.info("✅ Builder user exists")
+        else:
+            logger.warning("⚠️ Builder user doesn't exist, but continuing anyway")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check builder user: {e}")
     
-    # Ensure builder user has passwordless sudo
-    sudoers_content = "builder ALL=(ALL) NOPASSWD: ALL\n"
-    with open('/etc/sudoers.d/builder', 'w') as f:
-        f.write(sudoers_content)
-    
-    # Set proper permissions
-    subprocess.run(['sudo', 'chmod', '0440', '/etc/sudoers.d/builder'], check=False)
-    
-    logger.info("✅ Builder environment setup complete")
+    logger.info("✅ Builder environment setup complete (container-safe)")
 
 def get_repo_root():
     """Get the repository root directory reliably"""

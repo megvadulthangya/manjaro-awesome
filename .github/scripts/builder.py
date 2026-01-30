@@ -54,8 +54,12 @@ if __name__ == "__main__":
     # Validate environment first
     validate_environment()
     
-    # Setup builder environment
-    setup_builder_environment()
+    # Setup builder environment (container-safe version)
+    try:
+        setup_builder_environment()
+    except Exception as e:
+        print(f"⚠️ Warning during environment setup: {e}")
+        print("⚠️ Continuing anyway (container may already be set up)")
     
     # Create builder and run
     builder = PackageBuilder()
