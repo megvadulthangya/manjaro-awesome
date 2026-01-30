@@ -651,7 +651,7 @@ class PackageBuilder:
     
     def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
         """Build a single package"""
-        print(f"\n--- Processing: {pkg_name} ({'AUR' if is_aur else 'Local')}) ---")
+        print(f"\n--- Processing: {pkg_name} ({'AUR' if is_aur else 'Local'}) ---")
         
         if is_aur:
             return self._build_aur_package(pkg_name)
