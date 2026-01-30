@@ -5,6 +5,7 @@ AUR Builder Module - Handles AUR package building logic
 import re
 import subprocess
 import logging
+from pathlib import Path
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,13 @@ class AURBuilder:
         
         print(f"\nInstalling {len(deps)} dependencies...")
         logger.info(f"Dependencies to install: {deps}")
+        
+        # CRITICAL FIX: Update pacman-key database first
+        print("🔄 Updating pacman-key database...")
+        cmd = "sudo pacman-key --updatedb"
+        result = self._run_cmd(cmd, log_cmd=True, check=False, timeout=300)
+        if result.returncode != 0:
+            logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
         
         # Clean dependency names
         clean_deps = []

@@ -250,6 +250,13 @@ class PackageBuilder:
             # CRITICAL FIX: Run pacman -Syy after enabling repository to force refresh
             if exists and has_packages:
                 logger.info("🔄 Synchronizing pacman databases after enabling repository...")
+                
+                # CRITICAL FIX: Update pacman-key database first
+                cmd = "sudo pacman-key --updatedb"
+                result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+                if result.returncode != 0:
+                    logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
+                
                 cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
                 result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
                 if result.returncode == 0:
@@ -273,6 +280,12 @@ class PackageBuilder:
         if not exists:
             logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
+        
+        # CRITICAL FIX: Update pacman-key database first
+        cmd = "sudo pacman-key --updatedb"
+        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+        if result.returncode != 0:
+            logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
         
         # CRITICAL FIX: Use Syy to force refresh instead of Sy
         cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
@@ -752,6 +765,14 @@ class PackageBuilder:
         
         return upload_success
     
+    def create_artifact_archive_for_github(self) -> Optional[Path]:
+        """
+        Create a tar.gz archive of all built artifacts for GitHub upload.
+        This avoids issues with colon (:) characters in package filenames.
+        """
+        log_path = Path("builder.log")
+        return self.artifact_manager.create_artifact_archive(self.output_dir, log_path)
+    
     def run(self):
         """Main execution with simplified repository discovery and proper GPG integration"""
         print("\n" + "=" * 60)
@@ -893,6 +914,18 @@ class PackageBuilder:
                 
                 # Clean up GPG even if no packages built
                 self.gpg_handler.cleanup()
+            
+            # STEP 8: Create artifact archive for GitHub upload
+            print("\n" + "=" * 60)
+            print("STEP 8: CREATING ARTIFACT ARCHIVE FOR GITHUB")
+            print("=" * 60)
+            
+            artifact_archive = self.create_artifact_archive_for_github()
+            if artifact_archive:
+                logger.info(f"✅ Artifact archive created: {artifact_archive.name}")
+                logger.info("📦 Upload this archive to GitHub to avoid colon character issues")
+            else:
+                logger.warning("⚠️ Failed to create artifact archive")
             
             elapsed = time.time() - self.stats["start_time"]
             summary = self.build_tracker.get_summary()
