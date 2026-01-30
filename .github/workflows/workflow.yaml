@@ -51,6 +51,8 @@ jobs:
 #          df -h
 #          echo "=== FREE -h AFTER ==="
 #          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
 
   build-and-deploy:
     name: Build and Deploy Packages
@@ -58,6 +60,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+      options: |
+        --volume ${{ github.workspace }}/pacman_cache:/var/cache/pacman/pkg
+        --volume ${{ github.workspace }}/yay_cache:/home/builder/.cache/yay
+        --volume ${{ github.workspace }}/vps_cache:/tmp/repo_mirror
+        --volume ${{ github.workspace }}/build_artifacts:/home/builder/build_artifacts
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
@@ -91,7 +98,7 @@ jobs:
       - name: Restore Pacman Package Cache
         uses: actions/cache@v4
         with:
-          path: /var/cache/pacman/pkg
+          path: ${{ github.workspace }}/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
           restore-keys: |
             ${{ runner.os }}-pacman-cache-
@@ -101,7 +108,7 @@ jobs:
       - name: Restore Yay AUR Cache
         uses: actions/cache@v4
         with:
-          path: /home/builder/.cache/yay
+          path: ${{ github.workspace }}/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
           restore-keys: |
             ${{ runner.os }}-yay-cache-
@@ -111,7 +118,7 @@ jobs:
       - name: Restore VPS Repository Mirror Cache
         uses: actions/cache@v4
         with:
-          path: /tmp/repo_mirror
+          path: ${{ github.workspace }}/vps_cache
           key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
           restore-keys: |
             ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-
@@ -123,7 +130,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            built_packages
+            ${{ github.workspace }}/build_artifacts
             build_aur
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
           restore-keys: |
@@ -172,7 +179,7 @@ jobs:
           echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - Yay cache: $(du -sh /home/builder/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
           echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - Built packages: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages: $(ls -1 ${{ github.workspace }}/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           
           # Skip key signing issues for system updates
@@ -216,8 +223,8 @@ jobs:
           # Create build directories with correct permissions (if they don't exist from cache)
           mkdir -p "$(pwd)/build_aur"
           chown -R builder:builder "$(pwd)/build_aur"
-          mkdir -p "$(pwd)/built_packages"
-          chown -R builder:builder "$(pwd)/built_packages"
+          mkdir -p "${{ github.workspace }}/build_artifacts"
+          chown -R builder:builder "${{ github.workspace }}/build_artifacts"
           mkdir -p "/tmp/repo_mirror"
           chown -R builder:builder "/tmp/repo_mirror"
           
@@ -551,7 +558,7 @@ jobs:
           
           echo "📊 Cache Status Before Build:"
           echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - Built packages in cache: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages in cache: $(ls -1 ${{ github.workspace }}/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           echo "  - VPS mirror cache: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - USE_CACHE environment variable: $USE_CACHE"
@@ -632,21 +639,21 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: /var/cache/pacman/pkg
+          path: ${{ github.workspace }}/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
 
       - name: Save Yay AUR Cache
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: /home/builder/.cache/yay
+          path: ${{ github.workspace }}/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
 
       - name: Save VPS Repository Mirror Cache
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: /tmp/repo_mirror
+          path: ${{ github.workspace }}/vps_cache
           key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
 
       - name: Save Built Packages Cache
@@ -654,7 +661,7 @@ jobs:
         if: always()
         with:
           path: |
-            built_packages
+            ${{ github.workspace }}/build_artifacts
             build_aur
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
 
@@ -666,7 +673,7 @@ jobs:
           path: |
             builder.log
             build_output.log
-            built_packages/
+            ${{ github.workspace }}/build_artifacts/
           retention-days: 7
           if-no-files-found: warn
 
@@ -674,10 +681,10 @@ jobs:
         if: always()
         run: |
           echo "=== Cache Status Report After Build ==="
-          echo "Pacman cache saved: $(du -sh /var/cache/pacman/pkg 2>/dev/null | cut -f1 || echo '0')"
-          echo "Built packages in cache: $(ls -1 built_packages/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "Pacman cache saved: $(du -sh ${{ github.workspace }}/pacman_cache 2>/dev/null | cut -f1 || echo '0')"
+          echo "Built packages in cache: $(ls -1 ${{ github.workspace }}/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
-          echo "VPS mirror cache: $(du -sh /tmp/repo_mirror 2>/dev/null | cut -f1 || echo '0')"
+          echo "VPS mirror cache: $(du -sh ${{ github.workspace }}/vps_cache 2>/dev/null | cut -f1 || echo '0')"
           echo ""
           echo "📊 Cache keys used:"
           echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"

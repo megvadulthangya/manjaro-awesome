@@ -241,7 +241,9 @@ class GPGHandler:
             output_path = Path(output_dir)
             files_to_sign = [
                 output_path / f"{repo_name}.db",
-                output_path / f"{repo_name}.files"
+                output_path / f"{repo_name}.db.tar.gz",
+                output_path / f"{repo_name}.files",
+                output_path / f"{repo_name}.files.tar.gz"
             ]
             
             signed_count = 0
@@ -254,9 +256,16 @@ class GPGHandler:
                 
                 logger.info(f"Signing repository database: {file_to_sign.name}")
                 
-                # Create detached signature
+                # Delete existing .sig file before signing
                 sig_file = file_to_sign.with_suffix(file_to_sign.suffix + '.sig')
+                if sig_file.exists():
+                    try:
+                        sig_file.unlink()
+                        logger.info(f"🗑️ Removed existing signature: {sig_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove existing signature {sig_file.name}: {e}")
                 
+                # Create detached signature
                 sign_process = subprocess.run(
                     [
                         'gpg', '--detach-sign',
