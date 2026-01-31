@@ -140,6 +140,7 @@ jobs:
       - name: Install Python and Dependencies
         run: |
           echo "=== Installing Python and Core Dependencies ==="
+          chmod -R 777 /var/cache/pacman/pkg
           pacman -Sy --noconfirm python python-yaml python-setuptools
           echo "✅ Python installed"
 
