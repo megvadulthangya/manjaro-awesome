@@ -588,18 +588,15 @@ class PackageBuilder:
             
             if build_result.returncode == 0:
                 moved = False
-                built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
-                    built_files.append(str(dest))
-                
-                # Sign the package after successful build
-                for built_file in built_files:
+                    
+                    # IMMEDIATELY AFTER moving the package, sign it
                     if self.gpg_handler.sign_packages_enabled:
-                        self.gpg_handler.sign_package(built_file)
+                        self.gpg_handler.sign_package(str(dest))
                 
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 
@@ -756,18 +753,15 @@ class PackageBuilder:
             
             if build_result.returncode == 0:
                 moved = False
-                built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
-                    built_files.append(str(dest))
-                
-                # Sign the package after successful build
-                for built_file in built_files:
+                    
+                    # IMMEDIATELY AFTER moving the package, sign it
                     if self.gpg_handler.sign_packages_enabled:
-                        self.gpg_handler.sign_package(built_file)
+                        self.gpg_handler.sign_package(str(dest))
                 
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
@@ -777,11 +771,8 @@ class PackageBuilder:
                     self.version_tracker.register_package_target_version(pkg_name, version)
                     
                     # Collect metadata for hokibot
-                    if built_files:
-                        # Simplified metadata extraction
-                        filename = os.path.basename(built_files[0])
-                        self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
-                        logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {version}")
+                    self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
+                    logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {version}")
                     
                     return True
                 else:

@@ -232,7 +232,7 @@ class GPGHandler:
     
     def sign_package(self, package_path):
         """
-        Sign individual package file with GPG
+        Sign individual package file with GPG using --detach-sign --no-armor
         
         Args:
             package_path: Path to the package file (.pkg.tar.zst)
@@ -250,6 +250,8 @@ class GPGHandler:
         
         try:
             package_path_obj = Path(package_path)
+            
+            # Check if file exists before signing
             if not package_path_obj.exists():
                 logger.error(f"Package file not found for signing: {package_path}")
                 return False
@@ -267,10 +269,10 @@ class GPGHandler:
             
             logger.info(f"Signing package: {package_path_obj.name}")
             
-            # Create detached signature
+            # Create detached signature with --no-armor (binary signature)
             sign_process = subprocess.run(
                 [
-                    'gpg', '--detach-sign',
+                    'gpg', '--detach-sign', '--no-armor',
                     '--default-key', self.gpg_key_id,
                     '--output', str(sig_file),
                     str(package_path_obj)
