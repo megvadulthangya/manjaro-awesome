@@ -2,6 +2,8 @@ name: Manjaro Package Builder
 
 on:
   workflow_dispatch:
+ # schedule:
+ #   - cron: '0 4 * * *'  # Daily at 4 AM UTC
   push:
     paths:
       - 'packages.py'
@@ -54,14 +56,10 @@ jobs:
 
   build-and-deploy:
     name: Build and Deploy Packages
+#    needs: cleanup
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
-      options: >-
-        --volume ${{ github.workspace }}/pacman_cache:/mnt/pacman_cache
-        --volume ${{ github.workspace }}/yay_cache:/mnt/yay_cache
-        --volume ${{ github.workspace }}/vps_cache:/mnt/vps_cache
-        --volume ${{ github.workspace }}/build_artifacts:/mnt/build_artifacts
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
@@ -91,39 +89,43 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # ================== CACHE: Pacman Package Cache ==================
+      # Cache for system packages to avoid re-downloading pacman packages every run
       - name: Restore Pacman Package Cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/pacman_cache
+          path: /mnt/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
           restore-keys: |
             ${{ runner.os }}-pacman-cache-
 
       # ================== CACHE: Yay AUR Cache ==================
+      # Cache for AUR packages to avoid re-downloading AUR dependencies
       - name: Restore Yay AUR Cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/yay_cache
+          path: /mnt/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
           restore-keys: |
             ${{ runner.os }}-yay-cache-
 
       # ================== CACHE: VPS Repository Mirror ==================
+      # Cache for remote VPS packages to avoid re-downloading from VPS every run
       - name: Restore VPS Repository Mirror Cache
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vps_cache
-          key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
+          path: /mnt/vps_cache
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
           restore-keys: |
-            ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-
+            ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-
             ${{ runner.os }}-vps-mirror-cache-
 
       # ================== CACHE: Built Packages ==================
+      # Cache for previously built packages to avoid rebuilding unchanged packages
       - name: Restore Built Packages Cache
         uses: actions/cache@v4
         with:
           path: |
-            ${{ github.workspace }}/build_artifacts
+            /mnt/build_artifacts
             build_aur
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
           restore-keys: |
@@ -134,64 +136,28 @@ jobs:
         run: |
           echo "=== Initializing Modular Cache with Symlinks ==="
           
-          # Link Pacman Cache
-          echo "Setting up Pacman cache symlink..."
-          rm -rf /var/cache/pacman/pkg
           mkdir -p /mnt/pacman_cache
-          ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
-          
-          # Link Yay Cache - create parent directory first
-          echo "Setting up Yay cache symlink..."
-          mkdir -p /home/builder/.cache
           mkdir -p /mnt/yay_cache
-          ln -sf /mnt/yay_cache /home/builder/.cache/yay
-          
-          # Link VPS Mirror Cache
-          echo "Setting up VPS mirror cache symlink..."
           mkdir -p /mnt/vps_cache
-          ln -sf /mnt/vps_cache /tmp/repo_mirror
-          
-          # Link Build Artifacts Cache - create parent directory first
-          echo "Setting up build artifacts symlink..."
-          mkdir -p /home/builder
           mkdir -p /mnt/build_artifacts
-          ln -sf /mnt/build_artifacts /home/builder/build_artifacts
-          
-          # Set liberal permissions on all /mnt directories (as root)
-          echo "Setting permissions on /mnt cache directories..."
-          chmod -R 777 /mnt/
-          
-          # Verify symlinks
-          echo "✅ Cache symlinks created:"
-          ls -la /var/cache/pacman/pkg
-          ls -la /home/builder/.cache/yay
-          ls -la /tmp/repo_mirror
-          ls -la /home/builder/build_artifacts
+
+          rm -rf /var/cache/pacman/pkg
+          ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
+
+          mkdir -p /root/.cache
+          ln -sf /mnt/yay_cache /root/.cache/yay
+
+          ln -sf /mnt/vps_cache /tmp/repo_mirror
+          # Use a neutral path for artifacts initially
+          ln -sf /mnt/build_artifacts /tmp/build_artifacts
+
+          chmod -R 777 /mnt
 
       - name: Install Python and Dependencies
         run: |
           echo "=== Installing Python and Core Dependencies ==="
-          
-          # Disable signature checking temporarily to avoid key issues
-          echo "Setting up pacman for initial installation..."
-          cp /etc/pacman.conf /etc/pacman.conf.backup
-          sed -i 's/^SigLevel.*/SigLevel = Never/' /etc/pacman.conf
-          
-          echo "Updating package databases..."
-          pacman -Syy --noconfirm
-          
-          echo "Installing Python and essential tools..."
-          pacman -S --noconfirm \
-            python python-yaml python-setuptools \
-            git base-devel sudo \
-            python-pip python-requests python-gitpython \
-            pacman-contrib curl wget ca-certificates \
-            openssh rsync gnupg
-          
-          # Restore original pacman.conf
-          mv /etc/pacman.conf.backup /etc/pacman.conf
-          
-          echo "✅ Python and dependencies installed"
+          pacman -Sy --noconfirm python python-yaml python-setuptools
+          echo "✅ Python installed"
 
       - name: Run Preflight Checker
         run: |
@@ -227,9 +193,9 @@ jobs:
           # Display cache status
           echo "📊 Cache Status Report:"
           echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - Yay cache: $(du -sh /home/builder/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
+          echo "  - Yay cache: $(du -sh /root/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
           echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - Built packages: $(ls -1 /home/builder/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages: $(ls -1 /tmp/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           
           # Skip key signing issues for system updates
@@ -275,6 +241,11 @@ jobs:
           chown -R builder:builder "$(pwd)/build_aur"
           mkdir -p "/tmp/repo_mirror"
           chown -R builder:builder "/tmp/repo_mirror"
+          
+          # Link yay cache and build artifacts to builder's home
+          mkdir -p /home/builder/.cache
+          ln -sf /mnt/yay_cache /home/builder/.cache/yay
+          ln -sf /mnt/build_artifacts /home/builder/build_artifacts
           
           # Optimize makepkg for faster builds
           echo "Optimizing makepkg configuration..."
@@ -445,7 +416,7 @@ jobs:
             else
               echo "❌ yay installation failed"
             fi
-          else:
+          else
             echo "✅ yay already installed (from cache)"
             sudo -u builder yay --version
           fi
@@ -597,7 +568,7 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GITHUB_REPO: ${{ github.repository }}.git
           PYTHONPATH: ${{ github.workspace }}/.github/scripts
-          USE_CACHE: "true"
+          USE_CACHE: "true"  # Enable cache-aware building
         run: |
           echo "=== Starting Builder with Cache Optimization ==="
           
@@ -635,7 +606,7 @@ jobs:
             else
               echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
             fi
-          else:
+          else
             echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
           fi
           
@@ -682,33 +653,34 @@ jobs:
           exit $BUILD_STATUS
 
       # ================== SAVE CACHES ==================
+      # Save caches after successful build (or even on failure for debugging)
       - name: Save Pacman Package Cache
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: ${{ github.workspace }}/pacman_cache
+          path: /mnt/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
 
       - name: Save Yay AUR Cache
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: ${{ github.workspace }}/yay_cache
+          path: /mnt/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
 
       - name: Save VPS Repository Mirror Cache
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: ${{ github.workspace }}/vps_cache
-          key: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}
+          path: /mnt/vps_cache
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
 
       - name: Save Built Packages Cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: |
-            ${{ github.workspace }}/build_artifacts
+            /mnt/build_artifacts
             build_aur
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
 
@@ -720,7 +692,7 @@ jobs:
           path: |
             builder.log
             build_output.log
-            ${{ github.workspace }}/build_artifacts/
+            /mnt/build_artifacts/
           retention-days: 7
           if-no-files-found: warn
 
@@ -728,15 +700,15 @@ jobs:
         if: always()
         run: |
           echo "=== Cache Status Report After Build ==="
-          echo "Pacman cache saved: $(du -sh ${{ github.workspace }}/pacman_cache 2>/dev/null | cut -f1 || echo '0')"
-          echo "Built packages in cache: $(ls -1 ${{ github.workspace }}/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "Pacman cache saved: $(du -sh /mnt/pacman_cache 2>/dev/null | cut -f1 || echo '0')"
+          echo "Built packages in cache: $(ls -1 /mnt/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
-          echo "VPS mirror cache: $(du -sh ${{ github.workspace }}/vps_cache 2>/dev/null | cut -f1 || echo '0')"
+          echo "VPS mirror cache: $(du -sh /mnt/vps_cache 2>/dev/null | cut -f1 || echo '0')"
           echo ""
           echo "📊 Cache keys used:"
           echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
           echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
-          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-${{ secrets.VPS_HOST }}-${{ secrets.REPO_NAME }}-${{ hashFiles('packages.py') }}"
+          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}"
           echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}"
 
       - name: Cleanup Temporary Directories (Preserve Cache)
