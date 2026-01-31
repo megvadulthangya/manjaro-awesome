@@ -10,6 +10,48 @@ on:
       - '**/PKGBUILD'
 
 jobs:
+#  cleanup:
+#    name: Cleanup Disk Space
+#    runs-on: ubuntu-latest
+#    
+#    steps:
+#      - name: Checkout Code
+#        uses: actions/checkout@v4
+#
+#      - name: Disk usage BEFORE cleanup
+#        run: |
+#          echo "=== DF -h BEFORE ==="
+#          df -h
+#          echo "=== FREE -h BEFORE ==="
+#          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
+#
+#      - name: Free Disk Space (Comprehensive Cleanup)
+#        uses: jlumbroso/free-disk-space@main
+#        with:
+#          tool-cache: true
+#          android: true
+#          dotnet: true
+#          haskell: true
+#          large-packages: true
+#          docker-images: true
+#          swap-storage: true
+#          remove-android: true
+#          remove-dotnet: true
+#          remove-haskell: true
+#          remove-docker: true
+#          force-remove-all-additional-packages: true
+#
+#      - name: Disk usage AFTER cleanup
+#        run: |
+#          echo "=== DF -h AFTER ==="
+#          df -h
+#          echo "=== FREE -h AFTER ==="
+#          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
+
   build-and-deploy:
     name: Build and Deploy Packages
     runs-on: ubuntu-latest
@@ -96,22 +138,24 @@ jobs:
           echo "Setting up Pacman cache symlink..."
           rm -rf /var/cache/pacman/pkg
           mkdir -p /mnt/pacman_cache
-          ln -s /mnt/pacman_cache /var/cache/pacman/pkg
+          ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
           
-          # Link Yay Cache (create parent dir first)
+          # Link Yay Cache - create parent directory first
           echo "Setting up Yay cache symlink..."
+          mkdir -p /home/builder/.cache
           mkdir -p /mnt/yay_cache
-          ln -s /mnt/yay_cache /home/builder/.cache/yay
+          ln -sf /mnt/yay_cache /home/builder/.cache/yay
           
           # Link VPS Mirror Cache
           echo "Setting up VPS mirror cache symlink..."
           mkdir -p /mnt/vps_cache
-          ln -s /mnt/vps_cache /tmp/repo_mirror
+          ln -sf /mnt/vps_cache /tmp/repo_mirror
           
-          # Link Build Artifacts Cache
+          # Link Build Artifacts Cache - create parent directory first
           echo "Setting up build artifacts symlink..."
+          mkdir -p /home/builder
           mkdir -p /mnt/build_artifacts
-          ln -s /mnt/build_artifacts /home/builder/build_artifacts
+          ln -sf /mnt/build_artifacts /home/builder/build_artifacts
           
           # Set liberal permissions on all /mnt directories (as root)
           echo "Setting permissions on /mnt cache directories..."
@@ -401,7 +445,7 @@ jobs:
             else
               echo "❌ yay installation failed"
             fi
-          else
+          else:
             echo "✅ yay already installed (from cache)"
             sudo -u builder yay --version
           fi
@@ -591,7 +635,7 @@ jobs:
             else
               echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
             fi
-          else
+          else:
             echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
           fi
           
