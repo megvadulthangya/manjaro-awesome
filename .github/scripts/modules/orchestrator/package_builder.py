@@ -11,6 +11,8 @@ import shutil
 import tempfile
 import time
 import glob
+import json
+import urllib.request
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -417,6 +419,101 @@ class PackageBuilder:
                 logger.error(f"Error: {result.stderr[:500]}")
             return False
     
+    def _fetch_aur_version(self, pkg_name: str) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        Fetch the current version of an AUR package using the AUR RPC API
+        
+        Args:
+            pkg_name: Name of the AUR package
+            
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or None if failed
+        """
+        try:
+            url = f"https://aur.archlinux.org/rpc/?v=5&type=info&arg[]={pkg_name}"
+            logger.info(f"📡 Fetching AUR version for {pkg_name} from {url}")
+            
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                if data.get('resultcount', 0) > 0:
+                    result = data['results'][0]
+                    version = result.get('Version', '')
+                    
+                    if version:
+                        logger.info(f"📦 AUR version for {pkg_name}: {version}")
+                        
+                        # Parse version string (e.g., "1.2.3-1" or "2:1.2.3-1")
+                        if ':' in version:
+                            epoch_part, rest = version.split(':', 1)
+                            epoch = epoch_part.strip()
+                        else:
+                            epoch = None
+                            rest = version
+                        
+                        if '-' in rest:
+                            pkgver, pkgrel = rest.rsplit('-', 1)
+                            pkgver = pkgver.strip()
+                            pkgrel = pkgrel.strip()
+                        else:
+                            pkgver = rest.strip()
+                            pkgrel = '1'
+                        
+                        return pkgver, pkgrel, epoch
+                    else:
+                        logger.warning(f"⚠️ No version found for {pkg_name} in AUR response")
+                else:
+                    logger.warning(f"⚠️ Package {pkg_name} not found in AUR")
+                    
+        except urllib.error.URLError as e:
+            logger.error(f"❌ Network error fetching AUR version for {pkg_name}: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON decode error for {pkg_name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error fetching AUR version for {pkg_name}: {e}")
+        
+        return None
+    
+    def _get_local_version(self, pkg_dir: Path) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        Get version from local PKGBUILD or .SRCINFO
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or None if failed
+        """
+        try:
+            return self.version_manager.extract_version_from_srcinfo(pkg_dir)
+        except Exception as e:
+            logger.error(f"❌ Failed to extract version from {pkg_dir}: {e}")
+            
+            # Fallback: try to parse PKGBUILD directly
+            pkgbuild_path = pkg_dir / "PKGBUILD"
+            if pkgbuild_path.exists():
+                try:
+                    with open(pkgbuild_path, 'r') as f:
+                        content = f.read()
+                    
+                    # Simple regex to extract pkgver and pkgrel
+                    pkgver_match = re.search(r'pkgver=([^\s\']+)', content)
+                    pkgrel_match = re.search(r'pkgrel=([^\s\']+)', content)
+                    epoch_match = re.search(r'epoch=([^\s\']+)', content)
+                    
+                    if pkgver_match and pkgrel_match:
+                        pkgver = pkgver_match.group(1).strip('"\'')
+                        pkgrel = pkgrel_match.group(1).strip('"\'')
+                        epoch = epoch_match.group(1).strip('"\'') if epoch_match else None
+                        
+                        logger.info(f"📦 Parsed version from PKGBUILD: pkgver={pkgver}, pkgrel={pkgrel}, epoch={epoch}")
+                        return pkgver, pkgrel, epoch
+                    
+                except Exception as e2:
+                    logger.error(f"❌ Failed to parse PKGBUILD: {e2}")
+            
+            return None
+    
     def package_exists(self, pkg_name: str, version=None) -> bool:
         """Check if package exists on server"""
         return self.version_tracker.package_exists(pkg_name, self.remote_files)
@@ -426,7 +523,33 @@ class PackageBuilder:
         return self.version_tracker.get_remote_version(pkg_name, self.remote_files)
     
     def _build_aur_package(self, pkg_name: str) -> bool:
-        """Build AUR package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
+        """Build AUR package with proper version checking and signing"""
+        # Step 1: Fetch current version from AUR
+        aur_version_info = self._fetch_aur_version(pkg_name)
+        if not aur_version_info:
+            logger.error(f"❌ Failed to fetch AUR version for {pkg_name}")
+            return False
+        
+        pkgver, pkgrel, epoch = aur_version_info
+        aur_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
+        
+        # Step 2: Get remote version
+        remote_version = self.get_remote_version(pkg_name)
+        
+        # Step 3: Compare versions
+        if remote_version:
+            should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
+            if not should_build:
+                logger.info(f"✅ {pkg_name}: AUR version {aur_version} matches remote version {remote_version} - SKIPPING")
+                self.skipped_packages.append(f"{pkg_name} ({aur_version})")
+                self.version_tracker.register_skipped_package(pkg_name, remote_version)
+                return False
+            else:
+                logger.info(f"🔄 {pkg_name}: AUR version {aur_version} is NEWER than remote {remote_version} - BUILDING")
+        else:
+            logger.info(f"🔄 {pkg_name}: No remote version found, building AUR version {aur_version}")
+        
+        # Step 4: Clone and build
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
         
@@ -434,28 +557,28 @@ class PackageBuilder:
         if pkg_dir.exists():
             shutil.rmtree(pkg_dir, ignore_errors=True)
         
-        print(f"Cloning {pkg_name} from AUR...")
+        logger.info(f"📥 Cloning {pkg_name} from AUR...")
         
-        # Try different AUR URLs from config (ALWAYS FRESH CLONE)
+        # Try different AUR URLs from config
         clone_success = False
         for aur_url_template in self.aur_urls:
             aur_url = aur_url_template.format(pkg_name=pkg_name)
-            logger.info(f"Trying AUR URL: {aur_url}")
+            logger.info(f"   Trying AUR URL: {aur_url}")
             result = self.shell_executor.run_command(
                 f"git clone --depth 1 {aur_url} {pkg_dir}",
                 check=False
             )
             if result and result.returncode == 0:
                 clone_success = True
-                logger.info(f"Successfully cloned {pkg_name} from {aur_url}")
+                logger.info(f"   Successfully cloned {pkg_name} from {aur_url}")
                 break
             else:
                 if pkg_dir.exists():
                     shutil.rmtree(pkg_dir, ignore_errors=True)
-                logger.warning(f"Failed to clone from {aur_url}")
+                logger.warning(f"   Failed to clone from {aur_url}")
         
         if not clone_success:
-            logger.error(f"Failed to clone {pkg_name} from any AUR URL")
+            logger.error(f"❌ Failed to clone {pkg_name} from any AUR URL")
             return False
         
         # Set correct permissions
@@ -463,61 +586,34 @@ class PackageBuilder:
         
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
-            logger.error(f"No PKGBUILD found for {pkg_name}")
+            logger.error(f"❌ No PKGBUILD found for {pkg_name}")
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
         
-        # Extract version info from SRCINFO (not regex)
         try:
-            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
-            version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
-            
-            # Get remote version for comparison
-            remote_version = self.get_remote_version(pkg_name)
-            
-            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
-            if remote_version and not self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch):
-                logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
-                self.skipped_packages.append(f"{pkg_name} ({version})")
-                
-                # ZERO-RESIDUE FIX: Register the target version for this skipped package
-                self.version_tracker.register_skipped_package(pkg_name, remote_version)
-                
-                shutil.rmtree(pkg_dir, ignore_errors=True)
-                return False
-            
-            if remote_version:
-                logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
-                
-                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
-                self.cleanup_manager.pre_build_purge_old_versions(pkg_name, remote_version)
-            else:
-                logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
-                
-        except Exception as e:
-            logger.error(f"Failed to extract version for {pkg_name}: {e}")
-            version = "unknown"
-        
-        try:
-            logger.info(f"Building {pkg_name} ({version})...")
+            logger.info(f"🔨 Building {pkg_name} ({aur_version})...")
             
             # Clean workspace before building
             self.artifact_manager.clean_workspace(pkg_dir)
             
-            print("Downloading sources...")
-            source_result = self.shell_executor.run_command(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True, timeout=600,
-                                        extra_env={"PACKAGER": self.packager_id})
+            # Download sources
+            logger.info("   Downloading sources...")
+            source_result = self.shell_executor.run_command(
+                f"makepkg -od --noconfirm",
+                cwd=pkg_dir,
+                check=False,
+                capture=True,
+                timeout=600,
+                extra_env={"PACKAGER": self.packager_id}
+            )
+            
             if source_result.returncode != 0:
-                logger.error(f"Failed to download sources for {pkg_name}")
+                logger.error(f"❌ Failed to download sources for {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
             
-            # CRITICAL FIX: Install dependencies with AUR fallback
-            print("Installing dependencies with AUR fallback...")
-            
-            # First attempt: Standard makepkg -si
-            print("Building package (first attempt)...")
+            # Build package
+            logger.info("   Building package...")
             build_result = self.shell_executor.run_command(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
@@ -527,163 +623,105 @@ class PackageBuilder:
                 extra_env={"PACKAGER": self.packager_id}
             )
             
-            # If first attempt fails, try yay fallback for missing dependencies
             if build_result.returncode != 0:
-                logger.warning(f"First build attempt failed for {pkg_name}, trying AUR dependency fallback...")
-                
-                # Extract missing dependencies from error output
-                error_output = build_result.stderr if build_result.stderr else build_result.stdout
-                missing_deps = []
-                
-                # Look for patterns like "error: target not found: <package>"
-                import re
-                missing_patterns = [
-                    r"error: target not found: (\S+)",
-                    r"Could not find all required packages:",
-                    r":: Unable to find (\S+)",
-                ]
-                
-                for pattern in missing_patterns:
-                    matches = re.findall(pattern, error_output)
-                    if matches:
-                        missing_deps.extend(matches)
-                
-                # Also look for specific makepkg dependency errors
-                if "makepkg: cannot find the" in error_output:
-                    lines = error_output.split('\n')
-                    for line in lines:
-                        if "makepkg: cannot find the" in line:
-                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
-                            dep_match = re.search(r"cannot find the '([^']+)'", line)
-                            if dep_match:
-                                missing_deps.append(dep_match.group(1))
-                
-                # Remove duplicates
-                missing_deps = list(set(missing_deps))
-                
-                if missing_deps:
-                    logger.info(f"Found missing dependencies: {missing_deps}")
-                    
-                    # CRITICAL FIX: Use Syy for dependency resolution
-                    deps_str = ' '.join(missing_deps)
-                    yay_cmd = f"LC_ALL=C yay -Syy --needed --noconfirm {deps_str}"
-                    yay_result = self.shell_executor.run_command(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
-                    
-                    if yay_result.returncode == 0:
-                        logger.info("✅ Missing dependencies installed via yay, retrying build...")
-                        
-                        # Retry the build
-                        build_result = self.shell_executor.run_command(
-                            f"makepkg -si --noconfirm --clean --nocheck",
-                            cwd=pkg_dir,
-                            capture=True,
-                            check=False,
-                            timeout=3600,
-                            extra_env={"PACKAGER": self.packager_id}
-                        )
-                    else:
-                        logger.error(f"❌ Failed to install missing dependencies with yay")
-                        shutil.rmtree(pkg_dir, ignore_errors=True)
-                        return False
+                logger.error(f"❌ Failed to build {pkg_name}")
+                shutil.rmtree(pkg_dir, ignore_errors=True)
+                return False
             
-            if build_result.returncode == 0:
-                moved = False
-                for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
-                    dest = self.output_dir / pkg_file.name
-                    shutil.move(str(pkg_file), str(dest))
-                    logger.info(f"✅ Built: {pkg_file.name}")
-                    moved = True
-                    
-                    # IMMEDIATELY AFTER moving the package, sign it
-                    if self.gpg_handler.sign_packages_enabled:
-                        self.gpg_handler.sign_package(str(dest))
+            # Move and sign built packages
+            moved = False
+            for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
+                dest = self.output_dir / pkg_file.name
+                shutil.move(str(pkg_file), str(dest))
+                logger.info(f"✅ Built: {pkg_file.name}")
+                moved = True
                 
-                shutil.rmtree(pkg_dir, ignore_errors=True)
-                
-                if moved:
-                    self.built_packages.append(f"{pkg_name} ({version})")
-                    # ZERO-RESIDUE FIX: Register the target version for this built package
-                    self.version_tracker.register_package_target_version(pkg_name, version)
-                    return True
-                else:
-                    logger.error(f"No package files created for {pkg_name}")
-                    return False
+                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
+                print(f"🔐 Attempting to sign: {dest}")
+                if not self.gpg_handler.sign_package(str(dest)):
+                    logger.error(f"❌ Failed to sign package: {dest}")
+                    # Continue anyway - the package is built but not signed
+            
+            shutil.rmtree(pkg_dir, ignore_errors=True)
+            
+            if moved:
+                self.built_packages.append(f"{pkg_name} ({aur_version})")
+                self.version_tracker.register_package_target_version(pkg_name, aur_version)
+                return True
             else:
-                logger.error(f"Failed to build {pkg_name}")
-                shutil.rmtree(pkg_dir, ignore_errors=True)
+                logger.error(f"❌ No package files created for {pkg_name}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error building {pkg_name}: {e}")
+            logger.error(f"❌ Error building {pkg_name}: {e}")
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
     
     def _build_local_package(self, pkg_name: str) -> bool:
-        """Build local package with SRCINFO-based version comparison and PACKAGER injection - FIXED: AUR dependency fallback"""
+        """Build local package with proper version checking and signing"""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
-            logger.error(f"Package directory not found: {pkg_name}")
+            logger.error(f"❌ Package directory not found: {pkg_name}")
             return False
         
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
-            logger.error(f"No PKGBUILD found for {pkg_name}")
+            logger.error(f"❌ No PKGBUILD found for {pkg_name}")
             return False
         
-        # Extract version info from SRCINFO (not regex)
-        try:
-            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
-            version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
-            
-            # Get remote version for comparison
-            remote_version = self.get_remote_version(pkg_name)
-            
-            # DECISION LOGIC: Only build if AUR_VERSION > REMOTE_VERSION
-            if remote_version and not self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch):
-                logger.info(f"✅ {pkg_name} already up to date on server ({remote_version}) - skipping")
-                self.skipped_packages.append(f"{pkg_name} ({version})")
-                
-                # ZERO-RESIDUE FIX: Register the target version for this skipped package
+        # Step 1: Get local version from PKGBUILD
+        local_version_info = self._get_local_version(pkg_dir)
+        if not local_version_info:
+            logger.error(f"❌ Failed to extract version for {pkg_name}")
+            return False
+        
+        pkgver, pkgrel, epoch = local_version_info
+        local_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
+        
+        # Step 2: Get remote version
+        remote_version = self.get_remote_version(pkg_name)
+        
+        # Step 3: Compare versions
+        if remote_version:
+            should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
+            if not should_build:
+                logger.info(f"✅ {pkg_name}: Local version {local_version} matches remote version {remote_version} - SKIPPING")
+                self.skipped_packages.append(f"{pkg_name} ({local_version})")
                 self.version_tracker.register_skipped_package(pkg_name, remote_version)
-                
                 return False
-            
-            if remote_version:
-                logger.info(f"ℹ️  {pkg_name}: remote has {remote_version}, building {version}")
-                
-                # PRE-BUILD PURGE: Remove old version files BEFORE building new version
-                self.cleanup_manager.pre_build_purge_old_versions(pkg_name, remote_version)
             else:
-                logger.info(f"ℹ️  {pkg_name}: not on server, building {version}")
-                
-        except Exception as e:
-            logger.error(f"Failed to extract version for {pkg_name}: {e}")
-            version = "unknown"
+                logger.info(f"🔄 {pkg_name}: Local version {local_version} is NEWER than remote {remote_version} - BUILDING")
+        else:
+            logger.info(f"🔄 {pkg_name}: No remote version found, building local version {local_version}")
         
         try:
-            logger.info(f"Building {pkg_name} ({version})...")
+            logger.info(f"🔨 Building {pkg_name} ({local_version})...")
             
             # Clean workspace before building
             self.artifact_manager.clean_workspace(pkg_dir)
             
-            print("Downloading sources...")
-            source_result = self.shell_executor.run_command(f"makepkg -od --noconfirm", 
-                                        cwd=pkg_dir, check=False, capture=True, timeout=600,
-                                        extra_env={"PACKAGER": self.packager_id})
+            # Download sources
+            logger.info("   Downloading sources...")
+            source_result = self.shell_executor.run_command(
+                f"makepkg -od --noconfirm",
+                cwd=pkg_dir,
+                check=False,
+                capture=True,
+                timeout=600,
+                extra_env={"PACKAGER": self.packager_id}
+            )
+            
             if source_result.returncode != 0:
-                logger.error(f"Failed to download sources for {pkg_name}")
+                logger.error(f"❌ Failed to download sources for {pkg_name}")
                 return False
             
-            # CRITICAL FIX: Install dependencies with AUR fallback
-            print("Installing dependencies with AUR fallback...")
-            
-            # First attempt: Standard makepkg with appropriate flags
+            # Build package with appropriate flags
             makepkg_flags = "-si --noconfirm --clean"
             if pkg_name == "gtk2":
                 makepkg_flags += " --nocheck"
-                logger.info("GTK2: Skipping check step (long)")
+                logger.info("   GTK2: Skipping check step (long)")
             
-            print("Building package (first attempt)...")
+            logger.info("   Building package...")
             build_result = self.shell_executor.run_command(
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
@@ -693,97 +731,40 @@ class PackageBuilder:
                 extra_env={"PACKAGER": self.packager_id}
             )
             
-            # If first attempt fails, try yay fallback for missing dependencies
             if build_result.returncode != 0:
-                logger.warning(f"First build attempt failed for {pkg_name}, trying AUR dependency fallback...")
-                
-                # Extract missing dependencies from error output
-                error_output = build_result.stderr if build_result.stderr else build_result.stdout
-                missing_deps = []
-                
-                # Look for patterns like "error: target not found: <package>"
-                import re
-                missing_patterns = [
-                    r"error: target not found: (\S+)",
-                    r"Could not find all required packages:",
-                    r":: Unable to find (\S+)",
-                ]
-                
-                for pattern in missing_patterns:
-                    matches = re.findall(pattern, error_output)
-                    if matches:
-                        missing_deps.extend(matches)
-                
-                # Also look for specific makepkg dependency errors
-                if "makepkg: cannot find the" in error_output:
-                    lines = error_output.split('\n')
-                    for line in lines:
-                        if "makepkg: cannot find the" in line:
-                            # Extract package name from line like "makepkg: cannot find the 'gcc14' package"
-                            dep_match = re.search(r"cannot find the '([^']+)'", line)
-                            if dep_match:
-                                missing_deps.append(dep_match.group(1))
-                
-                # Remove duplicates
-                missing_deps = list(set(missing_deps))
-                
-                if missing_deps:
-                    logger.info(f"Found missing dependencies: {missing_deps}")
-                    
-                    # CRITICAL FIX: Use Syy for dependency resolution
-                    deps_str = ' '.join(missing_deps)
-                    yay_cmd = f"LC_ALL=C yay -Syy --needed --noconfirm {deps_str}"
-                    yay_result = self.shell_executor.run_command(yay_cmd, log_cmd=True, check=False, user="builder", timeout=1800)
-                    
-                    if yay_result.returncode == 0:
-                        logger.info("✅ Missing dependencies installed via yay, retrying build...")
-                        
-                        # Retry the build
-                        build_result = self.shell_executor.run_command(
-                            f"makepkg {makepkg_flags}",
-                            cwd=pkg_dir,
-                            capture=True,
-                            check=False,
-                            timeout=3600,
-                            extra_env={"PACKAGER": self.packager_id}
-                        )
-                    else:
-                        logger.error(f"❌ Failed to install missing dependencies with yay")
-                        return False
+                logger.error(f"❌ Failed to build {pkg_name}")
+                return False
             
-            if build_result.returncode == 0:
-                moved = False
-                for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
-                    dest = self.output_dir / pkg_file.name
-                    shutil.move(str(pkg_file), str(dest))
-                    logger.info(f"✅ Built: {pkg_file.name}")
-                    moved = True
-                    
-                    # IMMEDIATELY AFTER moving the package, sign it
-                    if self.gpg_handler.sign_packages_enabled:
-                        self.gpg_handler.sign_package(str(dest))
+            # Move and sign built packages
+            moved = False
+            for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
+                dest = self.output_dir / pkg_file.name
+                shutil.move(str(pkg_file), str(dest))
+                logger.info(f"✅ Built: {pkg_file.name}")
+                moved = True
                 
-                if moved:
-                    self.built_packages.append(f"{pkg_name} ({version})")
-                    self.rebuilt_local_packages.append(pkg_name)
-                    
-                    # ZERO-RESIDUE FIX: Register the target version for this built package
-                    self.version_tracker.register_package_target_version(pkg_name, version)
-                    
-                    # Collect metadata for hokibot
-                    self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
-                    logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {version}")
-                    
-                    return True
-                else:
-                    logger.error(f"No package files created for {pkg_name}")
-                    return False
+                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
+                print(f"🔐 Attempting to sign: {dest}")
+                if not self.gpg_handler.sign_package(str(dest)):
+                    logger.error(f"❌ Failed to sign package: {dest}")
+                    # Continue anyway - the package is built but not signed
+            
+            if moved:
+                self.built_packages.append(f"{pkg_name} ({local_version})")
+                self.rebuilt_local_packages.append(pkg_name)
+                self.version_tracker.register_package_target_version(pkg_name, local_version)
+                
+                # Collect metadata for hokibot
+                self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
+                logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {local_version}")
+                
+                return True
             else:
-                logger.error(f"Failed to build {pkg_name}")
+                logger.error(f"❌ No package files created for {pkg_name}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error building {pkg_name}: {e}")
+            logger.error(f"❌ Error building {pkg_name}: {e}")
             return False
     
     def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
@@ -946,6 +927,8 @@ class PackageBuilder:
             # STEP 2: List remote packages for version comparison
             remote_packages = self.ssh_client.list_remote_packages()
             self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
+            
+            logger.info(f"📊 Found {len(self.remote_files)} remote packages for version comparison")
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
             # But check cache first

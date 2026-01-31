@@ -267,16 +267,22 @@ class GPGHandler:
                 except Exception as e:
                     logger.warning(f"Could not remove existing signature {sig_file.name}: {e}")
             
-            logger.info(f"Signing package: {package_path_obj.name}")
+            logger.info(f"🚀 Attempting to sign: {package_path_obj.name}")
+            logger.info(f"   Using GPG key: {self.gpg_key_id}")
+            logger.info(f"   Output signature: {sig_file.name}")
             
             # Create detached signature with --no-armor (binary signature)
+            sign_cmd = [
+                'gpg', '--detach-sign', '--no-armor',
+                '--default-key', self.gpg_key_id,
+                '--output', str(sig_file),
+                str(package_path_obj)
+            ]
+            
+            logger.info(f"   Command: {' '.join(sign_cmd)}")
+            
             sign_process = subprocess.run(
-                [
-                    'gpg', '--detach-sign', '--no-armor',
-                    '--default-key', self.gpg_key_id,
-                    '--output', str(sig_file),
-                    str(package_path_obj)
-                ],
+                sign_cmd,
                 capture_output=True,
                 text=True,
                 env=self.gpg_env,
@@ -284,18 +290,43 @@ class GPGHandler:
             )
             
             if sign_process.returncode == 0:
-                logger.info(f"✅ Created package signature: {sig_file.name}")
+                logger.info(f"✅ Successfully created package signature: {sig_file.name}")
                 
                 # Verify the signature was created
                 if sig_file.exists():
                     sig_size = sig_file.stat().st_size
-                    logger.debug(f"Signature file created: {sig_size} bytes")
+                    logger.info(f"   Signature file size: {sig_size} bytes")
+                    
+                    # Verify the signature
+                    verify_cmd = [
+                        'gpg', '--verify',
+                        str(sig_file),
+                        str(package_path_obj)
+                    ]
+                    
+                    verify_process = subprocess.run(
+                        verify_cmd,
+                        capture_output=True,
+                        text=True,
+                        env=self.gpg_env,
+                        check=False
+                    )
+                    
+                    if verify_process.returncode == 0:
+                        logger.info(f"✅ Signature verification passed for {package_path_obj.name}")
+                    else:
+                        logger.warning(f"⚠️ Signature verification failed: {verify_process.stderr[:200]}")
+                    
                     return True
                 else:
                     logger.error(f"❌ Signature file not created: {sig_file}")
                     return False
             else:
-                logger.error(f"❌ Failed to sign package {package_path_obj.name}: {sign_process.stderr[:200]}")
+                logger.error(f"❌ Failed to sign package {package_path_obj.name}")
+                if sign_process.stdout:
+                    logger.error(f"   STDOUT: {sign_process.stdout[:200]}")
+                if sign_process.stderr:
+                    logger.error(f"   STDERR: {sign_process.stderr[:200]}")
                 return False
                 
         except Exception as e:
