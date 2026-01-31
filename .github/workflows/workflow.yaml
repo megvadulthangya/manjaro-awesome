@@ -137,10 +137,17 @@ jobs:
             ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
             ${{ runner.os }}-built-packages-cache-
 
+      - name: Fix Permissions Inside Container
+        run: |
+          # Minden mountolt mappát írhatóvá teszünk mindenki számára
+          chmod -R 777 /var/cache/pacman/pkg
+          chmod -R 777 /home/builder/.cache/yay
+          chmod -R 777 /tmp/repo_mirror
+          chmod -R 777 /home/builder/build_artifacts
+      
       - name: Install Python and Dependencies
         run: |
           echo "=== Installing Python and Core Dependencies ==="
-          chmod -R 777 /var/cache/pacman/pkg
           pacman -Sy --noconfirm python python-yaml python-setuptools
           echo "✅ Python installed"
 
