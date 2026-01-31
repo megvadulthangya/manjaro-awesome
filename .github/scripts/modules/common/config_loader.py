@@ -41,6 +41,8 @@ class ConfigLoader:
             'repo_server_url': os.getenv('REPO_SERVER_URL', ''),
             'remote_dir': os.getenv('REMOTE_DIR'),
             'repo_name': os.getenv('REPO_NAME'),
+            'gpg_key_id': os.getenv('GPG_KEY_ID'),
+            'gpg_private_key': os.getenv('GPG_PRIVATE_KEY'),
         }
     
     @staticmethod
@@ -59,6 +61,7 @@ class ConfigLoader:
                 'github_repo': os.getenv('GITHUB_REPO', getattr(config_module, 'GITHUB_REPO', 'megvadulthangya/manjaro-awesome.git')),
                 'packager_id': getattr(config_module, 'PACKAGER_ID', 'Maintainer <no-reply@gshoots.hu>'),
                 'debug_mode': getattr(config_module, 'DEBUG_MODE', False),
+                'sign_packages': getattr(config_module, 'SIGN_PACKAGES', True),
             }
         except ImportError:
             return {
@@ -72,4 +75,5 @@ class ConfigLoader:
                 'github_repo': 'megvadulthangya/manjaro-awesome.git',
                 'packager_id': 'Maintainer <no-reply@gshoots.hu>',
                 'debug_mode': False,
+                'sign_packages': True,
             }

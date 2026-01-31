@@ -1,7 +1,3 @@
-"""
-Configuration file for Manjaro Package Builder
-"""
-
 import os
 
 # Repository configuration
@@ -72,3 +68,6 @@ REPO_SERVER_URL = os.getenv("REPO_SERVER_URL")
 # GPG configuration
 GPG_KEY_ID = os.getenv("GPG_KEY_ID")
 GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY")
+
+# Package signing configuration
+SIGN_PACKAGES = True  # Default toggle for individual package signing

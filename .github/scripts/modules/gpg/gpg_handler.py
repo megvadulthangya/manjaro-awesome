@@ -15,16 +15,18 @@ logger = logging.getLogger(__name__)
 class GPGHandler:
     """Handles GPG key import, repository signing, and pacman-key operations"""
     
-    def __init__(self):
+    def __init__(self, sign_packages: bool = True):
         self.gpg_private_key = os.getenv('GPG_PRIVATE_KEY')
         self.gpg_key_id = os.getenv('GPG_KEY_ID')
         self.gpg_enabled = bool(self.gpg_private_key and self.gpg_key_id)
+        self.sign_packages_enabled = sign_packages and self.gpg_enabled
         self.gpg_home = None
         self.gpg_env = None
         
         # Safe logging - no sensitive information
         if self.gpg_key_id:
             logger.info(f"GPG Environment Check: Key ID found: YES, Key data found: {'YES' if self.gpg_private_key else 'NO'}")
+            logger.info(f"Package signing: {'ENABLED' if self.sign_packages_enabled else 'DISABLED'}")
         else:
             logger.info("GPG Environment Check: No GPG key ID configured")
     
@@ -48,6 +50,7 @@ class GPGHandler:
             logger.error("❌ CRITICAL: Invalid GPG private key format.")
             logger.error("Disabling GPG signing for this build.")
             self.gpg_enabled = False
+            self.sign_packages_enabled = False
             return False
         
         try:
@@ -225,6 +228,76 @@ class GPGHandler:
             logger.error(f"Error importing GPG key: {e}")
             if 'temp_gpg_home' in locals():
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
+            return False
+    
+    def sign_package(self, package_path):
+        """
+        Sign individual package file with GPG
+        
+        Args:
+            package_path: Path to the package file (.pkg.tar.zst)
+        
+        Returns:
+            bool: True if signing successful or not required, False on error
+        """
+        if not self.sign_packages_enabled:
+            logger.debug(f"Package signing disabled, skipping: {package_path}")
+            return True
+        
+        if not self.gpg_enabled or not hasattr(self, 'gpg_home') or not hasattr(self, 'gpg_env'):
+            logger.warning(f"GPG not initialized, skipping package signing: {package_path}")
+            return True
+        
+        try:
+            package_path_obj = Path(package_path)
+            if not package_path_obj.exists():
+                logger.error(f"Package file not found for signing: {package_path}")
+                return False
+            
+            # Create signature file path
+            sig_file = package_path_obj.with_suffix(package_path_obj.suffix + '.sig')
+            
+            # Delete existing signature if exists
+            if sig_file.exists():
+                try:
+                    sig_file.unlink()
+                    logger.debug(f"Removed existing signature: {sig_file.name}")
+                except Exception as e:
+                    logger.warning(f"Could not remove existing signature {sig_file.name}: {e}")
+            
+            logger.info(f"Signing package: {package_path_obj.name}")
+            
+            # Create detached signature
+            sign_process = subprocess.run(
+                [
+                    'gpg', '--detach-sign',
+                    '--default-key', self.gpg_key_id,
+                    '--output', str(sig_file),
+                    str(package_path_obj)
+                ],
+                capture_output=True,
+                text=True,
+                env=self.gpg_env,
+                check=False
+            )
+            
+            if sign_process.returncode == 0:
+                logger.info(f"✅ Created package signature: {sig_file.name}")
+                
+                # Verify the signature was created
+                if sig_file.exists():
+                    sig_size = sig_file.stat().st_size
+                    logger.debug(f"Signature file created: {sig_size} bytes")
+                    return True
+                else:
+                    logger.error(f"❌ Signature file not created: {sig_file}")
+                    return False
+            else:
+                logger.error(f"❌ Failed to sign package {package_path_obj.name}: {sign_process.stderr[:200]}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error signing package {package_path}: {e}")
             return False
     
     def sign_repository_files(self, repo_name: str, output_dir: str) -> bool:

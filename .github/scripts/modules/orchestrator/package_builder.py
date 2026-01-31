@@ -75,6 +75,7 @@ class PackageBuilder:
         self.github_repo = python_config['github_repo']
         self.packager_id = python_config['packager_id']
         self.debug_mode = python_config['debug_mode']
+        self.sign_packages = python_config['sign_packages']
         
         # Cache configuration
         self.use_cache = os.getenv('USE_CACHE', 'false').lower() == 'true'
@@ -140,12 +141,13 @@ class PackageBuilder:
             self.build_tracker = BuildTracker()
             
             # GPG Handler
-            self.gpg_handler = GPGHandler()
+            self.gpg_handler = GPGHandler(self.sign_packages)
             
             # Shell executor
             self.shell_executor = ShellExecutor(self.debug_mode)
             
             logger.info("✅ All modules initialized successfully")
+            logger.info(f"📝 Package signing: {'ENABLED' if self.sign_packages else 'DISABLED'}")
             
             # Log cache status
             if self.use_cache:
@@ -586,11 +588,18 @@ class PackageBuilder:
             
             if build_result.returncode == 0:
                 moved = False
+                built_files = []
                 for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                     dest = self.output_dir / pkg_file.name
                     shutil.move(str(pkg_file), str(dest))
                     logger.info(f"✅ Built: {pkg_file.name}")
                     moved = True
+                    built_files.append(str(dest))
+                
+                # Sign the package after successful build
+                for built_file in built_files:
+                    if self.gpg_handler.sign_packages_enabled:
+                        self.gpg_handler.sign_package(built_file)
                 
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 
@@ -755,6 +764,11 @@ class PackageBuilder:
                     moved = True
                     built_files.append(str(dest))
                 
+                # Sign the package after successful build
+                for built_file in built_files:
+                    if self.gpg_handler.sign_packages_enabled:
+                        self.gpg_handler.sign_package(built_file)
+                
                 if moved:
                     self.built_packages.append(f"{pkg_name} ({version})")
                     self.rebuilt_local_packages.append(pkg_name)
@@ -823,6 +837,7 @@ class PackageBuilder:
         print(f"   AUR packages: {len(aur_packages)}")
         print(f"   Total packages: {len(local_packages) + len(aur_packages)}")
         print(f"   Cache enabled: {self.use_cache}")
+        print(f"   Package signing: {'ENABLED' if self.gpg_handler.sign_packages_enabled else 'DISABLED'}")
         
         print(f"\n🔨 Building {len(aur_packages)} AUR packages")
         for pkg in aur_packages:
@@ -904,6 +919,7 @@ class PackageBuilder:
             print(f"Output directory: {self.output_dir}")
             print(f"PACKAGER identity: {self.packager_id}")
             print(f"Cache optimization: {'ENABLED' if self.use_cache else 'DISABLED'}")
+            print(f"Package signing: {'ENABLED' if self.sign_packages else 'DISABLED'}")
             
             # Display initial cache status
             if self.use_cache:
@@ -1080,6 +1096,7 @@ class PackageBuilder:
             print(f"Cache misses:    {self.stats['cache_misses']}")
             print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+            print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
             print(f"PACKAGER:        {self.packager_id}")
             print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
             print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
