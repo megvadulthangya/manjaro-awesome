@@ -34,109 +34,176 @@ class RsyncClient:
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
     
-    def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path) -> bool:
+    def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path, vps_file_list: List[str]) -> bool:
         """
-        Download ALL remote package files to local directory
+        Download ALL remote package files to local directory with proper sync logic
         
+        CRITICAL FIX: Mirror directory must reflect VPS state exactly
+        - Files deleted on VPS must be deleted from mirror
+        - New files on VPS must be downloaded to mirror
+        - Cache is preserved but VPS state overrides mirror content
+        
+        Args:
+            mirror_temp_dir: Temporary directory for mirror
+            output_dir: Output directory for built packages
+            vps_file_list: List of package filenames currently on VPS (obtained via SSH)
+            
         Returns:
             True if successful, False otherwise
         """
         print("\n" + "=" * 60)
-        print("MANDATORY STEP: Mirroring remote packages locally")
+        print("CRITICAL PHASE: Mirror Synchronization with VPS State")
         print("=" * 60)
         
-        # Ensure remote directory exists first
-        # Note: This requires SSHClient, will be called from PackageBuilder
+        # Convert VPS file list to set for fast lookup
+        vps_files_set = set(vps_file_list)
+        logger.info(f"VPS state: {len(vps_files_set)} package files")
         
         # Create a temporary local repository directory
         if mirror_temp_dir.exists():
-            shutil.rmtree(mirror_temp_dir, ignore_errors=True)
-        mirror_temp_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Created local mirror directory: {mirror_temp_dir}")
-        
-        # Use rsync to download ALL package files from server
-        print("📥 Downloading ALL remote package files to local mirror...")
-        
-        rsync_cmd = f"""
-        rsync -avz \
-          --progress \
-          --stats \
-          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/*.pkg.tar.*' \
-          '{mirror_temp_dir}/' 2>/dev/null || true
-        """
-        
-        logger.info(f"RUNNING RSYNC MIRROR COMMAND:")
-        logger.info(rsync_cmd.strip())
-        
-        start_time = time.time()
-        
-        try:
-            result = subprocess.run(
-                rsync_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            # First, check what's in the mirror directory (from cache)
+            cached_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
+            cached_file_names = set(f.name for f in cached_files)
             
-            end_time = time.time()
-            duration = int(end_time - start_time)
+            logger.info(f"Cache state: {len(cached_file_names)} package files in mirror directory")
             
-            logger.info(f"EXIT CODE: {result.returncode}")
-            if result.stdout:
-                for line in result.stdout.splitlines()[-20:]:
-                    if line.strip():
-                        logger.info(f"RSYNC MIRROR: {line}")
-            if result.stderr:
-                for line in result.stderr.splitlines():
-                    if line.strip() and "No such file or directory" not in line:
-                        logger.error(f"RSYNC MIRROR ERR: {line}")
+            # Step 1: Delete files from mirror that are NOT on VPS
+            files_to_delete = cached_file_names - vps_files_set
+            if files_to_delete:
+                logger.info(f"🗑️ Deleting {len(files_to_delete)} files from mirror (not on VPS):")
+                for file_name in sorted(files_to_delete)[:10]:  # Show first 10
+                    logger.info(f"  - {file_name}")
+                
+                for file_name in files_to_delete:
+                    file_path = mirror_temp_dir / file_name
+                    try:
+                        if file_path.exists():
+                            file_path.unlink()
+                            logger.debug(f"Removed from mirror: {file_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove {file_name}: {e}")
             
-            # List downloaded files
-            downloaded_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
-            file_count = len(downloaded_files)
+            # Step 2: Identify files on VPS that are NOT in mirror
+            files_to_download = vps_files_set - cached_file_names
+            if files_to_download:
+                logger.info(f"📥 Need to download {len(files_to_download)} new files from VPS:")
+                for file_name in sorted(files_to_download)[:10]:  # Show first 10
+                    logger.info(f"  - {file_name}")
+        else:
+            # Mirror directory doesn't exist, create it
+            mirror_temp_dir.mkdir(parents=True, exist_ok=True)
+            files_to_download = vps_files_set
+            if files_to_download:
+                logger.info(f"📥 Mirror directory empty, downloading {len(files_to_download)} files from VPS")
+        
+        # If there are files to download, use rsync with specific file list
+        if files_to_download:
+            # Build rsync command with specific files
+            download_list = []
+            for file_name in files_to_download:
+                remote_path = f"{self.remote_dir}/{file_name}"
+                download_list.append(f"'{self.vps_user}@{self.vps_host}:{remote_path}'")
             
-            if file_count > 0:
-                logger.info(f"✅ Successfully mirrored {file_count} package files ({duration} seconds)")
-                logger.info(f"Sample mirrored files: {[f.name for f in downloaded_files[:5]]}")
+            if download_list:
+                files_str = ' '.join(download_list)
+                rsync_cmd = f"""
+                rsync -avz \
+                  --progress \
+                  --stats \
+                  -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60" \
+                  {files_str} \
+                  '{mirror_temp_dir}/' 2>/dev/null || true
+                """
                 
-                # Verify file integrity and copy to output directory
-                valid_files = []
-                for pkg_file in downloaded_files:
-                    if pkg_file.stat().st_size > 0:
-                        valid_files.append(pkg_file)
-                    else:
-                        logger.warning(f"⚠️ Empty file: {pkg_file.name}")
+                logger.info(f"RUNNING RSYNC DOWNLOAD COMMAND for {len(download_list)} files:")
+                logger.info(rsync_cmd.strip())
                 
-                logger.info(f"Valid mirrored packages: {len(valid_files)}/{file_count}")
+                start_time = time.time()
                 
-                # Copy mirrored packages to output directory
-                print(f"📋 Copying {len(valid_files)} mirrored packages to output directory...")
-                copied_count = 0
-                for pkg_file in valid_files:
-                    dest = output_dir / pkg_file.name
-                    if not dest.exists():  # Don't overwrite newly built packages
-                        shutil.copy2(pkg_file, dest)
-                        copied_count += 1
-                
-                logger.info(f"Copied {copied_count} mirrored packages to output directory")
-                
-                # Clean up mirror directory
-                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
-                
-                return True
-            else:
-                logger.info("ℹ️ No package files were mirrored (repository is empty or permission issue)")
-                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
-                return True
-                
-        except Exception as e:
-            logger.error(f"RSYNC mirror execution error: {e}")
-            if mirror_temp_dir.exists():
-                shutil.rmtree(mirror_temp_dir, ignore_errors=True)
+                try:
+                    result = subprocess.run(
+                        rsync_cmd,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    
+                    end_time = time.time()
+                    duration = int(end_time - start_time)
+                    
+                    logger.info(f"EXIT CODE: {result.returncode}")
+                    if result.stdout:
+                        for line in result.stdout.splitlines()[-10:]:
+                            if line.strip():
+                                logger.info(f"RSYNC: {line}")
+                    
+                    # Verify downloaded files
+                    downloaded_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
+                    actual_downloaded = len(downloaded_files) - (len(cached_file_names) if 'cached_file_names' in locals() else 0)
+                    
+                    logger.info(f"✅ Downloaded {actual_downloaded} new package files ({duration} seconds)")
+                    
+                except Exception as e:
+                    logger.error(f"RSYNC download execution error: {e}")
+                    return False
+        
+        # Step 3: Sync output directory with mirror (but preserve newly built packages)
+        # Only copy from mirror to output_dir if file doesn't exist in output_dir
+        # Never delete from output_dir as it may contain newly built packages
+        
+        mirror_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
+        output_files = set(f.name for f in output_dir.glob("*.pkg.tar.*"))
+        
+        copied_count = 0
+        for mirror_file in mirror_files:
+            dest = output_dir / mirror_file.name
+            if not dest.exists():
+                try:
+                    shutil.copy2(mirror_file, dest)
+                    copied_count += 1
+                    logger.debug(f"Copied to output_dir: {mirror_file.name}")
+                except Exception as e:
+                    logger.warning(f"Could not copy {mirror_file.name}: {e}")
+        
+        if copied_count > 0:
+            logger.info(f"📋 Copied {copied_count} mirrored packages to output directory")
+        
+        # Verify final state
+        final_mirror_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
+        logger.info(f"📊 Mirror synchronization complete:")
+        logger.info(f"  - Mirror now has {len(final_mirror_files)} files")
+        logger.info(f"  - VPS has {len(vps_files_set)} files")
+        logger.info(f"  - Output directory has {len(output_files) + copied_count} files")
+        
+        # CRITICAL VALIDATION: Ensure mirror matches VPS state
+        mirror_file_names = set(f.name for f in final_mirror_files)
+        if mirror_file_names != vps_files_set:
+            missing_in_mirror = vps_files_set - mirror_file_names
+            extra_in_mirror = mirror_file_names - vps_files_set
+            
+            if missing_in_mirror:
+                logger.error(f"❌ CRITICAL: Mirror missing {len(missing_in_mirror)} files from VPS")
+                for file_name in sorted(missing_in_mirror)[:5]:
+                    logger.error(f"  - {file_name}")
+            
+            if extra_in_mirror:
+                logger.error(f"❌ CRITICAL: Mirror has {len(extra_in_mirror)} extra files not on VPS")
+                for file_name in sorted(extra_in_mirror)[:5]:
+                    logger.error(f"  - {file_name}")
+            
             return False
+        
+        logger.info("✅ Mirror perfectly synchronized with VPS state")
+        
+        # Clean up mirror directory after use (it will be recreated from cache next time)
+        try:
+            shutil.rmtree(mirror_temp_dir, ignore_errors=True)
+            logger.info("🧹 Cleaned up temporary mirror directory")
+        except Exception as e:
+            logger.warning(f"Could not clean up mirror directory: {e}")
+        
+        return True
     
     def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
         """
