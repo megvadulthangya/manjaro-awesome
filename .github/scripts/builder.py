@@ -1,3 +1,4 @@
+# FILE: .github/scripts/builder.py
 """
 Main Orchestration Script for Arch Linux Package Builder
 """
@@ -121,6 +122,8 @@ class PackageBuilderOrchestrator:
         self.cleanup_manager = CleanupManager(repo_config)
         self.database_manager = DatabaseManager(repo_config)
         self.version_tracker = VersionTracker(repo_config)
+        
+        # AUTHORITATIVE: SmartCleanup handles version-based cleanup
         self.smart_cleanup = SmartCleanup(self.repo_name, self.output_dir)
         
         # Build modules
@@ -145,122 +148,6 @@ class PackageBuilderOrchestrator:
         
         logger.info("All modules initialized successfully")
     
-    def _apply_repository_state(self, exists: bool, has_packages: bool):
-        """Apply repository state with proper SigLevel based on discovery"""
-        pacman_conf = Path("/etc/pacman.conf")
-        
-        if not pacman_conf.exists():
-            logger.warning("pacman.conf not found")
-            return
-        
-        try:
-            with open(pacman_conf, 'r') as f:
-                content = f.read()
-            
-            repo_section = f"[{self.repo_name}]"
-            lines = content.split('\n')
-            new_lines = []
-            
-            # Remove old section if it exists
-            in_section = False
-            for line in lines:
-                # Check if we're entering our section
-                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
-                    in_section = True
-                    continue
-                elif in_section and (line.strip().startswith('[') or line.strip() == ''):
-                    # We're leaving our section
-                    in_section = False
-                
-                if not in_section:
-                    new_lines.append(line)
-            
-            # Add new section if repository exists on VPS AND we have a server URL
-            if exists and self.repo_server_url and self.repo_server_url.strip():
-                new_lines.append('')
-                new_lines.append(f"# Custom repository: {self.repo_name}")
-                new_lines.append(f"# Automatically enabled - found on VPS")
-                new_lines.append(repo_section)
-                if has_packages:
-                    new_lines.append("SigLevel = Optional TrustAll")
-                    logger.info(f"Enabling repository '{self.repo_name}' with Server URL")
-                else:
-                    new_lines.append("# SigLevel = Optional TrustAll")
-                    new_lines.append("# Repository exists but has no packages yet")
-                    logger.info("Repository section added but commented (no packages yet)")
-                
-                # ADD THE SERVER LINE - THIS IS CRITICAL
-                new_lines.append(f"Server = {self.repo_server_url}")
-                new_lines.append('')
-            else:
-                # Repository doesn't exist on VPS or no server URL, add commented section
-                new_lines.append('')
-                new_lines.append(f"# Custom repository: {self.repo_name}")
-                if not exists:
-                    new_lines.append(f"# Disabled - not found on VPS (first run?)")
-                elif not self.repo_server_url or not self.repo_server_url.strip():
-                    new_lines.append(f"# Disabled - no server URL configured")
-                new_lines.append(f"#{repo_section}")
-                new_lines.append("#SigLevel = Optional TrustAll")
-                if self.repo_server_url and self.repo_server_url.strip():
-                    new_lines.append(f"#Server = {self.repo_server_url}")
-                new_lines.append('')
-                
-                if not self.repo_server_url or not self.repo_server_url.strip():
-                    logger.warning("Repository exists on VPS but no REPO_SERVER_URL configured - keeping disabled")
-                else:
-                    logger.info("Repository not found on VPS - keeping disabled")
-            
-            # Write back to pacman.conf
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-                temp_file.write('\n'.join(new_lines))
-                temp_path = temp_file.name
-            
-            # Copy to pacman.conf
-            subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
-            subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
-            os.unlink(temp_path)
-            
-            logger.info(f"Updated pacman.conf for repository '{self.repo_name}'")
-            
-        except Exception as e:
-            logger.error(f"Failed to apply repository state: {e}")
-    
-    def _sync_pacman_databases(self):
-        """Sync pacman databases after enabling repository"""
-        # First, ensure pacman-key is initialized
-        logger.info("Initializing pacman-key database...")
-        cmd = "sudo pacman-key --init && sudo pacman-key --populate"
-        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-        
-        # Update pacman-key database
-        logger.info("Updating pacman-key database...")
-        cmd = "sudo pacman-key --updatedb"
-        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-        
-        # Now sync pacman databases
-        logger.info("Synchronizing pacman databases...")
-        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-        
-        if result.returncode == 0:
-            logger.info("Pacman databases synchronized successfully")
-            return True
-        else:
-            logger.warning(f"Pacman sync warning: {result.stderr[:200]}")
-            
-            # Try without LC_ALL setting
-            logger.info("Retrying pacman sync without LC_ALL...")
-            cmd = "sudo pacman -Sy --noconfirm"
-            result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-            
-            if result.returncode == 0:
-                logger.info("Pacman databases synchronized successfully")
-                return True
-            else:
-                logger.error(f"Pacman sync failed: {result.stderr[:500]}")
-                return False
-    
     def get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from packages.py"""
         try:
@@ -283,7 +170,6 @@ class PackageBuilderOrchestrator:
         Phase I: VPS State Fetch
         - List VPS repo files
         - Sync missing files locally
-        - CRITICAL FIX: Apply repository state and update pacman database
         """
         logger.info("PHASE I: VPS State Fetch")
         
@@ -299,16 +185,6 @@ class PackageBuilderOrchestrator:
         self.vps_files = remote_files  # Already basenames
         
         logger.info(f"Found {len(self.vps_files)} files on VPS")
-        
-        # CRITICAL FIX: Apply repository state BEFORE mirroring
-        exists, has_packages = self.ssh_client.check_repository_exists_on_vps()
-        self._apply_repository_state(exists, has_packages)
-        
-        # CRITICAL FIX: Update pacman database after enabling repository
-        if exists and self.repo_server_url and self.repo_server_url.strip():
-            logger.info("Updating pacman database after enabling repository...")
-            if not self._sync_pacman_databases():
-                logger.warning("Pacman database sync failed, but continuing")
         
         # Mirror remote packages locally
         if remote_files:
@@ -359,36 +235,23 @@ class PackageBuilderOrchestrator:
         
         return len(self.allowlist) > 0
     
-    def phase_iii_smart_cleanup(self) -> bool:
+    def phase_iii_comprehensive_cleanup(self) -> bool:
         """
-        Phase III: Smart Cleanup
-        - Compare VPS files with allowlist
-        - Delete only files NOT present in allowlist
-        - Remove deleted files from repo database
+        Phase III: Comprehensive Cleanup
+        - Remove old package versions (keep only newest)
+        - Remove packages not in allowlist
+        - Validate and clean up signatures
         """
-        logger.info("PHASE III: Smart Cleanup (Allowlist-based)")
+        logger.info("PHASE III: Comprehensive Cleanup")
         
-        if not self.vps_files:
-            logger.info("No VPS files to clean up")
-            return True
-        
-        # Execute smart cleanup
-        success, deleted_files = self.smart_cleanup.execute_cleanup(
-            vps_files=self.vps_files,
+        # AUTHORITATIVE: Execute comprehensive cleanup
+        # This runs AFTER successful build and BEFORE database generation
+        self.smart_cleanup.execute_comprehensive_cleanup(
             allowlist=self.allowlist,
-            remote_dir=self.remote_dir,
-            vps_user=self.vps_user,
-            vps_host=self.vps_host,
-            repo_db_path=self.output_dir / f"{self.repo_name}.db.tar.gz"
+            gpg_handler=self.gpg_handler
         )
         
-        # Update VPS files list after cleanup
-        if deleted_files:
-            deleted_set = set(deleted_files)
-            self.vps_files = [f for f in self.vps_files if f not in deleted_set]
-            logger.info(f"VPS files after cleanup: {len(self.vps_files)}")
-        
-        return success
+        return True
     
     def phase_iv_version_audit_and_build(self) -> Tuple[List[str], List[str]]:
         """
@@ -457,24 +320,14 @@ class PackageBuilderOrchestrator:
             logger.info("No packages to process")
             return True
         
-        # Step 1: Sign all unsigned packages if signing is enabled
-        if self.sign_packages and self.gpg_handler.gpg_enabled:
-            logger.info("Signing all unsigned packages...")
-            signed_count = 0
-            for pkg_file in local_packages:
-                # Check if signature exists
-                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
-                if not sig_file.exists():
-                    if self.gpg_handler.sign_package(str(pkg_file)):
-                        signed_count += 1
-            if signed_count > 0:
-                logger.info(f"Signed {signed_count} previously unsigned packages")
+        # Step 1: Clean up old database files
+        self.cleanup_manager.cleanup_database_files()
         
         # Step 2: Generate repository database
         logger.info("Generating repository database...")
         
-        # CRITICAL: Zero-Residue cleanup before database generation
-        self.cleanup_manager.revalidate_output_dir_before_database()
+        # CRITICAL: Comprehensive cleanup already ran in Phase III
+        # No need for additional version cleanup here
         
         # Generate database
         db_success = self.database_manager.generate_full_database(
@@ -541,12 +394,13 @@ class PackageBuilderOrchestrator:
                 logger.error("Phase II failed")
                 return 1
             
-            # Phase III: Smart Cleanup (using PKGBUILD-derived allowlist)
-            if not self.phase_iii_smart_cleanup():
-                logger.warning("Phase III had issues, but continuing")
-            
             # Phase IV: Version Audit & Build
             built_packages, skipped_packages = self.phase_iv_version_audit_and_build()
+            
+            # Phase III: Comprehensive Cleanup (AFTER building, BEFORE database)
+            # This ensures only newest versions remain before database generation
+            if not self.phase_iii_comprehensive_cleanup():
+                logger.warning("Phase III had issues, but continuing")
             
             # Phase V: Sign and Update
             if built_packages or list(self.output_dir.glob("*.pkg.tar.*")):

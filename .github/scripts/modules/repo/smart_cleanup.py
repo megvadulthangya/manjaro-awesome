@@ -1,21 +1,34 @@
+# FILE: .github/scripts/modules/repo/smart_cleanup.py
+"""
+Smart Cleanup Module - Authoritative version-based cleanup system
+
+Handles:
+1. Version-based cleanup (keep only newest version per package)
+2. Allowlist-based cleanup (remove packages not in allowlist)
+3. Signature cleanup (remove invalid/old signatures)
+"""
+
 import os
-import re
 import subprocess
+import shutil
+import re
 import logging
 from pathlib import Path
-from typing import List, Set, Optional, Tuple
+from typing import List, Set, Tuple, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
 
 class SmartCleanup:
     """
-    Smart cleanup logic for repository management.
+    Authoritative cleanup system for repository management.
     
     Core rules:
-    1. Deletion based ONLY on PKGBUILD pkgname extraction (allowlist)
-    2. Never based on packages.py strings
-    3. Remove deleted files from repo database
+    1. Only ONE version per pkgname may exist in output_dir
+    2. Keep only the newest version (based on version comparison)
+    3. Delete older versions and their .sig files
+    4. Remove packages not in allowlist
+    5. Delete invalid/old signature files
     """
     
     def __init__(self, repo_name: str, output_dir: Path):
@@ -66,6 +79,273 @@ class SmartCleanup:
         
         return None
     
+    def extract_version_from_filename(self, filename: str, pkg_name: str) -> Optional[str]:
+        """
+        Extract version from package filename.
+        
+        Args:
+            filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
+            pkg_name: Package name (e.g., 'qownnotes')
+            
+        Returns:
+            Version string (e.g., '26.1.9-1') or None if cannot parse
+        """
+        try:
+            # Remove extensions
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            # Find where package name ends
+            for i in range(len(parts) - 2, 0, -1):
+                possible_name = '-'.join(parts[:i])
+                if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
+                    # Remaining parts: version-release-architecture
+                    if len(parts) >= i + 3:
+                        version_part = parts[i]
+                        release_part = parts[i+1]
+                        
+                        # Check for epoch (e.g., "2-26.1.9-1" -> "2:26.1.9-1")
+                        if i + 2 < len(parts) and parts[i].isdigit():
+                            epoch_part = parts[i]
+                            version_part = parts[i+1]
+                            release_part = parts[i+2]
+                            return f"{epoch_part}:{version_part}-{release_part}"
+                        else:
+                            return f"{version_part}-{release_part}"
+        except Exception as e:
+            logger.debug(f"Could not extract version from {filename}: {e}")
+        
+        return None
+    
+    def _compare_versions(self, version1: str, version2: str) -> int:
+        """
+        Compare two version strings using vercmp.
+        
+        Args:
+            version1: First version string
+            version2: Second version string
+            
+        Returns:
+            -1 if version1 < version2, 0 if equal, 1 if version1 > version2
+        """
+        try:
+            result = subprocess.run(
+                ['vercmp', version1, version2],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                cmp_result = int(result.stdout.strip())
+                return cmp_result
+        except Exception as e:
+            logger.warning(f"vercmp failed, using fallback comparison: {e}")
+        
+        # Fallback: string comparison (less accurate)
+        return 1 if version1 > version2 else -1 if version1 < version2 else 0
+    
+    def remove_old_package_versions(self):
+        """
+        🚨 AUTHORITATIVE VERSION CLEANUP: Keep only newest version per package
+        
+        For each pkgname:
+        - Keep only the newest version
+        - Delete older versions and their .sig files
+        """
+        logger.info("🔍 Starting version-based cleanup...")
+        
+        # Get all package files in output_dir
+        package_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        if not package_files:
+            logger.info("No package files found for version cleanup")
+            return
+        
+        # Remove signature files from the list (we'll handle them separately)
+        package_files = [f for f in package_files if not f.name.endswith('.sig')]
+        
+        # Group files by package name
+        packages_dict: Dict[str, List[Tuple[str, Path]]] = {}
+        
+        for pkg_file in package_files:
+            # Extract package name and version
+            pkg_name = self.extract_package_name_from_filename(pkg_file.name)
+            if not pkg_name:
+                logger.warning(f"Could not parse package name from {pkg_file.name}")
+                continue
+            
+            version = self.extract_version_from_filename(pkg_file.name, pkg_name)
+            if not version:
+                logger.warning(f"Could not parse version from {pkg_file.name}")
+                continue
+            
+            if pkg_name not in packages_dict:
+                packages_dict[pkg_name] = []
+            
+            packages_dict[pkg_name].append((version, pkg_file))
+        
+        # Process each package
+        total_deleted = 0
+        
+        for pkg_name, files in packages_dict.items():
+            if len(files) <= 1:
+                continue  # Only one version, nothing to do
+            
+            logger.info(f"Found {len(files)} versions for {pkg_name}: {[v[0] for v in files]}")
+            
+            # Find the newest version
+            newest_version = files[0][0]
+            newest_file = files[0][1]
+            
+            for version, pkg_file in files[1:]:
+                if self._compare_versions(version, newest_version) > 0:
+                    newest_version = version
+                    newest_file = pkg_file
+            
+            logger.info(f"Keeping newest version for {pkg_name}: {newest_version}")
+            
+            # Delete older versions
+            for version, pkg_file in files:
+                if pkg_file != newest_file:
+                    try:
+                        # Delete package file
+                        pkg_file.unlink()
+                        logger.info(f"Removed old version: {pkg_file.name}")
+                        
+                        # Delete signature file if exists
+                        sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                        if sig_file.exists():
+                            sig_file.unlink()
+                            logger.info(f"Removed signature: {sig_file.name}")
+                        
+                        total_deleted += 1
+                    except Exception as e:
+                        logger.warning(f"Could not delete {pkg_file}: {e}")
+        
+        if total_deleted > 0:
+            logger.info(f"✅ Version cleanup: Removed {total_deleted} old package versions")
+        else:
+            logger.info("✅ All packages have only one version")
+    
+    def remove_packages_not_in_allowlist(self, allowlist: Set[str]):
+        """
+        🚨 ALLOWLIST CLEANUP: Remove packages not in allowlist
+        
+        Args:
+            allowlist: Set of valid package names from PKGBUILD extraction
+        """
+        logger.info("🔍 Starting allowlist-based cleanup...")
+        
+        # Get all package files in output_dir
+        package_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        if not package_files:
+            logger.info("No package files found for allowlist cleanup")
+            return
+        
+        # Remove signature files from the list (we'll handle them separately)
+        package_files = [f for f in package_files if not f.name.endswith('.sig')]
+        
+        deleted_count = 0
+        
+        for pkg_file in package_files:
+            pkg_name = self.extract_package_name_from_filename(pkg_file.name)
+            
+            if not pkg_name:
+                logger.warning(f"Could not parse package name from {pkg_file.name}")
+                continue
+            
+            if pkg_name not in allowlist:
+                try:
+                    # Delete package file
+                    pkg_file.unlink()
+                    logger.info(f"Removed package not in allowlist: {pkg_file.name}")
+                    
+                    # Delete signature file if exists
+                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                    if sig_file.exists():
+                        sig_file.unlink()
+                        logger.info(f"Removed signature: {sig_file.name}")
+                    
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete {pkg_file}: {e}")
+        
+        if deleted_count > 0:
+            logger.info(f"✅ Allowlist cleanup: Removed {deleted_count} packages not in allowlist")
+        else:
+            logger.info("✅ All packages are in allowlist")
+    
+    def cleanup_invalid_signatures(self, gpg_handler):
+        """
+        🚨 SIGNATURE VALIDATION: Remove invalid signature files
+        
+        Args:
+            gpg_handler: GPGHandler instance for signature verification
+        """
+        logger.info("🔍 Starting signature validation cleanup...")
+        
+        # Get all signature files
+        sig_files = list(self.output_dir.glob("*.sig"))
+        if not sig_files:
+            logger.info("No signature files found")
+            return
+        
+        invalid_count = 0
+        
+        for sig_file in sig_files:
+            # Find corresponding package file (remove .sig extension)
+            pkg_file = self.output_dir / sig_file.name[:-4]
+            
+            if not pkg_file.exists():
+                logger.warning(f"Package file not found for signature: {sig_file.name}")
+                try:
+                    sig_file.unlink()
+                    logger.info(f"Removed orphaned signature: {sig_file.name}")
+                    invalid_count += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete orphaned signature {sig_file}: {e}")
+                continue
+            
+            # Verify the signature
+            if hasattr(gpg_handler, '_verify_signature'):
+                if not gpg_handler._verify_signature(pkg_file, sig_file):
+                    logger.warning(f"Invalid signature detected: {sig_file.name}")
+                    try:
+                        sig_file.unlink()
+                        logger.info(f"Removed invalid signature: {sig_file.name}")
+                        invalid_count += 1
+                    except Exception as e:
+                        logger.warning(f"Could not delete invalid signature {sig_file}: {e}")
+            else:
+                logger.debug(f"Skipping signature verification (gpg_handler missing _verify_signature)")
+        
+        if invalid_count > 0:
+            logger.info(f"✅ Signature cleanup: Removed {invalid_count} invalid signatures")
+        else:
+            logger.info("✅ All signatures are valid")
+    
+    def execute_comprehensive_cleanup(self, allowlist: Set[str], gpg_handler=None):
+        """
+        Execute complete cleanup workflow.
+        
+        Args:
+            allowlist: Set of valid package names from PKGBUILD extraction
+            gpg_handler: GPGHandler instance for signature verification (optional)
+        """
+        logger.info("🚀 Starting comprehensive cleanup...")
+        
+        # Step 1: Version-based cleanup (keep only newest per package)
+        self.remove_old_package_versions()
+        
+        # Step 2: Allowlist-based cleanup (remove packages not in allowlist)
+        self.remove_packages_not_in_allowlist(allowlist)
+        
+        # Step 3: Signature validation (if gpg_handler is provided)
+        if gpg_handler:
+            self.cleanup_invalid_signatures(gpg_handler)
+        
+        logger.info("✅ Comprehensive cleanup completed successfully")
+    
     def identify_obsolete_files(
         self, 
         vps_files: List[str], 
@@ -95,239 +375,19 @@ class SmartCleanup:
             
             if not pkg_name:
                 # Cannot parse, keep to be safe
-                logger.warning(f"⚠️ Could not parse package name from {filename}, keeping")
+                logger.warning(f"Could not parse package name from {filename}, keeping")
                 files_to_keep.append(filename)
                 continue
             
             # Check if package name is in allowlist
             if pkg_name in allowlist:
                 files_to_keep.append(filename)
-                logger.debug(f"✅ Keeping {filename} (allowlist: {pkg_name})")
+                logger.debug(f"Keeping {filename} (allowlist: {pkg_name})")
             else:
                 files_to_delete.append(filename)
-                logger.info(f"🗑️ Marking for deletion: {filename} (not in allowlist)")
+                logger.info(f"Marking for deletion: {filename} (not in allowlist)")
         
         return files_to_keep, files_to_delete
-    
-    def delete_obsolete_files(
-        self, 
-        files_to_delete: List[str],
-        remote_dir: str,
-        vps_user: str,
-        vps_host: str
-    ) -> bool:
-        """
-        Delete obsolete files from remote server.
-        
-        Args:
-            files_to_delete: List of files to delete
-            remote_dir: Remote directory on VPS
-            vps_user: VPS username
-            vps_host: VPS hostname
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not files_to_delete:
-            logger.info("✅ No obsolete files to delete")
-            return True
-        
-        logger.info(f"🚀 Preparing to delete {len(files_to_delete)} obsolete files")
-        
-        # Delete in batches to avoid command line length limits
-        batch_size = 50
-        deleted_count = 0
-        
-        for i in range(0, len(files_to_delete), batch_size):
-            batch = files_to_delete[i:i + batch_size]
-            if self._delete_batch_remote(batch, remote_dir, vps_user, vps_host):
-                deleted_count += len(batch)
-        
-        logger.info(f"📊 Cleanup complete: Deleted {deleted_count} obsolete files")
-        return deleted_count > 0
-    
-    def _delete_batch_remote(
-        self, 
-        batch: List[str], 
-        remote_dir: str,
-        vps_user: str,
-        vps_host: str
-    ) -> bool:
-        """Delete a batch of files from remote server."""
-        # Quote each filename for safety
-        quoted_files = [f"'{remote_dir}/{f}'" for f in batch]
-        files_to_delete_str = ' '.join(quoted_files)
-        
-        delete_cmd = f"rm -fv {files_to_delete_str}"
-        
-        # Execute the deletion command via SSH
-        ssh_cmd = [
-            "ssh",
-            f"{vps_user}@{vps_host}",
-            delete_cmd
-        ]
-        
-        try:
-            logger.info(f"🗑️ Deleting batch of {len(batch)} files")
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=60
-            )
-            
-            if result.returncode == 0:
-                logger.info(f"✅ Deletion successful for batch of {len(batch)} files")
-                if result.stdout:
-                    for line in result.stdout.splitlines():
-                        if "removed" in line.lower():
-                            logger.info(f"   {line}")
-                return True
-            else:
-                logger.error(f"❌ Deletion failed: {result.stderr[:500]}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.error("❌ SSH command timed out - aborting cleanup for safety")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Error during deletion: {e}")
-            return False
-    
-    def remove_from_database(
-        self,
-        files_to_delete: List[str],
-        repo_db_path: Optional[Path] = None
-    ) -> bool:
-        """
-        Remove deleted packages from repository database.
-        
-        Args:
-            files_to_delete: List of files that were deleted
-            repo_db_path: Path to repository database file (optional)
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not files_to_delete:
-            logger.info("✅ No database entries to remove")
-            return True
-        
-        # Determine database file path
-        if repo_db_path is None:
-            repo_db_path = self.output_dir / f"{self.repo_name}.db.tar.gz"
-        
-        if not repo_db_path.exists():
-            logger.warning(f"⚠️ Database file not found: {repo_db_path}")
-            return False
-        
-        # Extract package names from deleted files
-        packages_to_remove = set()
-        for filename in files_to_delete:
-            pkg_name = self.extract_package_name_from_filename(filename)
-            if pkg_name:
-                packages_to_remove.add(pkg_name)
-        
-        if not packages_to_remove:
-            logger.warning("⚠️ No valid package names extracted from deleted files")
-            return True
-        
-        logger.info(f"🗑️ Removing {len(packages_to_remove)} packages from database")
-        
-        # Use repo-remove to remove packages from database
-        success_count = 0
-        for pkg_name in packages_to_remove:
-            if self._remove_package_from_db(pkg_name, repo_db_path):
-                success_count += 1
-        
-        logger.info(f"📊 Database cleanup: Removed {success_count}/{len(packages_to_remove)} packages")
-        return success_count > 0
-    
-    def _remove_package_from_db(self, pkg_name: str, repo_db_path: Path) -> bool:
-        """Remove a single package from repository database using repo-remove."""
-        try:
-            # Check if repo-remove command is available
-            if not shutil.which("repo-remove"):
-                logger.error("❌ repo-remove command not found")
-                return False
-            
-            cmd = ["repo-remove", str(repo_db_path), pkg_name]
-            
-            logger.debug(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                logger.info(f"✅ Removed {pkg_name} from database")
-                return True
-            else:
-                logger.error(f"❌ Failed to remove {pkg_name} from database: {result.stderr[:200]}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error removing {pkg_name} from database: {e}")
-            return False
-    
-    def execute_cleanup(
-        self,
-        vps_files: List[str],
-        allowlist: Set[str],
-        remote_dir: str,
-        vps_user: str,
-        vps_host: str,
-        repo_db_path: Optional[Path] = None
-    ) -> Tuple[bool, List[str]]:
-        """
-        Execute complete cleanup workflow.
-        
-        Args:
-            vps_files: List of VPS repository filenames
-            allowlist: Set of valid package names from PKGBUILD extraction
-            remote_dir: Remote directory on VPS
-            vps_user: VPS username
-            vps_host: VPS hostname
-            repo_db_path: Path to repository database file (optional)
-            
-        Returns:
-            Tuple of (success: bool, deleted_files: List[str])
-        """
-        logger.info("🔍 Starting smart cleanup analysis")
-        logger.info(f"📊 VPS files to analyze: {len(vps_files)}")
-        logger.info(f"📊 Allowlist entries: {len(allowlist)}")
-        
-        # Step 1: Identify obsolete files
-        files_to_keep, files_to_delete = self.identify_obsolete_files(vps_files, allowlist)
-        
-        if not files_to_delete:
-            logger.info("✅ No obsolete files found")
-            return True, []
-        
-        logger.info(f"📊 Analysis complete:")
-        logger.info(f"   Files to keep: {len(files_to_keep)}")
-        logger.info(f"   Files to delete: {len(files_to_delete)}")
-        
-        # Step 2: Delete obsolete files from remote
-        deletion_success = self.delete_obsolete_files(
-            files_to_delete, remote_dir, vps_user, vps_host
-        )
-        
-        if not deletion_success:
-            logger.error("❌ Failed to delete obsolete files")
-            return False, files_to_delete
-        
-        # Step 3: Remove deleted packages from database
-        db_success = self.remove_from_database(files_to_delete, repo_db_path)
-        
-        if not db_success:
-            logger.warning("⚠️ Database cleanup had issues, but files were deleted")
-        
-        logger.info("✅ Smart cleanup completed successfully")
-        return True, files_to_delete
 
 
 # Optional: Helper function for direct usage
@@ -356,35 +416,12 @@ def execute_smart_cleanup(
         Tuple of (success: bool, deleted_files: List[str])
     """
     cleaner = SmartCleanup(repo_name, output_dir)
-    return cleaner.execute_cleanup(
-        vps_files=vps_files,
-        allowlist=allowlist,
-        remote_dir=remote_dir,
-        vps_user=vps_user,
-        vps_host=vps_host
-    )
-
-
-if __name__ == "__main__":
-    # Example usage
-    test_vps_files = [
-        "package-a-1.0-1-x86_64.pkg.tar.zst",
-        "package-b-2.0-1-x86_64.pkg.tar.zst",
-        "package-c-3.0-1-x86_64.pkg.tar.zst",
-        "repo.db.tar.gz",
-        "repo.db.tar.gz.sig"
-    ]
     
-    test_allowlist = {"package-a", "package-c"}
+    # This is kept for backward compatibility
+    # Note: This only does VPS cleanup, not local version cleanup
+    files_to_keep, files_to_delete = cleaner.identify_obsolete_files(vps_files, allowlist)
     
-    result = execute_smart_cleanup(
-        vps_files=test_vps_files,
-        allowlist=test_allowlist,
-        repo_name="test-repo",
-        output_dir=Path("/tmp/output"),
-        remote_dir="/srv/http/repo",
-        vps_user="user",
-        vps_host="vps.example.com"
-    )
+    # In practice, the remote deletion should be handled by a separate module
+    # This function is now deprecated in favor of execute_comprehensive_cleanup
     
-    print(f"Cleanup result: {result}")
+    return True, files_to_delete
