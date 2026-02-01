@@ -73,6 +73,7 @@ class PackageBuilderOrchestrator:
         self.remote_dir = env_config['remote_dir']
         self.gpg_key_id = env_config['gpg_key_id']
         self.gpg_private_key = env_config['gpg_private_key']
+        self.repo_server_url = env_config['repo_server_url']
         
         self.output_dir = self.repo_root / python_config['output_dir']
         self.mirror_temp_dir = Path(python_config['mirror_temp_dir'])
@@ -174,30 +175,41 @@ class PackageBuilderOrchestrator:
                 if not in_section:
                     new_lines.append(line)
             
-            # Add new section if repository exists on VPS
-            if exists:
+            # Add new section if repository exists on VPS AND we have a server URL
+            if exists and self.repo_server_url and self.repo_server_url.strip():
                 new_lines.append('')
                 new_lines.append(f"# Custom repository: {self.repo_name}")
                 new_lines.append(f"# Automatically enabled - found on VPS")
                 new_lines.append(repo_section)
                 if has_packages:
                     new_lines.append("SigLevel = Optional TrustAll")
-                    logger.info("Enabling repository with SigLevel = Optional TrustAll (build mode)")
+                    logger.info(f"Enabling repository '{self.repo_name}' with Server URL")
                 else:
                     new_lines.append("# SigLevel = Optional TrustAll")
                     new_lines.append("# Repository exists but has no packages yet")
                     logger.info("Repository section added but commented (no packages yet)")
                 
+                # ADD THE SERVER LINE - THIS IS CRITICAL
+                new_lines.append(f"Server = {self.repo_server_url}")
                 new_lines.append('')
             else:
-                # Repository doesn't exist on VPS, add commented section
+                # Repository doesn't exist on VPS or no server URL, add commented section
                 new_lines.append('')
                 new_lines.append(f"# Custom repository: {self.repo_name}")
-                new_lines.append(f"# Disabled - not found on VPS (first run?)")
+                if not exists:
+                    new_lines.append(f"# Disabled - not found on VPS (first run?)")
+                elif not self.repo_server_url or not self.repo_server_url.strip():
+                    new_lines.append(f"# Disabled - no server URL configured")
                 new_lines.append(f"#{repo_section}")
                 new_lines.append("#SigLevel = Optional TrustAll")
+                if self.repo_server_url and self.repo_server_url.strip():
+                    new_lines.append(f"#Server = {self.repo_server_url}")
                 new_lines.append('')
-                logger.info("Repository not found on VPS - keeping disabled")
+                
+                if not self.repo_server_url or not self.repo_server_url.strip():
+                    logger.warning("Repository exists on VPS but no REPO_SERVER_URL configured - keeping disabled")
+                else:
+                    logger.info("Repository not found on VPS - keeping disabled")
             
             # Write back to pacman.conf
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
@@ -213,6 +225,41 @@ class PackageBuilderOrchestrator:
             
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
+    
+    def _sync_pacman_databases(self):
+        """Sync pacman databases after enabling repository"""
+        # First, ensure pacman-key is initialized
+        logger.info("Initializing pacman-key database...")
+        cmd = "sudo pacman-key --init && sudo pacman-key --populate"
+        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+        
+        # Update pacman-key database
+        logger.info("Updating pacman-key database...")
+        cmd = "sudo pacman-key --updatedb"
+        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+        
+        # Now sync pacman databases
+        logger.info("Synchronizing pacman databases...")
+        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+        
+        if result.returncode == 0:
+            logger.info("Pacman databases synchronized successfully")
+            return True
+        else:
+            logger.warning(f"Pacman sync warning: {result.stderr[:200]}")
+            
+            # Try without LC_ALL setting
+            logger.info("Retrying pacman sync without LC_ALL...")
+            cmd = "sudo pacman -Sy --noconfirm"
+            result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+            
+            if result.returncode == 0:
+                logger.info("Pacman databases synchronized successfully")
+                return True
+            else:
+                logger.error(f"Pacman sync failed: {result.stderr[:500]}")
+                return False
     
     def get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from packages.py"""
@@ -258,14 +305,10 @@ class PackageBuilderOrchestrator:
         self._apply_repository_state(exists, has_packages)
         
         # CRITICAL FIX: Update pacman database after enabling repository
-        if exists:
+        if exists and self.repo_server_url and self.repo_server_url.strip():
             logger.info("Updating pacman database after enabling repository...")
-            cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-            result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-            if result.returncode == 0:
-                logger.info("Pacman database updated successfully")
-            else:
-                logger.warning(f"Pacman update warning: {result.stderr[:200]}")
+            if not self._sync_pacman_databases():
+                logger.warning("Pacman database sync failed, but continuing")
         
         # Mirror remote packages locally
         if remote_files:
