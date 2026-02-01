@@ -5,6 +5,8 @@ Main Orchestration Script for Arch Linux Package Builder
 import os
 import sys
 import logging
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 
@@ -142,6 +144,76 @@ class PackageBuilderOrchestrator:
         
         logger.info("All modules initialized successfully")
     
+    def _apply_repository_state(self, exists: bool, has_packages: bool):
+        """Apply repository state with proper SigLevel based on discovery"""
+        pacman_conf = Path("/etc/pacman.conf")
+        
+        if not pacman_conf.exists():
+            logger.warning("pacman.conf not found")
+            return
+        
+        try:
+            with open(pacman_conf, 'r') as f:
+                content = f.read()
+            
+            repo_section = f"[{self.repo_name}]"
+            lines = content.split('\n')
+            new_lines = []
+            
+            # Remove old section if it exists
+            in_section = False
+            for line in lines:
+                # Check if we're entering our section
+                if line.strip() == repo_section or line.strip() == f"#{repo_section}":
+                    in_section = True
+                    continue
+                elif in_section and (line.strip().startswith('[') or line.strip() == ''):
+                    # We're leaving our section
+                    in_section = False
+                
+                if not in_section:
+                    new_lines.append(line)
+            
+            # Add new section if repository exists on VPS
+            if exists:
+                new_lines.append('')
+                new_lines.append(f"# Custom repository: {self.repo_name}")
+                new_lines.append(f"# Automatically enabled - found on VPS")
+                new_lines.append(repo_section)
+                if has_packages:
+                    new_lines.append("SigLevel = Optional TrustAll")
+                    logger.info("Enabling repository with SigLevel = Optional TrustAll (build mode)")
+                else:
+                    new_lines.append("# SigLevel = Optional TrustAll")
+                    new_lines.append("# Repository exists but has no packages yet")
+                    logger.info("Repository section added but commented (no packages yet)")
+                
+                new_lines.append('')
+            else:
+                # Repository doesn't exist on VPS, add commented section
+                new_lines.append('')
+                new_lines.append(f"# Custom repository: {self.repo_name}")
+                new_lines.append(f"# Disabled - not found on VPS (first run?)")
+                new_lines.append(f"#{repo_section}")
+                new_lines.append("#SigLevel = Optional TrustAll")
+                new_lines.append('')
+                logger.info("Repository not found on VPS - keeping disabled")
+            
+            # Write back to pacman.conf
+            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
+                temp_file.write('\n'.join(new_lines))
+                temp_path = temp_file.name
+            
+            # Copy to pacman.conf
+            subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
+            subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
+            os.unlink(temp_path)
+            
+            logger.info(f"Updated pacman.conf for repository '{self.repo_name}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to apply repository state: {e}")
+    
     def get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from packages.py"""
         try:
@@ -164,6 +236,7 @@ class PackageBuilderOrchestrator:
         Phase I: VPS State Fetch
         - List VPS repo files
         - Sync missing files locally
+        - CRITICAL FIX: Apply repository state and update pacman database
         """
         logger.info("PHASE I: VPS State Fetch")
         
@@ -179,6 +252,20 @@ class PackageBuilderOrchestrator:
         self.vps_files = remote_files  # Already basenames
         
         logger.info(f"Found {len(self.vps_files)} files on VPS")
+        
+        # CRITICAL FIX: Apply repository state BEFORE mirroring
+        exists, has_packages = self.ssh_client.check_repository_exists_on_vps()
+        self._apply_repository_state(exists, has_packages)
+        
+        # CRITICAL FIX: Update pacman database after enabling repository
+        if exists:
+            logger.info("Updating pacman database after enabling repository...")
+            cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+            result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+            if result.returncode == 0:
+                logger.info("Pacman database updated successfully")
+            else:
+                logger.warning(f"Pacman update warning: {result.stderr[:200]}")
         
         # Mirror remote packages locally
         if remote_files:
