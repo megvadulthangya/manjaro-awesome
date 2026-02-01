@@ -176,7 +176,7 @@ class SSHClient:
             return False, False
     
     def list_remote_packages(self) -> List[str]:
-        """List all *.pkg.tar.zst files in the remote repository directory (basenames only)"""
+        """List all *.pkg.tar.zst and *.pkg.tar.xz files in the remote repository directory (basenames only)"""
         logger.info("Listing remote repository packages (SSH find)...")
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
@@ -202,6 +202,42 @@ class SSHClient:
             if result.returncode == 0:
                 files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
                 logger.info(f"Found {len(files)} package files on remote server")
+                return files
+            else:
+                logger.warning(f"SSH find returned error")
+                return []
+                
+        except Exception as e:
+            logger.error(f"SSH command failed: {e}")
+            return []
+    
+    def list_remote_files(self) -> List[str]:
+        """List all package and signature files in the remote repository directory (basenames only)"""
+        logger.info("Listing all remote repository files (packages and signatures)...")
+        
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found")
+            return []
+        
+        # List both package files and signature files
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                logger.info(f"Found {len(files)} total files (packages and signatures) on remote server")
                 return files
             else:
                 logger.warning(f"SSH find returned error")
