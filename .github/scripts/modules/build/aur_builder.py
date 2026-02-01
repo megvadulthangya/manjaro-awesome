@@ -16,6 +16,31 @@ class AURBuilder:
     
     def __init__(self, debug_mode: bool = False):
         self.debug_mode = debug_mode
+        self._pacman_initialized = False
+    
+    def _initialize_pacman_database(self) -> bool:
+        """
+        REQUIRED PRECONDITION: Initialize pacman database before any dependency resolution.
+        This must run ONCE per build session before any dependency installation.
+        """
+        if self._pacman_initialized:
+            return True
+        
+        logger.info("🔄 Initializing pacman database (REQUIRED PRECONDITION)...")
+        
+        # REQUIRED: Run pacman -Sy to initialize/update package database
+        cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+        result = self._run_cmd(cmd, log_cmd=True, check=False, timeout=300)
+        
+        if result.returncode == 0:
+            logger.info("✅ Pacman database initialized successfully")
+            self._pacman_initialized = True
+            return True
+        else:
+            logger.warning(f"⚠️ Pacman database initialization warning: {result.stderr[:200]}")
+            # Continue anyway - some repositories might fail but main ones should work
+            self._pacman_initialized = True
+            return True
     
     def install_dependencies_strict(self, deps: List[str]) -> bool:
         """STRICT dependency resolution: pacman first, then yay"""
@@ -24,6 +49,11 @@ class AURBuilder:
         
         print(f"\nInstalling {len(deps)} dependencies...")
         logger.info(f"Dependencies to install: {deps}")
+        
+        # REQUIRED PRECONDITION: Initialize pacman database FIRST
+        if not self._initialize_pacman_database():
+            logger.error("❌ Failed to initialize pacman database")
+            # Try to continue anyway, as yay might work
         
         # CRITICAL FIX: Update pacman-key database first
         print("🔄 Updating pacman-key database...")
@@ -63,10 +93,8 @@ class AURBuilder:
         if phantom_packages:
             logger.info(f"Phantom packages removed: {', '.join(phantom_packages)}")
         
-        # CRITICAL FIX: Use Syy instead of Sy to force refresh
+        # REQUIRED POLICY: First try pacman with Syy (force refresh)
         deps_str = ' '.join(clean_deps)
-        
-        # REQUIRED POLICY: First try pacman
         cmd = f"sudo LC_ALL=C pacman -Syy --needed --noconfirm {deps_str}"
         result = self._run_cmd(cmd, log_cmd=True, check=False, timeout=1200)
         
