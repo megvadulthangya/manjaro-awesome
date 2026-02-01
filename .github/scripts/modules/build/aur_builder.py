@@ -65,6 +65,8 @@ class AURBuilder:
         
         # CRITICAL FIX: Use Syy instead of Sy to force refresh
         deps_str = ' '.join(clean_deps)
+        
+        # REQUIRED POLICY: First try pacman
         cmd = f"sudo LC_ALL=C pacman -Syy --needed --noconfirm {deps_str}"
         result = self._run_cmd(cmd, log_cmd=True, check=False, timeout=1200)
         
@@ -74,8 +76,9 @@ class AURBuilder:
         
         logger.warning(f"⚠️ pacman failed for some dependencies (exit code: {result.returncode})")
         
-        # Fallback to AUR (yay) WITHOUT sudo - but first sync pacman
-        cmd = f"sudo LC_ALL=C pacman -Syy && LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+        # REQUIRED POLICY: Fallback to AUR (yay) if pacman fails
+        # CRITICAL: This fallback MUST NOT be removed, simplified, or replaced
+        cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
         result = self._run_cmd(cmd, log_cmd=True, check=False, user="builder", timeout=1800)
         
         if result.returncode == 0:
