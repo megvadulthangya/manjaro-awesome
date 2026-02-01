@@ -312,10 +312,25 @@ class PackageBuilder:
                 if has_packages:
                     new_lines.append("SigLevel = Optional TrustAll")
                     logger.info("✅ Enabling repository with SigLevel = Optional TrustAll (build mode)")
+                    
+                    # CRITICAL: MANDATORY pacman -Sy when repository is enabled with packages
+                    # DO NOT REMOVE - required for pacman to recognize the newly enabled repository
+                    logger.info("🔄 MANDATORY: Running pacman -Sy after enabling repository...")
+                    cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
+                    result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+                    
+                    if result.returncode == 0:
+                        logger.info("✅ Pacman databases synchronized successfully")
+                    else:
+                        logger.error("❌ Pacman sync failed - dependency installation cannot proceed")
+                        logger.error(f"Error: {result.stderr[:500] if result.stderr else 'Unknown error'}")
+                        # Fail fast: exit if pacman sync fails
+                        raise RuntimeError("Pacman database sync failed after enabling repository")
                 else:
                     new_lines.append("# SigLevel = Optional TrustAll")
                     new_lines.append("# Repository exists but has no packages yet")
                     logger.info("⚠️ Repository section added but commented (no packages yet)")
+                    # DO NOT run pacman -Sy when repository is disabled or has no packages
                 
                 if self.repo_server_url:
                     new_lines.append(f"Server = {self.repo_server_url}")
@@ -335,6 +350,7 @@ class PackageBuilder:
                     new_lines.append("# Server = [URL not configured in secrets]")
                 new_lines.append('')
                 logger.info("ℹ️ Repository not found on VPS - keeping disabled")
+                # DO NOT run pacman -Sy when repository is disabled
             
             # Write back to pacman.conf
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
@@ -347,31 +363,6 @@ class PackageBuilder:
             os.unlink(temp_path)
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
-            
-            # CRITICAL FIX: Run pacman -Sy after enabling repository to force refresh
-            # MANDATORY STEP: This MUST run immediately after enabling repository
-            # DO NOT REMOVE - Required for pacman to recognize the newly enabled repository
-            if exists and has_packages:
-                logger.info("🔄 Synchronizing pacman databases after enabling repository...")
-                
-                # CRITICAL FIX: Update pacman-key database first
-                cmd = "sudo pacman-key --updatedb"
-                result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-                if result.returncode != 0:
-                    logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
-                
-                # MANDATORY: Run pacman -Sy to refresh package databases
-                # DO NOT use -Syy (force) or -Syu (upgrade) - only sync
-                cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
-                result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-                
-                if result.returncode == 0:
-                    logger.info("✅ Pacman databases synchronized successfully")
-                else:
-                    logger.error("❌ Pacman sync failed - dependency installation cannot proceed")
-                    logger.error(f"Error: {result.stderr[:500] if result.stderr else 'Unknown error'}")
-                    # Fail fast: exit if pacman sync fails
-                    raise RuntimeError("Pacman database sync failed after enabling repository")
             
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
@@ -737,7 +728,7 @@ class PackageBuilder:
                 
                 return True
             else:
-                logger.error(f"❌ No packages created for {pkg_name}")
+                logger.error(f"❌ No package files created for {pkg_name}")
                 return False
                 
         except Exception as e:
@@ -1044,23 +1035,23 @@ class PackageBuilder:
             print(f"Total built:     {summary['total_built']}")
             print(f"Skipped:         {summary['skipped']}")
             print(f"Cache hits:      {self.stats['cache_hits']}")
-            print(f"Cache misses:    {self.stats['cache_misses']}")
-            print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
-            print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
-            print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
-            print(f"PACKAGER:        {self.packager_id}")
-            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-            print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
-            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
-            print("=" * 60)
-            
-            if self.built_packages:
-                print("\n📦 Built packages:")
-                for pkg in self.built_packages:
-                    print(f"  - {pkg}")
-            
-            return 0
-            
+                print(f"Cache misses:    {self.stats['cache_misses']}")
+                print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
+                print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+                print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
+                print(f"PACKAGER:        {self.packager_id}")
+                print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+                print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
+                print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
+                print("=" * 60)
+                
+                if self.built_packages:
+                    print("\n📦 Built packages:")
+                    for pkg in self.built_packages:
+                        print(f"  - {pkg}")
+                
+                return 0
+                
         except Exception as e:
             print(f"\n❌ Build failed: {e}")
             import traceback
