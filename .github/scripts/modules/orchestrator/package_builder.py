@@ -348,7 +348,9 @@ class PackageBuilder:
             
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
             
-            # CRITICAL FIX: Run pacman -Syy after enabling repository to force refresh
+            # CRITICAL FIX: Run pacman -Sy after enabling repository to force refresh
+            # MANDATORY STEP: This MUST run immediately after enabling repository
+            # DO NOT REMOVE - Required for pacman to recognize the newly enabled repository
             if exists and has_packages:
                 logger.info("🔄 Synchronizing pacman databases after enabling repository...")
                 
@@ -358,15 +360,22 @@ class PackageBuilder:
                 if result.returncode != 0:
                     logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
                 
-                cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
+                # MANDATORY: Run pacman -Sy to refresh package databases
+                # DO NOT use -Syy (force) or -Syu (upgrade) - only sync
+                cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
                 result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
+                
                 if result.returncode == 0:
                     logger.info("✅ Pacman databases synchronized successfully")
                 else:
-                    logger.warning(f"⚠️ Pacman sync warning: {result.stderr[:200]}")
+                    logger.error("❌ Pacman sync failed - dependency installation cannot proceed")
+                    logger.error(f"Error: {result.stderr[:500] if result.stderr else 'Unknown error'}")
+                    # Fail fast: exit if pacman sync fails
+                    raise RuntimeError("Pacman database sync failed after enabling repository")
             
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
+            raise
     
     def _sync_pacman_databases(self):
         """Simplified pacman database sync with proper SigLevel handling"""
@@ -382,42 +391,10 @@ class PackageBuilder:
             logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
         
-        # CRITICAL FIX: Update pacman-key database first
-        cmd = "sudo pacman-key --updatedb"
-        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-        if result.returncode != 0:
-            logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
+        # Note: _apply_repository_state already runs pacman -Sy when enabling repo
+        # No need to run it again here
         
-        # CRITICAL FIX: Use Syy to force refresh instead of Sy
-        cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
-        result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-        
-        if result.returncode == 0:
-            logger.info("✅ Pacman databases synced successfully")
-            
-            # Debug: List packages in our custom repo
-            debug_cmd = f"sudo pacman -Sl {self.repo_name}"
-            logger.info(f"🔍 DEBUG: Running command to see what packages pacman sees in our repo:")
-            logger.info(f"Command: {debug_cmd}")
-            
-            debug_result = self.shell_executor.run_command(debug_cmd, log_cmd=True, timeout=30, check=False)
-            
-            if debug_result.returncode == 0:
-                if debug_result.stdout.strip():
-                    logger.info(f"Packages in {self.repo_name} according to pacman:")
-                    for line in debug_result.stdout.splitlines():
-                        logger.info(f"  {line}")
-                else:
-                    logger.warning(f"⚠️ pacman -Sl {self.repo_name} returned no output (repo might be empty)")
-            else:
-                logger.warning(f"⚠️ pacman -Sl failed: {debug_result.stderr[:200]}")
-            
-            return True
-        else:
-            logger.error("❌ Pacman sync failed")
-            if result.stderr:
-                logger.error(f"Error: {result.stderr[:500]}")
-            return False
+        return True
     
     def _fetch_aur_version(self, pkg_name: str) -> Optional[Tuple[str, str, Optional[str]]]:
         """
@@ -760,7 +737,7 @@ class PackageBuilder:
                 
                 return True
             else:
-                logger.error(f"❌ No package files created for {pkg_name}")
+                logger.error(f"❌ No packages created for {pkg_name}")
                 return False
                 
         except Exception as e:
