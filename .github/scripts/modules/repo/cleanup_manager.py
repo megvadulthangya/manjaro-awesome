@@ -48,6 +48,53 @@ class CleanupManager:
         self.vps_user = config['vps_user']
         self.vps_host = config['vps_host']
     
+    def revalidate_output_dir_before_database(self):
+        """
+        🚨 PRE-DATABASE VALIDATION: Remove outdated package versions and orphaned signatures.
+        Operates ONLY on output_dir.
+        
+        Enforces:
+        - Only the latest version of each package remains.
+        - Orphaned .sig files (without a package) are removed.
+        """
+        logger.info("🚨 PRE-DATABASE VALIDATION: Starting output_dir revalidation...")
+        
+        # Import SmartCleanup here to avoid circular imports
+        from modules.repo.smart_cleanup import SmartCleanup
+        
+        # Create SmartCleanup instance for output_dir cleanup
+        smart_cleanup = SmartCleanup(self.repo_name, self.output_dir)
+        
+        # Step 1: Remove old package versions (keep only newest per package)
+        smart_cleanup.remove_old_package_versions()
+        
+        # Step 2: Remove orphaned .sig files
+        self._remove_orphaned_signatures()
+        
+        logger.info("✅ PRE-DATABASE VALIDATION: Output directory revalidated successfully.")
+    
+    def _remove_orphaned_signatures(self):
+        """Remove orphaned .sig files that don't have a corresponding package"""
+        logger.info("🔍 Checking for orphaned signature files...")
+        
+        orphaned_count = 0
+        for sig_file in self.output_dir.glob("*.sig"):
+            # Corresponding package file (remove .sig extension)
+            pkg_file = sig_file.with_suffix('')
+            
+            if not pkg_file.exists():
+                try:
+                    sig_file.unlink()
+                    logger.info(f"Removed orphaned signature: {sig_file.name}")
+                    orphaned_count += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete orphaned signature {sig_file}: {e}")
+        
+        if orphaned_count > 0:
+            logger.info(f"✅ Removed {orphaned_count} orphaned signature files")
+        else:
+            logger.info("✅ No orphaned signature files found")
+    
     def server_cleanup(self, version_tracker):
         """
         🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
