@@ -397,7 +397,6 @@ jobs:
             
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
-          pacman -Sy
           
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
@@ -572,7 +571,7 @@ jobs:
           USE_CACHE: "true"  # Enable cache-aware building
         run: |
           echo "=== Starting Builder with Cache Optimization ==="
-          
+          pacman -Sy
           # Make builder script executable
           chmod +x .github/scripts/builder.py
           
