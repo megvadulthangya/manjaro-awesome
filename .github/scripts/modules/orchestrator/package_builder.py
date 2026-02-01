@@ -21,6 +21,7 @@ script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
+# Import our modules - adjust imports to work from the modules directory
 try:
     from modules.common.logging_utils import setup_logger
     logger = setup_logger(__name__)
@@ -43,27 +44,29 @@ from modules.vps.rsync_client import RsyncClient
 from modules.repo.cleanup_manager import CleanupManager
 from modules.repo.database_manager import DatabaseManager
 from modules.repo.version_tracker import VersionTracker
-from modules.repo.manifest_factory import ManifestFactory
 
 
 class PackageBuilder:
     """Main orchestrator that coordinates between modules for package building WITH CACHE SUPPORT"""
-
+    
     def __init__(self):
+        # Run pre-flight environment validation
         EnvironmentValidator.validate_env()
-
+        
+        # Load configuration
         self.config_loader = ConfigLoader()
         self.repo_root = self.config_loader.get_repo_root()
         env_config = self.config_loader.load_environment_config()
         python_config = self.config_loader.load_from_python_config()
-
+        
+        # Store configuration
         self.vps_user = env_config['vps_user']
         self.vps_host = env_config['vps_host']
         self.ssh_key = env_config['ssh_key']
         self.repo_server_url = env_config['repo_server_url']
         self.remote_dir = env_config['remote_dir']
         self.repo_name = env_config['repo_name']
-
+        
         self.output_dir = self.repo_root / python_config['output_dir']
         self.build_tracking_dir = self.repo_root / python_config['build_tracking_dir']
         self.mirror_temp_dir = Path(python_config['mirror_temp_dir'])
@@ -75,19 +78,24 @@ class PackageBuilder:
         self.packager_id = python_config['packager_id']
         self.debug_mode = python_config['debug_mode']
         self.sign_packages = python_config['sign_packages']
-
+        
+        # Cache configuration
         self.use_cache = os.getenv('USE_CACHE', 'false').lower() == 'true'
-
+        
+        # Create directories
         self.output_dir.mkdir(exist_ok=True)
         self.build_tracking_dir.mkdir(exist_ok=True)
-
+        
+        # Initialize modules
         self._init_modules()
-
+        
+        # State
         self.remote_files = []
         self.built_packages = []
         self.skipped_packages = []
         self.rebuilt_local_packages = []
-
+        
+        # Statistics
         self.stats = {
             "start_time": time.time(),
             "aur_success": 0,
@@ -97,9 +105,11 @@ class PackageBuilder:
             "cache_hits": 0,
             "cache_misses": 0,
         }
-
+    
     def _init_modules(self):
+        """Initialize all modules with configuration"""
         try:
+            # VPS modules
             vps_config = {
                 'vps_user': self.vps_user,
                 'vps_host': self.vps_host,
@@ -109,9 +119,10 @@ class PackageBuilder:
             }
             self.ssh_client = SSHClient(vps_config)
             self.ssh_client.setup_ssh_config(self.ssh_key)
-
+            
             self.rsync_client = RsyncClient(vps_config)
-
+            
+            # Repository modules
             repo_config = {
                 'repo_name': self.repo_name,
                 'output_dir': self.output_dir,
@@ -123,39 +134,44 @@ class PackageBuilder:
             self.cleanup_manager = CleanupManager(repo_config)
             self.database_manager = DatabaseManager(repo_config)
             self.version_tracker = VersionTracker(repo_config)
-
+            
+            # Build modules
             self.artifact_manager = ArtifactManager()
             self.aur_builder = AURBuilder(self.debug_mode)
             self.local_builder = LocalBuilder(self.debug_mode)
             self.version_manager = VersionManager()
             self.build_tracker = BuildTracker()
-
+            
+            # GPG Handler
             self.gpg_handler = GPGHandler(self.sign_packages)
-
-            # Provide GPG handler to cleanup manager (optional verification only)
-            self.cleanup_manager.set_gpg_handler(self.gpg_handler)
-
+            
+            # Shell executor
             self.shell_executor = ShellExecutor(self.debug_mode)
-
+            
             logger.info("✅ All modules initialized successfully")
             logger.info(f"📝 Package signing: {'ENABLED' if self.sign_packages else 'DISABLED'}")
-
+            
+            # Log cache status
             if self.use_cache:
                 logger.info("🔧 CACHE: Cache-aware building ENABLED")
+                # Check cache status
                 built_count = len(list(self.output_dir.glob("*.pkg.tar.*")))
-                logger.info(f"🔧 CACHE: Cached package files: {built_count}")
+                logger.info(f"🔧 CACHE: Found {built_count} cached package files in output_dir")
             else:
                 logger.info("🔧 CACHE: Cache-aware building DISABLED")
-
+            
         except NameError as e:
             logger.error(f"❌ NameError during module initialization: {e}")
+            logger.error("This indicates missing imports in module files")
             sys.exit(1)
         except Exception as e:
             logger.error(f"❌ Error initializing modules: {e}")
             sys.exit(1)
-
+    
     def get_package_lists(self):
+        """Get package lists from packages.py or exit if not available"""
         try:
+            # First try to import from the current directory
             import packages
             print("📦 Using package lists from packages.py")
             local_packages_list, aur_packages_list = packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
@@ -163,6 +179,7 @@ class PackageBuilder:
             return local_packages_list, aur_packages_list
         except ImportError:
             try:
+                # Try to import from parent directory
                 import sys
                 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 import scripts.packages as packages
@@ -173,96 +190,120 @@ class PackageBuilder:
             except ImportError:
                 logger.error("Cannot load package lists from packages.py. Exiting.")
                 sys.exit(1)
-
+    
     def _check_cache_for_package(self, pkg_name: str, is_aur: bool) -> Tuple[bool, Optional[str]]:
+        """
+        Check if package is available in cache and up-to-date.
+        
+        Args:
+            pkg_name: Package name
+            is_aur: Whether it's an AUR package
+        
+        Returns:
+            Tuple of (cached: bool, version: Optional[str])
+        """
         if not self.use_cache:
             return False, None
-
+        
+        # Check built packages cache first
         cache_patterns = [
             f"{self.output_dir}/{pkg_name}-*.pkg.tar.*",
             f"{self.output_dir}/*{pkg_name}*.pkg.tar.*"
         ]
-
+        
         cached_files = []
         for pattern in cache_patterns:
             cached_files.extend(glob.glob(pattern))
-
+        
         if cached_files:
+            # Extract version from cached file
             for cached_file in cached_files:
                 try:
+                    # Parse version from filename
                     filename = os.path.basename(cached_file)
                     base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
                     parts = base.split('-')
-
+                    
+                    # Try to extract version
                     for i in range(len(parts) - 2, 0, -1):
                         possible_name = '-'.join(parts[:i])
                         if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
                             if len(parts) >= i + 3:
                                 version_part = parts[i]
-                                release_part = parts[i + 1]
+                                release_part = parts[i+1]
                                 if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
                                     epoch_part = parts[i]
-                                    version_part = parts[i + 1]
-                                    release_part = parts[i + 2]
+                                    version_part = parts[i+1]
+                                    release_part = parts[i+2]
                                     cached_version = f"{epoch_part}:{version_part}-{release_part}"
-
+                                    
+                                    # Extract components for comparison
                                     epoch = epoch_part
                                     pkgver = version_part
                                     pkgrel = release_part
                                 else:
                                     cached_version = f"{version_part}-{release_part}"
-
+                                    
+                                    # Extract components for comparison
                                     epoch = None
                                     pkgver = version_part
                                     pkgrel = release_part
-
+                                
+                                # Check if this cached version is newer than remote
                                 remote_version = self.get_remote_version(pkg_name)
                                 if remote_version:
+                                    # Compare versions
                                     should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
                                     if not should_build:
-                                        logger.info(f"📦 CACHE HIT: {pkg_name} (SKIP BUILD)")
+                                        logger.info(f"📦 CACHE HIT: {pkg_name} (cached: {cached_version}, remote: {remote_version}) - SKIP BUILD")
                                         self.stats["cache_hits"] += 1
                                         return True, cached_version
                                     else:
-                                        logger.info(f"📦 CACHE STALE: {pkg_name} (NEEDS REBUILD)")
+                                        logger.info(f"📦 CACHE STALE: {pkg_name} (cached: {cached_version}, remote: {remote_version}) - NEEDS REBUILD")
                                         self.stats["cache_misses"] += 1
                                         return False, None
                                 else:
-                                    logger.info(f"📦 CACHE HIT: {pkg_name} (no remote) - SKIP BUILD")
+                                    # No remote version, cache is valid
+                                    logger.info(f"📦 CACHE HIT: {pkg_name} (cached: {cached_version}, no remote) - SKIP BUILD")
                                     self.stats["cache_hits"] += 1
                                     return True, cached_version
                 except Exception as e:
-                    logger.debug(f"Could not parse cached version for {pkg_name}: {e}")
-
+                    logger.debug(f"Could not parse version from cached file {cached_file}: {e}")
+        
         self.stats["cache_misses"] += 1
         return False, None
-
+    
     def _apply_repository_state(self, exists: bool, has_packages: bool):
+        """Apply repository state with proper SigLevel based on discovery - CRITICAL FIX: Run pacman -Sy after enabling repository"""
         pacman_conf = Path("/etc/pacman.conf")
-
+        
         if not pacman_conf.exists():
             logger.warning("pacman.conf not found")
             return
-
+        
         try:
             with open(pacman_conf, 'r') as f:
                 content = f.read()
-
+            
             repo_section = f"[{self.repo_name}]"
             lines = content.split('\n')
             new_lines = []
-
+            
+            # Remove old section if it exists
             in_section = False
             for line in lines:
+                # Check if we're entering our section
                 if line.strip() == repo_section or line.strip() == f"#{repo_section}":
                     in_section = True
                     continue
                 elif in_section and (line.strip().startswith('[') or line.strip() == ''):
+                    # We're leaving our section
                     in_section = False
-
+                
                 if not in_section:
                     new_lines.append(line)
-
+            
+            # Add new section if repository exists on VPS
             if exists:
                 new_lines.append('')
                 new_lines.append(f"# Custom repository: {self.repo_name}")
@@ -275,13 +316,14 @@ class PackageBuilder:
                     new_lines.append("# SigLevel = Optional TrustAll")
                     new_lines.append("# Repository exists but has no packages yet")
                     logger.info("⚠️ Repository section added but commented (no packages yet)")
-
+                
                 if self.repo_server_url:
                     new_lines.append(f"Server = {self.repo_server_url}")
                 else:
                     new_lines.append("# Server = [URL not configured in secrets]")
                 new_lines.append('')
             else:
+                # Repository doesn't exist on VPS, add commented section
                 new_lines.append('')
                 new_lines.append(f"# Custom repository: {self.repo_name}")
                 new_lines.append(f"# Disabled - not found on VPS (first run?)")
@@ -293,95 +335,122 @@ class PackageBuilder:
                     new_lines.append("# Server = [URL not configured in secrets]")
                 new_lines.append('')
                 logger.info("ℹ️ Repository not found on VPS - keeping disabled")
-
+            
+            # Write back to pacman.conf
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
                 temp_file.write('\n'.join(new_lines))
                 temp_path = temp_file.name
-
+            
+            # Copy to pacman.conf
             subprocess.run(['sudo', 'cp', temp_path, str(pacman_conf)], check=False)
             subprocess.run(['sudo', 'chmod', '644', str(pacman_conf)], check=False)
             os.unlink(temp_path)
-
+            
             logger.info(f"✅ Updated pacman.conf for repository '{self.repo_name}'")
-
+            
+            # CRITICAL FIX: Run pacman -Syy after enabling repository to force refresh
             if exists and has_packages:
                 logger.info("🔄 Synchronizing pacman databases after enabling repository...")
-
+                
+                # CRITICAL FIX: Update pacman-key database first
                 cmd = "sudo pacman-key --updatedb"
                 result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
                 if result.returncode != 0:
-                    logger.warning("⚠️ pacman-key --updatedb warning")
-
+                    logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
+                
                 cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
                 result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
                 if result.returncode == 0:
                     logger.info("✅ Pacman databases synchronized successfully")
                 else:
-                    logger.warning("⚠️ Pacman sync warning")
-
+                    logger.warning(f"⚠️ Pacman sync warning: {result.stderr[:200]}")
+            
         except Exception as e:
             logger.error(f"Failed to apply repository state: {e}")
-
+    
     def _sync_pacman_databases(self):
+        """Simplified pacman database sync with proper SigLevel handling"""
         print("\n" + "=" * 60)
         print("FINAL STEP: Syncing pacman databases")
         print("=" * 60)
-
+        
+        # First, ensure repository is enabled with proper SigLevel
         exists, has_packages = self.ssh_client.check_repository_exists_on_vps()
         self._apply_repository_state(exists, has_packages)
-
+        
         if not exists:
             logger.info("ℹ️ Repository doesn't exist on VPS, skipping pacman sync")
             return False
-
+        
+        # CRITICAL FIX: Update pacman-key database first
         cmd = "sudo pacman-key --updatedb"
         result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
         if result.returncode != 0:
-            logger.warning("⚠️ pacman-key --updatedb warning")
-
+            logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
+        
+        # CRITICAL FIX: Use Syy to force refresh instead of Sy
         cmd = "sudo LC_ALL=C pacman -Syy --noconfirm"
         result = self.shell_executor.run_command(cmd, log_cmd=True, timeout=300, check=False)
-
+        
         if result.returncode == 0:
             logger.info("✅ Pacman databases synced successfully")
+            
+            # Debug: List packages in our custom repo
             debug_cmd = f"sudo pacman -Sl {self.repo_name}"
+            logger.info(f"🔍 DEBUG: Running command to see what packages pacman sees in our repo:")
+            logger.info(f"Command: {debug_cmd}")
+            
             debug_result = self.shell_executor.run_command(debug_cmd, log_cmd=True, timeout=30, check=False)
+            
             if debug_result.returncode == 0:
                 if debug_result.stdout.strip():
                     logger.info(f"Packages in {self.repo_name} according to pacman:")
                     for line in debug_result.stdout.splitlines():
                         logger.info(f"  {line}")
                 else:
-                    logger.warning("⚠️ pacman -Sl returned no output (repo might be empty)")
+                    logger.warning(f"⚠️ pacman -Sl {self.repo_name} returned no output (repo might be empty)")
             else:
-                logger.warning("⚠️ pacman -Sl failed")
+                logger.warning(f"⚠️ pacman -Sl failed: {debug_result.stderr[:200]}")
+            
             return True
-
-        logger.error("❌ Pacman sync failed")
-        return False
-
+        else:
+            logger.error("❌ Pacman sync failed")
+            if result.stderr:
+                logger.error(f"Error: {result.stderr[:500]}")
+            return False
+    
     def _fetch_aur_version(self, pkg_name: str) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        Fetch the current version of an AUR package using the AUR RPC API
+        
+        Args:
+            pkg_name: Name of the AUR package
+            
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or None if failed
+        """
         try:
             url = f"https://aur.archlinux.org/rpc/?v=5&type=info&arg[]={pkg_name}"
-            logger.info(f"📡 Fetching AUR version for {pkg_name}")
-
+            logger.info(f"📡 Fetching AUR version for {pkg_name} from {url}")
+            
             with urllib.request.urlopen(url, timeout=30) as response:
                 data = json.loads(response.read().decode('utf-8'))
-
+                
                 if data.get('resultcount', 0) > 0:
                     result = data['results'][0]
                     version = result.get('Version', '')
-
+                    
                     if version:
                         logger.info(f"📦 AUR version for {pkg_name}: {version}")
-
+                        
+                        # Parse version string (e.g., "1.2.3-1" or "2:1.2.3-1")
                         if ':' in version:
                             epoch_part, rest = version.split(':', 1)
                             epoch = epoch_part.strip()
                         else:
                             epoch = None
                             rest = version
-
+                        
                         if '-' in rest:
                             pkgver, pkgrel = rest.rsplit('-', 1)
                             pkgver = pkgver.strip()
@@ -389,117 +458,146 @@ class PackageBuilder:
                         else:
                             pkgver = rest.strip()
                             pkgrel = '1'
-
+                        
                         return pkgver, pkgrel, epoch
                     else:
                         logger.warning(f"⚠️ No version found for {pkg_name} in AUR response")
                 else:
                     logger.warning(f"⚠️ Package {pkg_name} not found in AUR")
-
+                    
         except urllib.error.URLError as e:
             logger.error(f"❌ Network error fetching AUR version for {pkg_name}: {e}")
         except json.JSONDecodeError as e:
             logger.error(f"❌ JSON decode error for {pkg_name}: {e}")
         except Exception as e:
             logger.error(f"❌ Error fetching AUR version for {pkg_name}: {e}")
-
+        
         return None
-
+    
     def _get_local_version(self, pkg_dir: Path) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        Get version from local PKGBUILD or .SRCINFO
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or None if failed
+        """
         try:
             return self.version_manager.extract_version_from_srcinfo(pkg_dir)
         except Exception as e:
-            logger.error(f"❌ Failed to extract version for {pkg_dir.name}")
-
+            logger.error(f"❌ Failed to extract version from {pkg_dir}: {e}")
+            
+            # Fallback: try to parse PKGBUILD directly
             pkgbuild_path = pkg_dir / "PKGBUILD"
             if pkgbuild_path.exists():
                 try:
                     with open(pkgbuild_path, 'r') as f:
                         content = f.read()
-
+                    
+                    # Simple regex to extract pkgver and pkgrel
                     pkgver_match = re.search(r'pkgver=([^\s\']+)', content)
                     pkgrel_match = re.search(r'pkgrel=([^\s\']+)', content)
                     epoch_match = re.search(r'epoch=([^\s\']+)', content)
-
+                    
                     if pkgver_match and pkgrel_match:
                         pkgver = pkgver_match.group(1).strip('"\'')
                         pkgrel = pkgrel_match.group(1).strip('"\'')
                         epoch = epoch_match.group(1).strip('"\'') if epoch_match else None
+                        
+                        logger.info(f"📦 Parsed version from PKGBUILD: pkgver={pkgver}, pkgrel={pkgrel}, epoch={epoch}")
                         return pkgver, pkgrel, epoch
-
-                except Exception:
-                    logger.error("❌ Failed to parse PKGBUILD")
+                    
+                except Exception as e2:
+                    logger.error(f"❌ Failed to parse PKGBUILD: {e2}")
+            
             return None
-
+    
     def package_exists(self, pkg_name: str, version=None) -> bool:
+        """Check if package exists on server"""
         return self.version_tracker.package_exists(pkg_name, self.remote_files)
-
+    
     def get_remote_version(self, pkg_name: str) -> Optional[str]:
+        """Get the version of a package from remote server using SRCINFO-based extraction"""
         return self.version_tracker.get_remote_version(pkg_name, self.remote_files)
-
+    
     def _build_aur_package(self, pkg_name: str) -> bool:
+        """Build AUR package with proper version checking and signing"""
+        # Step 1: Fetch current version from AUR
         aur_version_info = self._fetch_aur_version(pkg_name)
         if not aur_version_info:
             logger.error(f"❌ Failed to fetch AUR version for {pkg_name}")
             return False
-
+        
         pkgver, pkgrel, epoch = aur_version_info
         aur_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
-
+        
+        # Step 2: Get remote version
         remote_version = self.get_remote_version(pkg_name)
-
+        
+        # Step 3: Compare versions
         if remote_version:
             should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
             if not should_build:
-                logger.info(f"✅ {pkg_name}: Up-to-date - SKIPPING")
+                logger.info(f"✅ {pkg_name}: AUR version {aur_version} matches remote version {remote_version} - SKIPPING")
                 self.skipped_packages.append(f"{pkg_name} ({aur_version})")
                 self.version_tracker.register_skipped_package(pkg_name, remote_version)
                 return False
             else:
-                logger.info(f"🔄 {pkg_name}: NEWER - BUILDING")
+                logger.info(f"🔄 {pkg_name}: AUR version {aur_version} is NEWER than remote {remote_version} - BUILDING")
         else:
-            logger.info(f"🔄 {pkg_name}: No remote version, building")
-
+            logger.info(f"🔄 {pkg_name}: No remote version found, building AUR version {aur_version}")
+        
+        # Step 4: Clone and build
         aur_dir = self.aur_build_dir
         aur_dir.mkdir(exist_ok=True)
-
+        
         pkg_dir = aur_dir / pkg_name
         if pkg_dir.exists():
             shutil.rmtree(pkg_dir, ignore_errors=True)
-
+        
         logger.info(f"📥 Cloning {pkg_name} from AUR...")
-
+        
+        # Try different AUR URLs from config
         clone_success = False
         for aur_url_template in self.aur_urls:
             aur_url = aur_url_template.format(pkg_name=pkg_name)
+            logger.info(f"   Trying AUR URL: {aur_url}")
             result = self.shell_executor.run_command(
                 f"git clone --depth 1 {aur_url} {pkg_dir}",
                 check=False
             )
             if result and result.returncode == 0:
                 clone_success = True
+                logger.info(f"   Successfully cloned {pkg_name} from {aur_url}")
                 break
             else:
                 if pkg_dir.exists():
                     shutil.rmtree(pkg_dir, ignore_errors=True)
-
+                logger.warning(f"   Failed to clone from {aur_url}")
+        
         if not clone_success:
-            logger.error(f"❌ Failed to clone {pkg_name}")
+            logger.error(f"❌ Failed to clone {pkg_name} from any AUR URL")
             return False
-
+        
+        # Set correct permissions
         self.shell_executor.run_command(f"chown -R builder:builder {pkg_dir}", check=False)
-
+        
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"❌ No PKGBUILD found for {pkg_name}")
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
-
+        
         try:
-            logger.info(f"🔨 Building {pkg_name}...")
-
+            logger.info(f"🔨 Building {pkg_name} ({aur_version})...")
+            
+            # Clean workspace before building
             self.artifact_manager.clean_workspace(pkg_dir)
-
+            
+            # Download sources
+            logger.info("   Downloading sources...")
             source_result = self.shell_executor.run_command(
                 f"makepkg -od --noconfirm",
                 cwd=pkg_dir,
@@ -508,12 +606,14 @@ class PackageBuilder:
                 timeout=600,
                 extra_env={"PACKAGER": self.packager_id}
             )
-
+            
             if source_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources for {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
-
+            
+            # Build package
+            logger.info("   Building package...")
             build_result = self.shell_executor.run_command(
                 f"makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
@@ -522,76 +622,86 @@ class PackageBuilder:
                 timeout=3600,
                 extra_env={"PACKAGER": self.packager_id}
             )
-
+            
             if build_result.returncode != 0:
                 logger.error(f"❌ Failed to build {pkg_name}")
                 shutil.rmtree(pkg_dir, ignore_errors=True)
                 return False
-
+            
+            # Move and sign built packages
             moved = False
             for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                 dest = self.output_dir / pkg_file.name
                 shutil.move(str(pkg_file), str(dest))
                 logger.info(f"✅ Built: {pkg_file.name}")
                 moved = True
-
-                # SECURITY: do not print paths
+                
+                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
+                print(f"🔐 Attempting to sign: {dest}")
                 if not self.gpg_handler.sign_package(str(dest)):
-                    logger.error("❌ Failed to sign package (continuing)")
-
+                    logger.error(f"❌ Failed to sign package: {dest}")
+                    # Continue anyway - the package is built but not signed
+            
             shutil.rmtree(pkg_dir, ignore_errors=True)
-
+            
             if moved:
                 self.built_packages.append(f"{pkg_name} ({aur_version})")
                 self.version_tracker.register_package_target_version(pkg_name, aur_version)
                 return True
-
-            logger.error(f"❌ No package files created for {pkg_name}")
-            return False
-
+            else:
+                logger.error(f"❌ No package files created for {pkg_name}")
+                return False
+                
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
             shutil.rmtree(pkg_dir, ignore_errors=True)
             return False
-
+    
     def _build_local_package(self, pkg_name: str) -> bool:
+        """Build local package with proper version checking and signing"""
         pkg_dir = self.repo_root / pkg_name
         if not pkg_dir.exists():
             logger.error(f"❌ Package directory not found: {pkg_name}")
             return False
-
+        
         pkgbuild = pkg_dir / "PKGBUILD"
         if not pkgbuild.exists():
             logger.error(f"❌ No PKGBUILD found for {pkg_name}")
             return False
-
+        
+        # Step 1: Get local version from PKGBUILD
         local_version_info = self._get_local_version(pkg_dir)
         if not local_version_info:
             logger.error(f"❌ Failed to extract version for {pkg_name}")
             return False
-
+        
         pkgver, pkgrel, epoch = local_version_info
         local_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
-
+        
+        # Step 2: Get remote version
         remote_version = self.get_remote_version(pkg_name)
-
+        
+        # Step 3: Compare versions
         if remote_version:
             should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
             if not should_build:
-                logger.info(f"✅ {pkg_name}: Up-to-date - SKIPPING")
+                logger.info(f"✅ {pkg_name}: Local version {local_version} matches remote version {remote_version} - SKIPPING")
                 self.skipped_packages.append(f"{pkg_name} ({local_version})")
                 self.version_tracker.register_skipped_package(pkg_name, remote_version)
                 return False
             else:
-                logger.info(f"🔄 {pkg_name}: NEWER - BUILDING")
+                logger.info(f"🔄 {pkg_name}: Local version {local_version} is NEWER than remote {remote_version} - BUILDING")
         else:
-            logger.info(f"🔄 {pkg_name}: No remote version, building")
-
+            logger.info(f"🔄 {pkg_name}: No remote version found, building local version {local_version}")
+        
         try:
-            logger.info(f"🔨 Building {pkg_name}...")
-
+            logger.info(f"🔨 Building {pkg_name} ({local_version})...")
+            
+            # Clean workspace before building
             self.artifact_manager.clean_workspace(pkg_dir)
-
+            
+            # Download sources
+            logger.info("   Downloading sources...")
             source_result = self.shell_executor.run_command(
                 f"makepkg -od --noconfirm",
                 cwd=pkg_dir,
@@ -600,16 +710,18 @@ class PackageBuilder:
                 timeout=600,
                 extra_env={"PACKAGER": self.packager_id}
             )
-
+            
             if source_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources for {pkg_name}")
                 return False
-
+            
+            # Build package with appropriate flags
             makepkg_flags = "-si --noconfirm --clean"
             if pkg_name == "gtk2":
                 makepkg_flags += " --nocheck"
                 logger.info("   GTK2: Skipping check step (long)")
-
+            
+            logger.info("   Building package...")
             build_result = self.shell_executor.run_command(
                 f"makepkg {makepkg_flags}",
                 cwd=pkg_dir,
@@ -618,154 +730,175 @@ class PackageBuilder:
                 timeout=3600,
                 extra_env={"PACKAGER": self.packager_id}
             )
-
+            
             if build_result.returncode != 0:
                 logger.error(f"❌ Failed to build {pkg_name}")
                 return False
-
+            
+            # Move and sign built packages
             moved = False
             for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
                 dest = self.output_dir / pkg_file.name
                 shutil.move(str(pkg_file), str(dest))
                 logger.info(f"✅ Built: {pkg_file.name}")
                 moved = True
-
+                
+                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
+                print(f"🔐 Attempting to sign: {dest}")
                 if not self.gpg_handler.sign_package(str(dest)):
-                    logger.error("❌ Failed to sign package (continuing)")
-
+                    logger.error(f"❌ Failed to sign package: {dest}")
+                    # Continue anyway - the package is built but not signed
+            
             if moved:
                 self.built_packages.append(f"{pkg_name} ({local_version})")
                 self.rebuilt_local_packages.append(pkg_name)
                 self.version_tracker.register_package_target_version(pkg_name, local_version)
-
+                
+                # Collect metadata for hokibot
                 self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
                 logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {local_version}")
+                
                 return True
-
-            logger.error(f"❌ No package files created for {pkg_name}")
-            return False
-
+            else:
+                logger.error(f"❌ No package files created for {pkg_name}")
+                return False
+                
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
             return False
-
+    
     def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
+        """Build a single package WITH CACHE CHECK"""
         print(f"\n--- Processing: {pkg_name} ({'AUR' if is_aur else 'Local'}) ---")
-
+        
+        # Check cache first
         cached, cached_version = self._check_cache_for_package(pkg_name, is_aur)
         if cached:
-            logger.info(f"✅ Using cached package: {pkg_name}")
+            logger.info(f"✅ Using cached package: {pkg_name} ({cached_version})")
             self.built_packages.append(f"{pkg_name} ({cached_version}) [CACHED]")
-
+            
+            # Register target version for cleanup
             self.version_tracker.register_package_target_version(pkg_name, cached_version)
-
+            
+            # Record statistics
             if is_aur:
                 self.stats["aur_success"] += 1
                 self.build_tracker.record_built_package(pkg_name, cached_version, is_aur=True)
             else:
                 self.stats["local_success"] += 1
                 self.build_tracker.record_built_package(pkg_name, cached_version, is_aur=False)
-
+            
             return True
-
+        
+        # If not cached, proceed with normal build
         if is_aur:
             return self._build_aur_package(pkg_name)
-        return self._build_local_package(pkg_name)
-
+        else:
+            return self._build_local_package(pkg_name)
+    
     def build_packages(self) -> int:
+        """Build packages with cache-aware optimization"""
         print("\n" + "=" * 60)
         print("Building packages (Cache-aware)")
         print("=" * 60)
-
+        
         local_packages, aur_packages = self.get_package_lists()
-
+        
         print(f"📦 Package statistics:")
         print(f"   Local packages: {len(local_packages)}")
         print(f"   AUR packages: {len(aur_packages)}")
         print(f"   Total packages: {len(local_packages) + len(aur_packages)}")
         print(f"   Cache enabled: {self.use_cache}")
         print(f"   Package signing: {'ENABLED' if self.gpg_handler.sign_packages_enabled else 'DISABLED'}")
-
+        
         print(f"\n🔨 Building {len(aur_packages)} AUR packages")
         for pkg in aur_packages:
-            if not self._build_single_package(pkg, is_aur=True):
+            if self._build_single_package(pkg, is_aur=True):
+                # Success already recorded in _build_single_package
+                pass
+            else:
                 self.stats["aur_failed"] += 1
                 self.build_tracker.record_failed_package(is_aur=True)
-
+        
         print(f"\n🔨 Building {len(local_packages)} local packages")
         for pkg in local_packages:
-            if not self._build_single_package(pkg, is_aur=False):
+            if self._build_single_package(pkg, is_aur=False):
+                # Success already recorded in _build_single_package
+                pass
+            else:
                 self.stats["local_failed"] += 1
                 self.build_tracker.record_failed_package(is_aur=False)
-
+        
         return self.stats["aur_success"] + self.stats["local_success"]
-
+    
     def upload_packages(self) -> bool:
+        """Upload packages to server using RSYNC WITHOUT --delete flag"""
+        # Get all package files and database files
         pkg_files = list(self.output_dir.glob("*.pkg.tar.*"))
         db_files = list(self.output_dir.glob(f"{self.repo_name}.*"))
-
+        
         all_files = pkg_files + db_files
-
+        
         if not all_files:
             logger.warning("No files to upload")
             self.version_tracker.set_upload_successful(False)
             return False
-
+        
+        # Ensure remote directory exists
         self.ssh_client.ensure_remote_directory()
-
+        
+        # Collect files using glob patterns
         file_patterns = [
             str(self.output_dir / "*.pkg.tar.*"),
             str(self.output_dir / f"{self.repo_name}.*")
         ]
-
+        
         files_to_upload = []
         for pattern in file_patterns:
             files_to_upload.extend(glob.glob(pattern))
-
+        
         if not files_to_upload:
             logger.error("No files found to upload!")
             self.version_tracker.set_upload_successful(False)
             return False
-
+        
+        # Upload files using Rsync client
         upload_success = self.rsync_client.upload_files(files_to_upload, self.output_dir)
-
+        
+        # Set upload success flag for cleanup
         self.version_tracker.set_upload_successful(upload_success)
+        
         return upload_success
-
+    
     def create_artifact_archive_for_github(self) -> Optional[Path]:
+        """
+        Create a tar.gz archive of all built artifacts for GitHub upload.
+        This avoids issues with colon (:) characters in package filenames.
+        """
         log_path = Path("builder.log")
         return self.artifact_manager.create_artifact_archive(self.output_dir, log_path)
-
+    
     def run(self):
+        """Main execution with cache-aware building"""
         print("\n" + "=" * 60)
         print("🚀 MANJARO PACKAGE BUILDER (MODULAR ARCHITECTURE WITH CACHE)")
         print("=" * 60)
-
+        
         try:
             print("\n🔧 Initial setup...")
-            # SECURITY: do not print paths or directory names
-            print("Repository root: [REDACTED]")
+            print(f"Repository root: {self.repo_root}")
             print(f"Repository name: {self.repo_name}")
-            print("Output directory: [REDACTED]")
-            print("PACKAGER identity: [LOADED]")
+            print(f"Output directory: {self.output_dir}")
+            print(f"PACKAGER identity: {self.packager_id}")
             print(f"Cache optimization: {'ENABLED' if self.use_cache else 'DISABLED'}")
             print(f"Package signing: {'ENABLED' if self.sign_packages else 'DISABLED'}")
-
+            
+            # Display initial cache status
             if self.use_cache:
                 built_count = len(list(self.output_dir.glob("*.pkg.tar.*")))
                 print(f"📦 Initial cache contains {built_count} package files")
-
-            # Build manifest allowlist from PKGBUILD parsing (local + AUR)
-            local_list, aur_list = self.get_package_lists()
-            sources: List[str] = []
-            for p in local_list:
-                sources.append(str(self.repo_root / p))
-            for a in aur_list:
-                sources.append(a)
-
-            allowlist = ManifestFactory.build_allowlist(sources)
-            self.cleanup_manager.set_allowlist(allowlist)
-
+            
+            # STEP 0: Initialize GPG FIRST if enabled
             print("\n" + "=" * 60)
             print("STEP 0: GPG INITIALIZATION")
             print("=" * 60)
@@ -776,92 +909,117 @@ class PackageBuilder:
                     logger.info("✅ GPG initialized successfully")
             else:
                 logger.info("ℹ️ GPG signing disabled (no key provided)")
-
+            
+            # STEP 1: SIMPLIFIED REPOSITORY DISCOVERY
             print("\n" + "=" * 60)
             print("STEP 1: SIMPLIFIED REPOSITORY STATE DISCOVERY")
             print("=" * 60)
-
+            
+            # Check if repository exists on VPS
             repo_exists, has_packages = self.ssh_client.check_repository_exists_on_vps()
+            
+            # Apply repository state based on discovery
             self._apply_repository_state(repo_exists, has_packages)
-
+            
+            # Ensure remote directory exists
             self.ssh_client.ensure_remote_directory()
-
+            
+            # STEP 2: List remote packages for version comparison
             remote_packages = self.ssh_client.list_remote_packages()
             self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
-
-            logger.info(f"📊 Remote packages discovered: {len(self.remote_files)}")
-
+            
+            logger.info(f"📊 Found {len(self.remote_files)} remote packages for version comparison")
+            
+            # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
+            # But check cache first
             if remote_packages:
                 print("\n" + "=" * 60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
                 print("=" * 60)
-
+                
+                # Check if we already have cached mirror
                 cached_mirror_files = list(self.mirror_temp_dir.glob("*.pkg.tar.*"))
                 if cached_mirror_files and self.use_cache:
                     print(f"📦 Using cached VPS mirror with {len(cached_mirror_files)} files")
+                    # Copy cached files to output directory
                     for cached_file in cached_mirror_files:
                         dest = self.output_dir / cached_file.name
                         if not dest.exists():
                             shutil.copy2(cached_file, dest)
                 else:
+                    # No cache, perform fresh mirror
                     if not self.rsync_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir):
                         logger.error("❌ FAILED to mirror remote packages locally")
+                        logger.error("Cannot proceed without local package mirror")
                         return 1
             else:
                 logger.info("ℹ️ No remote packages to mirror (repository appears empty)")
-
+            
+            # STEP 3: Check existing database files
             existing_db_files, missing_db_files = self.database_manager.check_database_files()
+            
+            # Fetch existing database if available
             if existing_db_files:
                 self.database_manager.fetch_existing_database(existing_db_files)
-
+            
+            # Build packages with cache optimization
             print("\n" + "=" * 60)
             print("STEP 5: PACKAGE BUILDING (CACHE-AWARE SRCINFO VERSIONING)")
             print("=" * 60)
-
+            
             total_built = self.build_packages()
-
+            
+            # Check if we have any packages locally (mirrored + newly built)
             local_packages = self.database_manager._get_all_local_packages()
-
+            
             if local_packages or remote_packages:
                 print("\n" + "=" * 60)
                 print("STEP 6: REPOSITORY DATABASE HANDLING (WITH LOCAL MIRROR)")
                 print("=" * 60)
-
-                # Pre-db VPS cleanup is safe and will never delete db artifacts;
-                # it will enforce mirror deletions only once local inventory exists.
+                
+                # ZERO-RESIDUE FIX: Perform server cleanup BEFORE database generation
                 print("\n" + "=" * 60)
-                print("🚨 PRE-DATABASE CLEANUP: Removing obsolete remote packages")
+                print("🚨 PRE-DATABASE CLEANUP: Removing zombie packages from server")
                 print("=" * 60)
                 self.cleanup_manager.server_cleanup(self.version_tracker)
-
+                
+                # Generate database with ALL locally available packages
                 if self.database_manager.generate_full_database(self.repo_name, self.output_dir, self.cleanup_manager):
+                    # Sign repository database files if GPG is enabled
                     if self.gpg_handler.gpg_enabled:
                         if not self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir)):
                             logger.warning("⚠️ Failed to sign repository files, continuing anyway")
-
+                    
+                    # Upload regenerated database and packages
                     if not self.ssh_client.test_ssh_connection():
                         logger.warning("SSH test failed, but trying upload anyway...")
-
+                    
+                    # Upload everything (packages + database + signatures)
                     upload_success = self.upload_packages()
-
-                    # Post-upload VPS cleanup: enforce exact local output_dir inventory (delete stale)
+                    
+                    # ZERO-RESIDUE FIX: Perform final server cleanup AFTER upload
                     if upload_success:
                         print("\n" + "=" * 60)
-                        print("🚨 POST-UPLOAD CLEANUP: Enforcing VPS mirror of local output_dir")
+                        print("🚨 POST-UPLOAD CLEANUP: Final zombie package removal")
                         print("=" * 60)
                         self.cleanup_manager.server_cleanup(self.version_tracker)
-
+                    
+                    # Clean up GPG temporary directory
                     self.gpg_handler.cleanup()
-
+                    
                     if upload_success:
+                        # STEP 7: Update repository state and sync pacman
                         print("\n" + "=" * 60)
                         print("STEP 7: FINAL REPOSITORY STATE UPDATE")
                         print("=" * 60)
-
+                        
+                        # Re-check repository state (it should exist now)
                         repo_exists, has_packages = self.ssh_client.check_repository_exists_on_vps()
                         self._apply_repository_state(repo_exists, has_packages)
+                        
+                        # Sync pacman databases
                         self._sync_pacman_databases()
-
+                        
                         print("\n✅ Build completed successfully!")
                     else:
                         print("\n❌ Upload failed!")
@@ -876,27 +1034,30 @@ class PackageBuilder:
                 print(f"   Total skipped: {len(self.skipped_packages)}")
                 print(f"   Cache hits: {self.stats['cache_hits']}")
                 print(f"   Cache misses: {self.stats['cache_misses']}")
-
+                
                 if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
                     print("⚠️ Some packages failed to build")
                 else:
                     print("✅ All packages are up to date or built successfully!")
-
+                
+                # Clean up GPG even if no packages built
                 self.gpg_handler.cleanup()
-
+            
+            # STEP 8: Create artifact archive for GitHub upload
             print("\n" + "=" * 60)
             print("STEP 8: CREATING ARTIFACT ARCHIVE FOR GITHUB")
             print("=" * 60)
-
+            
             artifact_archive = self.create_artifact_archive_for_github()
             if artifact_archive:
-                logger.info("✅ Artifact archive created")
+                logger.info(f"✅ Artifact archive created: {artifact_archive.name}")
+                logger.info("📦 Upload this archive to GitHub to avoid colon character issues")
             else:
                 logger.warning("⚠️ Failed to create artifact archive")
-
+            
             elapsed = time.time() - self.stats["start_time"]
             summary = self.build_tracker.get_summary()
-
+            
             print("\n" + "=" * 60)
             print("📊 BUILD SUMMARY WITH CACHE STATISTICS")
             print("=" * 60)
@@ -907,25 +1068,27 @@ class PackageBuilder:
             print(f"Skipped:         {summary['skipped']}")
             print(f"Cache hits:      {self.stats['cache_hits']}")
             print(f"Cache misses:    {self.stats['cache_misses']}")
-            denom = (self.stats['cache_hits'] + self.stats['cache_misses']) or 1
-            print(f"Cache efficiency: {self.stats['cache_hits'] / denom * 100:.1f}%")
+            print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
             print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
-            print("PACKAGER:        [LOADED]")
-            print(f"Mirror policy:   ✅ VPS is target only")
+            print(f"PACKAGER:        {self.packager_id}")
+            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+            print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
+            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
             print("=" * 60)
-
+            
             if self.built_packages:
                 print("\n📦 Built packages:")
                 for pkg in self.built_packages:
                     print(f"  - {pkg}")
-
+            
             return 0
-
+            
         except Exception as e:
-            print("\n❌ Build failed")
+            print(f"\n❌ Build failed: {e}")
             import traceback
             traceback.print_exc()
+            # Ensure GPG cleanup even on failure
             if hasattr(self, 'gpg_handler'):
                 self.gpg_handler.cleanup()
             return 1
