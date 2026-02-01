@@ -51,9 +51,7 @@ class RsyncClient:
         Returns:
             True if successful, False otherwise
         """
-        print("\n" + "=" * 60)
-        print("CRITICAL PHASE: Mirror Synchronization with VPS State")
-        print("=" * 60)
+        logger.info("CRITICAL PHASE: Mirror Synchronization with VPS State")
         
         # Convert VPS file list to set for fast lookup
         vps_files_set = set(vps_file_list)
@@ -70,9 +68,7 @@ class RsyncClient:
             # Step 1: Delete files from mirror that are NOT on VPS
             files_to_delete = cached_file_names - vps_files_set
             if files_to_delete:
-                logger.info(f"🗑️ Deleting {len(files_to_delete)} files from mirror (not on VPS):")
-                for file_name in sorted(files_to_delete)[:10]:  # Show first 10
-                    logger.info(f"  - {file_name}")
+                logger.info(f"Deleting {len(files_to_delete)} files from mirror (not on VPS)")
                 
                 for file_name in files_to_delete:
                     file_path = mirror_temp_dir / file_name
@@ -86,15 +82,13 @@ class RsyncClient:
             # Step 2: Identify files on VPS that are NOT in mirror
             files_to_download = vps_files_set - cached_file_names
             if files_to_download:
-                logger.info(f"📥 Need to download {len(files_to_download)} new files from VPS:")
-                for file_name in sorted(files_to_download)[:10]:  # Show first 10
-                    logger.info(f"  - {file_name}")
+                logger.info(f"Need to download {len(files_to_download)} new files from VPS")
         else:
             # Mirror directory doesn't exist, create it
             mirror_temp_dir.mkdir(parents=True, exist_ok=True)
             files_to_download = vps_files_set
             if files_to_download:
-                logger.info(f"📥 Mirror directory empty, downloading {len(files_to_download)} files from VPS")
+                logger.info(f"Mirror directory empty, downloading {len(files_to_download)} files from VPS")
         
         # If there are files to download, use rsync with specific file list
         if files_to_download:
@@ -115,8 +109,7 @@ class RsyncClient:
                   '{mirror_temp_dir}/' 2>/dev/null || true
                 """
                 
-                logger.info(f"RUNNING RSYNC DOWNLOAD COMMAND for {len(download_list)} files:")
-                logger.info(rsync_cmd.strip())
+                logger.info(f"RUNNING RSYNC DOWNLOAD COMMAND for {len(download_list)} files")
                 
                 start_time = time.time()
                 
@@ -142,7 +135,7 @@ class RsyncClient:
                     downloaded_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
                     actual_downloaded = len(downloaded_files) - (len(cached_file_names) if 'cached_file_names' in locals() else 0)
                     
-                    logger.info(f"✅ Downloaded {actual_downloaded} new package files ({duration} seconds)")
+                    logger.info(f"Downloaded {actual_downloaded} new package files ({duration} seconds)")
                     
                 except Exception as e:
                     logger.error(f"RSYNC download execution error: {e}")
@@ -167,11 +160,11 @@ class RsyncClient:
                     logger.warning(f"Could not copy {mirror_file.name}: {e}")
         
         if copied_count > 0:
-            logger.info(f"📋 Copied {copied_count} mirrored packages to output directory")
+            logger.info(f"Copied {copied_count} mirrored packages to output directory")
         
         # Verify final state
         final_mirror_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
-        logger.info(f"📊 Mirror synchronization complete:")
+        logger.info(f"Mirror synchronization complete:")
         logger.info(f"  - Mirror now has {len(final_mirror_files)} files")
         logger.info(f"  - VPS has {len(vps_files_set)} files")
         logger.info(f"  - Output directory has {len(output_files) + copied_count} files")
@@ -183,23 +176,19 @@ class RsyncClient:
             extra_in_mirror = mirror_file_names - vps_files_set
             
             if missing_in_mirror:
-                logger.error(f"❌ CRITICAL: Mirror missing {len(missing_in_mirror)} files from VPS")
-                for file_name in sorted(missing_in_mirror)[:5]:
-                    logger.error(f"  - {file_name}")
+                logger.error(f"CRITICAL: Mirror missing {len(missing_in_mirror)} files from VPS")
             
             if extra_in_mirror:
-                logger.error(f"❌ CRITICAL: Mirror has {len(extra_in_mirror)} extra files not on VPS")
-                for file_name in sorted(extra_in_mirror)[:5]:
-                    logger.error(f"  - {file_name}")
+                logger.error(f"CRITICAL: Mirror has {len(extra_in_mirror)} extra files not on VPS")
             
             return False
         
-        logger.info("✅ Mirror perfectly synchronized with VPS state")
+        logger.info("Mirror perfectly synchronized with VPS state")
         
         # Clean up mirror directory after use (it will be recreated from cache next time)
         try:
             shutil.rmtree(mirror_temp_dir, ignore_errors=True)
-            logger.info("🧹 Cleaned up temporary mirror directory")
+            logger.info("Cleaned up temporary mirror directory")
         except Exception as e:
             logger.warning(f"Could not clean up mirror directory: {e}")
         
@@ -241,8 +230,7 @@ class RsyncClient:
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete:")
-        logger.info(rsync_cmd.strip())
+        logger.info(f"RUNNING RSYNC COMMAND WITHOUT --delete")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -270,16 +258,16 @@ class RsyncClient:
                         logger.error(f"RSYNC ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful! ({duration} seconds)")
+                logger.info(f"RSYNC upload successful! ({duration} seconds)")
                 return True
             else:
-                logger.warning(f"⚠️ First RSYNC attempt failed (code: {result.returncode})")
+                logger.warning(f"First RSYNC attempt failed (code: {result.returncode})")
                 
         except Exception as e:
             logger.error(f"RSYNC execution error: {e}")
         
         # SECOND ATTEMPT (with different SSH options)
-        logger.info("⚠️ Retrying with different SSH options...")
+        logger.info("Retrying with different SSH options...")
         time.sleep(5)
         
         rsync_cmd_retry = f"""
@@ -291,8 +279,7 @@ class RsyncClient:
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC RETRY COMMAND WITHOUT --delete:")
-        logger.info(rsync_cmd_retry.strip())
+        logger.info(f"RUNNING RSYNC RETRY COMMAND WITHOUT --delete")
         
         start_time = time.time()
         
@@ -319,10 +306,10 @@ class RsyncClient:
                         logger.error(f"RSYNC RETRY ERR: {line}")
             
             if result.returncode == 0:
-                logger.info(f"✅ RSYNC upload successful on retry! ({duration} seconds)")
+                logger.info(f"RSYNC upload successful on retry! ({duration} seconds)")
                 return True
             else:
-                logger.error(f"❌ RSYNC upload failed on both attempts!")
+                logger.error(f"RSYNC upload failed on both attempts!")
                 return False
                 
         except Exception as e:

@@ -72,7 +72,7 @@ class SSHClient:
     
     def test_ssh_connection(self) -> bool:
         """Test SSH connection to VPS"""
-        print("\n🔍 Testing SSH connection to VPS...")
+        logger.info("Testing SSH connection to VPS...")
         
         ssh_test_cmd = [
             "ssh",
@@ -82,30 +82,30 @@ class SSHClient:
         
         result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, check=False)
         if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
-            print("✅ SSH connection successful")
+            logger.info("SSH connection successful")
             return True
         else:
-            print(f"⚠️ SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
+            logger.warning(f"SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
             return False
     
     def ensure_remote_directory(self):
         """Ensure remote directory exists and has correct permissions"""
-        print("\n🔧 Ensuring remote directory exists...")
+        logger.info("Ensuring remote directory exists...")
         
         remote_cmd = f"""
         # Check if directory exists
         if [ ! -d "{self.remote_dir}" ]; then
-            echo "Creating directory {self.remote_dir}"
+            echo "Creating directory"
             sudo mkdir -p "{self.remote_dir}"
             sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
             sudo chmod -R 755 "{self.remote_dir}"
-            echo "✅ Directory created and permissions set"
+            echo "Directory created and permissions set"
         else
-            echo "✅ Directory exists"
+            echo "Directory exists"
             # Ensure correct permissions
             sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
             sudo chmod -R 755 "{self.remote_dir}"
-            echo "✅ Permissions verified"
+            echo "Permissions verified"
         fi
         """
         
@@ -120,19 +120,16 @@ class SSHClient:
             )
             
             if result.returncode == 0:
-                logger.info("✅ Remote directory verified")
-                for line in result.stdout.splitlines():
-                    if line.strip():
-                        logger.info(f"REMOTE DIR: {line}")
+                logger.info("Remote directory verified")
             else:
-                logger.warning(f"⚠️ Could not ensure remote directory: {result.stderr[:200]}")
+                logger.warning(f"Could not ensure remote directory: {result.stderr[:200]}")
                 
         except Exception as e:
             logger.warning(f"Could not ensure remote directory: {e}")
     
     def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
         """Check if repository exists on VPS via SSH"""
-        print("\n🔍 Checking if repository exists on VPS...")
+        logger.info("Checking if repository exists on VPS...")
         
         remote_cmd = f"""
         # Check for package files
@@ -159,43 +156,40 @@ class SSHClient:
             
             if result.returncode == 0:
                 if "REPO_EXISTS_WITH_PACKAGES" in result.stdout:
-                    logger.info("✅ Repository exists on VPS (has package files)")
+                    logger.info("Repository exists on VPS (has package files)")
                     return True, True
                 elif "REPO_EXISTS_WITH_DB" in result.stdout:
-                    logger.info("✅ Repository exists on VPS (has database)")
+                    logger.info("Repository exists on VPS (has database)")
                     return True, False
                 else:
-                    logger.info("ℹ️ Repository does not exist on VPS (first run)")
+                    logger.info("Repository does not exist on VPS (first run)")
                     return False, False
             else:
-                logger.warning(f"⚠️ Could not check repository existence: {result.stderr[:200]}")
+                logger.warning(f"Could not check repository existence: {result.stderr[:200]}")
                 return False, False
                 
         except subprocess.TimeoutExpired:
-            logger.error("❌ SSH timeout checking repository existence")
+            logger.error("SSH timeout checking repository existence")
             return False, False
         except Exception as e:
-            logger.error(f"❌ Error checking repository: {e}")
+            logger.error(f"Error checking repository: {e}")
             return False, False
     
     def list_remote_packages(self) -> List[str]:
-        """List all *.pkg.tar.zst files in the remote repository directory"""
-        print("\n" + "=" * 60)
-        print("STEP 1: Listing remote repository packages (SSH find)")
-        print("=" * 60)
+        """List all *.pkg.tar.zst files in the remote repository directory (basenames only)"""
+        logger.info("Listing remote repository packages (SSH find)...")
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
-            logger.error(f"SSH key not found at {ssh_key_path}")
+            logger.error(f"SSH key not found")
             return []
         
+        # SECURITY FIX: Use -printf "%f\n" to get only basenames, no directory paths
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f"find {self.remote_dir} -maxdepth 1 -type f \\( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' \\) 2>/dev/null || echo 'NO_FILES'"
+            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
-        
-        logger.info(f"RUNNING SSH COMMAND: {' '.join(ssh_cmd)}")
         
         try:
             result = subprocess.run(
@@ -205,23 +199,12 @@ class SSHClient:
                 check=False
             )
             
-            logger.info(f"EXIT CODE: {result.returncode}")
-            if result.stdout:
-                logger.info(f"STDOUT (first 1000 chars): {result.stdout[:1000]}")
-            if result.stderr:
-                logger.info(f"STDERR: {result.stderr[:500]}")
-            
             if result.returncode == 0:
                 files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
-                file_count = len(files)
-                logger.info(f"✅ SSH find returned {file_count} package files")
-                if file_count > 0:
-                    print(f"Sample files: {files[:5]}")
-                else:
-                    logger.info("ℹ️ No package files found on remote server")
+                logger.info(f"Found {len(files)} package files on remote server")
                 return files
             else:
-                logger.warning(f"⚠️ SSH find returned error: {result.stderr[:200]}")
+                logger.warning(f"SSH find returned error")
                 return []
                 
         except Exception as e:

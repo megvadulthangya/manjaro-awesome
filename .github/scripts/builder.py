@@ -1,15 +1,5 @@
-#!/usr/bin/env python3
 """
 Main Orchestration Script for Arch Linux Package Builder
-
-Phases:
-I. VPS State Fetch - SSH + rsync via vps_manager
-II. Dynamic Allowlist - PKGBUILD parsing via manifest_factory
-III. Smart Cleanup - Allowlist-based cleanup
-IV. Version Audit & Build - Build only when newer via package_builder
-V. Sign Packages - Immediate signing via gpg_handler
-
-CRITICAL RULE: Deletion logic MUST be based on PKGBUILD pkgname extraction
 """
 
 import os
@@ -53,7 +43,7 @@ try:
     
     MODULES_LOADED = True
 except ImportError as e:
-    logger.error(f"❌ Failed to import modules: {e}")
+    logger.error(f"Failed to import modules: {e}")
     MODULES_LOADED = False
     sys.exit(1)
 
@@ -99,7 +89,7 @@ class PackageBuilderOrchestrator:
         self.built_packages = []
         self.skipped_packages = []
         
-        logger.info("✅ PackageBuilderOrchestrator initialized")
+        logger.info("PackageBuilderOrchestrator initialized")
     
     def _init_modules(self):
         """Initialize all required modules"""
@@ -150,23 +140,23 @@ class PackageBuilderOrchestrator:
             debug_mode=self.debug_mode
         )
         
-        logger.info("✅ All modules initialized successfully")
+        logger.info("All modules initialized successfully")
     
     def get_package_lists(self) -> Tuple[List[str], List[str]]:
         """Get package lists from packages.py"""
         try:
             import packages
-            logger.info("📦 Using package lists from packages.py")
+            logger.info("Using package lists from packages.py")
             return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
         except ImportError:
             try:
                 import sys
                 sys.path.insert(0, str(self.repo_root))
                 import scripts.packages as packages
-                logger.info("📦 Using package lists from packages.py")
+                logger.info("Using package lists from packages.py")
                 return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
             except ImportError:
-                logger.error("❌ Cannot load package lists from packages.py")
+                logger.error("Cannot load package lists from packages.py")
                 sys.exit(1)
     
     def phase_i_vps_sync(self) -> bool:
@@ -175,32 +165,31 @@ class PackageBuilderOrchestrator:
         - List VPS repo files
         - Sync missing files locally
         """
-        logger.info("\n" + "="*60)
         logger.info("PHASE I: VPS State Fetch")
-        logger.info("="*60)
         
         # Test SSH connection
         if not self.ssh_client.test_ssh_connection():
-            logger.warning("⚠️ SSH connection test failed")
+            logger.warning("SSH connection test failed")
         
         # Ensure remote directory exists
         self.ssh_client.ensure_remote_directory()
         
         # List remote packages
         remote_files = self.ssh_client.list_remote_packages()
-        self.vps_files = [Path(f).name for f in remote_files] if remote_files else []
+        self.vps_files = remote_files  # Already basenames
         
-        logger.info(f"📊 Found {len(self.vps_files)} files on VPS")
+        logger.info(f"Found {len(self.vps_files)} files on VPS")
         
         # Mirror remote packages locally
         if remote_files:
-            logger.info("📥 Mirroring remote packages locally...")
+            logger.info("Mirroring remote packages locally...")
             success = self.rsync_client.mirror_remote_packages(
                 self.mirror_temp_dir,
-                self.output_dir
+                self.output_dir,
+                remote_files  # Pass the list of basenames
             )
             if not success:
-                logger.warning("⚠️ Failed to mirror remote packages")
+                logger.warning("Failed to mirror remote packages")
                 return False
         
         return True
@@ -213,9 +202,7 @@ class PackageBuilderOrchestrator:
         - Extract all pkgname values
         - Build full allowlist of valid package filenames
         """
-        logger.info("\n" + "="*60)
         logger.info("PHASE II: Dynamic Allowlist Generation")
-        logger.info("="*60)
         
         local_packages, aur_packages = self.get_package_lists()
         
@@ -228,19 +215,17 @@ class PackageBuilderOrchestrator:
             if pkg_dir.exists():
                 package_sources.append(str(pkg_dir))
             else:
-                logger.warning(f"⚠️ Local package directory not found: {pkg}")
+                logger.warning(f"Local package directory not found: {pkg}")
         
         # Add AUR packages
         for pkg in aur_packages:
             package_sources.append(pkg)  # AUR package names
         
         # Build allowlist using ManifestFactory
-        logger.info(f"📋 Processing {len(package_sources)} package sources...")
+        logger.info(f"Processing {len(package_sources)} package sources...")
         self.allowlist = ManifestFactory.build_allowlist(package_sources)
         
-        logger.info(f"✅ Allowlist generated: {len(self.allowlist)} package names")
-        if self.debug_mode:
-            logger.info(f"Allowlist: {sorted(self.allowlist)}")
+        logger.info(f"Allowlist generated: {len(self.allowlist)} package names")
         
         return len(self.allowlist) > 0
     
@@ -251,12 +236,10 @@ class PackageBuilderOrchestrator:
         - Delete only files NOT present in allowlist
         - Remove deleted files from repo database
         """
-        logger.info("\n" + "="*60)
         logger.info("PHASE III: Smart Cleanup (Allowlist-based)")
-        logger.info("="*60)
         
         if not self.vps_files:
-            logger.info("ℹ️ No VPS files to clean up")
+            logger.info("No VPS files to clean up")
             return True
         
         # Execute smart cleanup
@@ -273,7 +256,7 @@ class PackageBuilderOrchestrator:
         if deleted_files:
             deleted_set = set(deleted_files)
             self.vps_files = [f for f in self.vps_files if f not in deleted_set]
-            logger.info(f"📊 VPS files after cleanup: {len(self.vps_files)}")
+            logger.info(f"VPS files after cleanup: {len(self.vps_files)}")
         
         return success
     
@@ -283,9 +266,7 @@ class PackageBuilderOrchestrator:
         - Compare PKGBUILD version vs mirror version
         - Build only if source is newer
         """
-        logger.info("\n" + "="*60)
         logger.info("PHASE IV: Version Audit & Build")
-        logger.info("="*60)
         
         local_packages, aur_packages = self.get_package_lists()
         
@@ -300,7 +281,7 @@ class PackageBuilderOrchestrator:
                 remote_version = self.version_tracker.get_remote_version(pkg_name, self.vps_files)
                 local_packages_with_versions.append((pkg_dir, remote_version))
             else:
-                logger.warning(f"⚠️ Local package directory not found: {pkg_name}")
+                logger.warning(f"Local package directory not found: {pkg_name}")
         
         # Process AUR packages
         for pkg_name in aur_packages:
@@ -321,13 +302,13 @@ class PackageBuilderOrchestrator:
         self.skipped_packages = skipped_packages
         
         # Log results
-        logger.info(f"📊 Build Results:")
+        logger.info(f"Build Results:")
         logger.info(f"   Built: {len(built_packages)} packages")
         logger.info(f"   Skipped: {len(skipped_packages)} packages")
         logger.info(f"   Failed: {len(failed_packages)} packages")
         
         if failed_packages:
-            logger.error(f"❌ Failed packages: {failed_packages}")
+            logger.error(f"Failed packages: {failed_packages}")
         
         return built_packages, skipped_packages
     
@@ -338,18 +319,29 @@ class PackageBuilderOrchestrator:
         - Update repository database
         - Upload to VPS
         """
-        logger.info("\n" + "="*60)
         logger.info("PHASE V: Sign and Update")
-        logger.info("="*60)
         
         # Check if we have any packages to process
         local_packages = list(self.output_dir.glob("*.pkg.tar.*"))
         if not local_packages:
-            logger.info("ℹ️ No packages to process")
+            logger.info("No packages to process")
             return True
         
-        # Step 1: Generate repository database
-        logger.info("📦 Generating repository database...")
+        # Step 1: Sign all unsigned packages if signing is enabled
+        if self.sign_packages and self.gpg_handler.gpg_enabled:
+            logger.info("Signing all unsigned packages...")
+            signed_count = 0
+            for pkg_file in local_packages:
+                # Check if signature exists
+                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                if not sig_file.exists():
+                    if self.gpg_handler.sign_package(str(pkg_file)):
+                        signed_count += 1
+            if signed_count > 0:
+                logger.info(f"Signed {signed_count} previously unsigned packages")
+        
+        # Step 2: Generate repository database
+        logger.info("Generating repository database...")
         
         # CRITICAL: Zero-Residue cleanup before database generation
         self.cleanup_manager.revalidate_output_dir_before_database()
@@ -362,16 +354,16 @@ class PackageBuilderOrchestrator:
         )
         
         if not db_success:
-            logger.error("❌ Failed to generate repository database")
+            logger.error("Failed to generate repository database")
             return False
         
-        # Step 2: Sign repository files if GPG enabled
+        # Step 3: Sign repository files if GPG enabled
         if self.gpg_handler.gpg_enabled:
-            logger.info("🔐 Signing repository database files...")
+            logger.info("Signing repository database files...")
             self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir))
         
-        # Step 3: Upload to VPS
-        logger.info("📤 Uploading packages and database to VPS...")
+        # Step 4: Upload to VPS
+        logger.info("Uploading packages and database to VPS...")
         
         # Collect all files to upload
         files_to_upload = []
@@ -379,7 +371,7 @@ class PackageBuilderOrchestrator:
             files_to_upload.extend(self.output_dir.glob(pattern))
         
         if not files_to_upload:
-            logger.error("❌ No files to upload")
+            logger.error("No files to upload")
             return False
         
         # Upload using Rsync
@@ -389,41 +381,39 @@ class PackageBuilderOrchestrator:
         )
         
         if not upload_success:
-            logger.error("❌ Failed to upload files to VPS")
+            logger.error("Failed to upload files to VPS")
             return False
         
-        # Step 4: Final server cleanup with version tracker
-        logger.info("🧹 Final server cleanup...")
+        # Step 5: Final server cleanup with version tracker
+        logger.info("Final server cleanup...")
         self.cleanup_manager.server_cleanup(self.version_tracker)
         
         return True
     
     def run(self) -> int:
         """Main execution flow"""
-        logger.info("\n" + "="*60)
-        logger.info("🚀 ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION")
-        logger.info("="*60)
+        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION")
         
         try:
             # Import GPG key if enabled
             if self.gpg_handler.gpg_enabled:
-                logger.info("🔐 Initializing GPG...")
+                logger.info("Initializing GPG...")
                 if not self.gpg_handler.import_gpg_key():
-                    logger.warning("⚠️ GPG key import failed, continuing without signing")
+                    logger.warning("GPG key import failed, continuing without signing")
             
             # Phase I: VPS Sync
             if not self.phase_i_vps_sync():
-                logger.error("❌ Phase I failed")
+                logger.error("Phase I failed")
                 return 1
             
             # Phase II: Dynamic Allowlist
             if not self.phase_ii_dynamic_allowlist():
-                logger.error("❌ Phase II failed")
+                logger.error("Phase II failed")
                 return 1
             
             # Phase III: Smart Cleanup (using PKGBUILD-derived allowlist)
             if not self.phase_iii_smart_cleanup():
-                logger.warning("⚠️ Phase III had issues, but continuing")
+                logger.warning("Phase III had issues, but continuing")
             
             # Phase IV: Version Audit & Build
             built_packages, skipped_packages = self.phase_iv_version_audit_and_build()
@@ -431,15 +421,13 @@ class PackageBuilderOrchestrator:
             # Phase V: Sign and Update
             if built_packages or list(self.output_dir.glob("*.pkg.tar.*")):
                 if not self.phase_v_sign_and_update():
-                    logger.error("❌ Phase V failed")
+                    logger.error("Phase V failed")
                     return 1
             else:
-                logger.info("✅ All packages are up-to-date")
+                logger.info("All packages are up-to-date")
             
             # Summary
-            logger.info("\n" + "="*60)
-            logger.info("📊 BUILD SUMMARY")
-            logger.info("="*60)
+            logger.info("BUILD SUMMARY")
             logger.info(f"Repository: {self.repo_name}")
             logger.info(f"Packages built: {len(built_packages)}")
             logger.info(f"Packages skipped: {len(skipped_packages)}")
@@ -449,15 +437,15 @@ class PackageBuilderOrchestrator:
             logger.info(f"GPG signing: {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             
             if built_packages:
-                logger.info("\n📦 Newly built packages:")
+                logger.info("Newly built packages:")
                 for pkg in built_packages:
                     logger.info(f"  - {pkg}")
             
-            logger.info("✅ Build completed successfully!")
+            logger.info("Build completed successfully!")
             return 0
             
         except Exception as e:
-            logger.error(f"❌ Build failed: {e}")
+            logger.error(f"Build failed: {e}")
             import traceback
             traceback.print_exc()
             return 1
