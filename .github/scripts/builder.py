@@ -123,8 +123,8 @@ class PackageBuilderOrchestrator:
         self.database_manager = DatabaseManager(repo_config)
         self.version_tracker = VersionTracker(repo_config)
         
-        # AUTHORITATIVE: SmartCleanup handles version-based cleanup
-        self.smart_cleanup = SmartCleanup(self.repo_name, self.output_dir)
+        # AUTHORITATIVE: CleanupManager handles all cleanup, SmartCleanup is internal helper
+        # Do NOT instantiate SmartCleanup here - let CleanupManager use it internally
         
         # Build modules
         self.artifact_manager = ArtifactManager()
@@ -235,24 +235,6 @@ class PackageBuilderOrchestrator:
         
         return len(self.allowlist) > 0
     
-    def phase_iii_comprehensive_cleanup(self) -> bool:
-        """
-        Phase III: Comprehensive Cleanup
-        - Remove old package versions (keep only newest)
-        - Remove packages not in allowlist
-        - Validate and clean up signatures
-        """
-        logger.info("PHASE III: Comprehensive Cleanup")
-        
-        # AUTHORITATIVE: Execute comprehensive cleanup
-        # This runs AFTER successful build and BEFORE database generation
-        self.smart_cleanup.execute_comprehensive_cleanup(
-            allowlist=self.allowlist,
-            gpg_handler=self.gpg_handler
-        )
-        
-        return True
-    
     def phase_iv_version_audit_and_build(self) -> Tuple[List[str], List[str]]:
         """
         Phase IV: Version Audit & Build
@@ -310,7 +292,7 @@ class PackageBuilderOrchestrator:
         Phase V: Sign and Update
         - Sign new packages
         - Update repository database
-        - Upload to VPS
+        - Upload to VPS with proper cleanup
         """
         logger.info("PHASE V: Sign and Update")
         
@@ -323,13 +305,14 @@ class PackageBuilderOrchestrator:
         # Step 1: Clean up old database files
         self.cleanup_manager.cleanup_database_files()
         
-        # Step 2: Generate repository database
+        # Step 2: AUTHORITATIVE CLEANUP: Revalidate output_dir before database generation
+        logger.info("Executing authoritative cleanup before database generation...")
+        self.cleanup_manager.revalidate_output_dir_before_database(self.allowlist)
+        
+        # Step 3: Generate repository database
         logger.info("Generating repository database...")
         
-        # CRITICAL: Comprehensive cleanup already ran in Phase III
-        # No need for additional version cleanup here
-        
-        # Generate database
+        # CRITICAL: Pass allowlist to database_manager so it can call CleanupManager
         db_success = self.database_manager.generate_full_database(
             self.repo_name,
             self.output_dir,
@@ -340,12 +323,12 @@ class PackageBuilderOrchestrator:
             logger.error("Failed to generate repository database")
             return False
         
-        # Step 3: Sign repository files if GPG enabled
+        # Step 4: Sign repository files if GPG enabled
         if self.gpg_handler.gpg_enabled:
             logger.info("Signing repository database files...")
             self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir))
         
-        # Step 4: Upload to VPS
+        # Step 5: Upload to VPS with --delete to ensure VPS matches local state
         logger.info("Uploading packages and database to VPS...")
         
         # Collect all files to upload
@@ -357,17 +340,18 @@ class PackageBuilderOrchestrator:
             logger.error("No files to upload")
             return False
         
-        # Upload using Rsync
+        # Upload using Rsync WITH --delete to remove VPS files not present locally
         upload_success = self.rsync_client.upload_files(
             [str(f) for f in files_to_upload],
-            self.output_dir
+            self.output_dir,
+            self.cleanup_manager
         )
         
         if not upload_success:
             logger.error("Failed to upload files to VPS")
             return False
         
-        # Step 5: Final server cleanup with version tracker
+        # Step 6: Final server cleanup with version tracker
         logger.info("Final server cleanup...")
         self.cleanup_manager.server_cleanup(self.version_tracker)
         
@@ -396,11 +380,6 @@ class PackageBuilderOrchestrator:
             
             # Phase IV: Version Audit & Build
             built_packages, skipped_packages = self.phase_iv_version_audit_and_build()
-            
-            # Phase III: Comprehensive Cleanup (AFTER building, BEFORE database)
-            # This ensures only newest versions remain before database generation
-            if not self.phase_iii_comprehensive_cleanup():
-                logger.warning("Phase III had issues, but continuing")
             
             # Phase V: Sign and Update
             if built_packages or list(self.output_dir.glob("*.pkg.tar.*")):

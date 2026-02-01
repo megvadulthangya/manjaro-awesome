@@ -13,7 +13,7 @@ import subprocess
 import shutil
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class CleanupManager:
         self.vps_user = config['vps_user']
         self.vps_host = config['vps_host']
     
-    def revalidate_output_dir_before_database(self):
+    def revalidate_output_dir_before_database(self, allowlist: Optional[Set[str]] = None):
         """
         🚨 PRE-DATABASE VALIDATION: Remove outdated package versions and orphaned signatures.
         Operates ONLY on output_dir.
@@ -56,6 +56,10 @@ class CleanupManager:
         Enforces:
         - Only the latest version of each package remains.
         - Orphaned .sig files (without a package) are removed.
+        - Packages not in allowlist are removed (if allowlist provided).
+        
+        Args:
+            allowlist: Set of valid package names from PKGBUILD extraction (optional)
         """
         logger.info("🚨 PRE-DATABASE VALIDATION: Starting output_dir revalidation...")
         
@@ -68,10 +72,59 @@ class CleanupManager:
         # Step 1: Remove old package versions (keep only newest per package)
         smart_cleanup.remove_old_package_versions()
         
-        # Step 2: Remove orphaned .sig files
+        # Step 2: Remove packages not in allowlist (if allowlist provided)
+        if allowlist:
+            smart_cleanup.remove_packages_not_in_allowlist(allowlist)
+        
+        # Step 3: Remove orphaned .sig files
         self._remove_orphaned_signatures()
         
         logger.info("✅ PRE-DATABASE VALIDATION: Output directory revalidated successfully.")
+    
+    def get_vps_files_to_delete(self, version_tracker) -> Tuple[List[str], List[str]]:
+        """
+        Identify files that should be deleted from VPS based on local output_dir state.
+        
+        Returns:
+            Tuple of (files_to_delete, files_to_keep)
+        """
+        logger.info("Identifying VPS files for deletion based on local state...")
+        
+        # Get current VPS files
+        vps_files = self._get_vps_file_inventory()
+        if not vps_files:
+            logger.info("No VPS files found")
+            return [], []
+        
+        # Get local files from output_dir
+        local_files = set(f.name for f in self.output_dir.glob("*"))
+        
+        # Identify files to delete (on VPS but not locally)
+        files_to_delete = []
+        files_to_keep = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            
+            # Always keep database and signature files (they'll be regenerated)
+            is_db_or_sig = any(filename.endswith(ext) for ext in [
+                '.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'
+            ])
+            
+            if is_db_or_sig:
+                # Database/signature files are handled separately
+                files_to_keep.append(vps_file)
+                continue
+            
+            if filename in local_files:
+                files_to_keep.append(vps_file)
+                logger.debug(f"Keeping {filename} (exists locally)")
+            else:
+                files_to_delete.append(vps_file)
+                logger.info(f"Marking for deletion: {filename} (not in local output)")
+        
+        logger.info(f"VPS cleanup: {len(files_to_keep)} to keep, {len(files_to_delete)} to delete")
+        return files_to_delete, files_to_keep
     
     def _remove_orphaned_signatures(self):
         """Remove orphaned .sig files that don't have a corresponding package"""
