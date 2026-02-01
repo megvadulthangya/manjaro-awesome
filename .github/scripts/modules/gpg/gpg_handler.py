@@ -54,20 +54,89 @@ class GPGHandler:
             return False
         
         try:
-            # Create a temporary GPG home directory
-            temp_gpg_home = tempfile.mkdtemp(prefix="gpg_home_")
+            # FIRST: Import into builder user's GNUPGHOME (/home/builder/.gnupg)
+            # This is where package signing will actually look for the key
+            builder_gpg_home = Path("/home/builder/.gnupg")
+            builder_gpg_home.mkdir(exist_ok=True, mode=0o700)
             
-            # Set environment for GPG
-            env = os.environ.copy()
-            env['GNUPGHOME'] = temp_gpg_home
+            # Set ownership to builder user
+            try:
+                subprocess.run(['sudo', 'chown', '-R', 'builder:builder', str(builder_gpg_home)], 
+                             check=False, capture_output=True)
+            except Exception:
+                pass  # Continue even if chown fails
             
-            # Import the private key
+            # Prepare environment for builder's GPG
+            builder_env = os.environ.copy()
+            builder_env['GNUPGHOME'] = str(builder_gpg_home)
+            
+            # Import the private key into builder's keyring
             if isinstance(self.gpg_private_key, bytes):
                 key_input = self.gpg_private_key
             else:
                 key_input = self.gpg_private_key.encode('utf-8')
             
+            logger.info("Importing GPG key into builder user's keyring...")
             import_process = subprocess.run(
+                ['sudo', '-u', 'builder', 'gpg', '--batch', '--import'],
+                input=key_input,
+                capture_output=True,
+                text=False,
+                env=builder_env,
+                check=False
+            )
+            
+            if import_process.returncode != 0:
+                stderr = import_process.stderr.decode('utf-8') if isinstance(import_process.stderr, bytes) else import_process.stderr
+                logger.error(f"Failed to import GPG key into builder keyring: {stderr}")
+                # Don't fail yet - try temporary directory as fallback
+            
+            # Verify key exists in builder's keyring
+            verify_cmd = ['sudo', '-u', 'builder', 'gpg', '--list-secret-keys', '--with-colons', self.gpg_key_id]
+            verify_process = subprocess.run(
+                verify_cmd,
+                capture_output=True,
+                text=True,
+                env=builder_env,
+                check=False
+            )
+            
+            key_in_builder_keyring = verify_process.returncode == 0 and 'fpr:' in verify_process.stdout
+            if key_in_builder_keyring:
+                logger.info("✅ GPG key successfully imported into builder user's keyring")
+                # Set ultimate trust for the key in builder's keyring
+                fingerprint = None
+                for line in verify_process.stdout.split('\n'):
+                    if line.startswith('fpr:'):
+                        parts = line.split(':')
+                        if len(parts) > 9:
+                            fingerprint = parts[9]
+                            break
+                
+                if fingerprint:
+                    trust_process = subprocess.run(
+                        ['sudo', '-u', 'builder', 'gpg', '--import-ownertrust'],
+                        input=f"{fingerprint}:6:\n".encode('utf-8'),
+                        capture_output=True,
+                        text=False,
+                        env=builder_env,
+                        check=False
+                    )
+                    if trust_process.returncode == 0:
+                        logger.info("✅ Set ultimate trust for GPG key in builder keyring")
+            else:
+                logger.warning("⚠️ GPG key not found in builder user's keyring after import attempt")
+            
+            # SECOND: Also import into a temporary GNUPGHOME for pacman-key operations
+            # (This part is kept for backward compatibility)
+            temp_gpg_home = tempfile.mkdtemp(prefix="gpg_home_")
+            
+            # Set environment for temporary GPG
+            env = os.environ.copy()
+            env['GNUPGHOME'] = temp_gpg_home
+            
+            # Import the private key into temporary keyring
+            temp_import_process = subprocess.run(
                 ['gpg', '--batch', '--import'],
                 input=key_input,
                 capture_output=True,
@@ -76,15 +145,15 @@ class GPGHandler:
                 check=False
             )
             
-            if import_process.returncode != 0:
-                stderr = import_process.stderr.decode('utf-8') if isinstance(import_process.stderr, bytes) else import_process.stderr
-                logger.error(f"Failed to import GPG key: {stderr}")
+            if temp_import_process.returncode != 0:
+                stderr = temp_import_process.stderr.decode('utf-8') if isinstance(temp_import_process.stderr, bytes) else temp_import_process.stderr
+                logger.error(f"Failed to import GPG key into temporary keyring: {stderr}")
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
-                return False
+                # Continue anyway - we at least tried builder keyring
             
-            logger.info("✅ GPG key imported successfully")
+            logger.info("✅ GPG key imported successfully into temporary keyring")
             
-            # Get fingerprint and set ultimate trust
+            # Get fingerprint and set ultimate trust in temporary keyring
             list_process = subprocess.run(
                 ['gpg', '--list-keys', '--with-colons', self.gpg_key_id],
                 capture_output=True,
@@ -110,7 +179,7 @@ class GPGHandler:
                                 check=False
                             )
                             if trust_process.returncode == 0:
-                                logger.info("✅ Set ultimate trust for GPG key")
+                                logger.info("✅ Set ultimate trust for GPG key in temporary keyring")
                             break
             
             # CRITICAL FIX: Initialize pacman-key if not already initialized
@@ -218,9 +287,16 @@ class GPGHandler:
                 except Exception as e:
                     logger.error(f"Error during pacman-key setup: {e}")
             
-            # Store the GPG home directory for later use
+            # Store the temporary GPG home directory for repository signing
             self.gpg_home = temp_gpg_home
             self.gpg_env = env
+            
+            # CRITICAL: Verify builder can access the key before enabling signing
+            if not self._verify_builder_can_sign():
+                logger.error("❌ Builder user cannot access GPG key. Disabling package signing.")
+                self.sign_packages_enabled = False
+                # Keep gpg_enabled for repository signing, but not package signing
+                return False
             
             return True
             
@@ -228,6 +304,47 @@ class GPGHandler:
             logger.error(f"Error importing GPG key: {e}")
             if 'temp_gpg_home' in locals():
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
+            return False
+    
+    def _verify_builder_can_sign(self) -> bool:
+        """
+        Verify that builder user has access to the secret key for signing.
+        
+        Returns:
+            True if builder can sign, False otherwise
+        """
+        if not self.gpg_enabled or not self.gpg_key_id:
+            return False
+        
+        try:
+            # Check if builder user can list the secret key
+            cmd = ['sudo', '-u', 'builder', 'gpg', '--list-secret-keys', '--with-colons', self.gpg_key_id]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Builder cannot list secret keys: {result.stderr[:200]}")
+                return False
+            
+            # Check if the key is actually present
+            if 'fpr:' not in result.stdout:
+                logger.error(f"Secret key {self.gpg_key_id} not found in builder's keyring")
+                # Try to list all keys for debugging
+                debug_cmd = ['sudo', '-u', 'builder', 'gpg', '--list-secret-keys']
+                debug_result = subprocess.run(debug_cmd, capture_output=True, text=True, check=False)
+                if debug_result.returncode == 0:
+                    logger.info(f"Builder's available secret keys:\n{debug_result.stdout}")
+                return False
+            
+            logger.info("✅ Builder user has access to GPG secret key for signing")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error verifying builder GPG access: {e}")
             return False
     
     def _verify_signature(self, package_path: Path, sig_path: Path) -> bool:
@@ -291,9 +408,10 @@ class GPGHandler:
             logger.debug(f"Package signing disabled, skipping: {package_path}")
             return True
         
-        if not self.gpg_enabled or not hasattr(self, 'gpg_home') or not hasattr(self, 'gpg_env'):
-            logger.warning(f"GPG not initialized, skipping package signing: {package_path}")
-            return True
+        # CRITICAL: Verify builder can sign before attempting
+        if not self._verify_builder_can_sign():
+            logger.error(f"❌ Cannot sign {package_path}: Builder user cannot access GPG key")
+            return False
         
         try:
             package_path_obj = Path(package_path)
@@ -319,8 +437,10 @@ class GPGHandler:
             logger.info(f"   Output signature: {sig_file.name}")
             
             # Create detached signature with --no-armor (binary signature)
+            # Use sudo -u builder to ensure correct user context
             sign_cmd = [
-                'gpg', '--detach-sign', '--no-armor',
+                'sudo', '-u', 'builder', 'gpg',
+                '--detach-sign', '--no-armor',
                 '--default-key', self.gpg_key_id,
                 '--output', str(sig_file),
                 str(package_path_obj)
@@ -332,7 +452,6 @@ class GPGHandler:
                 sign_cmd,
                 capture_output=True,
                 text=True,
-                env=self.gpg_env,
                 check=False
             )
             
@@ -372,7 +491,7 @@ class GPGHandler:
             logger.error(f"❌ Error signing package {package_path}: {e}")
             return False
     
-    def verify_all_signatures(self, directory: Path) -> Dict[str, bool]:
+    def verify_all_signatures(self, directory: Path) -> dict:
         """
         Verify all signature files in a directory
         
