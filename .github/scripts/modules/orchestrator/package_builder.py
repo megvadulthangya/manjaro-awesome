@@ -1002,11 +1002,19 @@ class PackageBuilder:
                 print(f"   Total skipped: {len(self.skipped_packages)}")
                 print(f"   Cache hits: {self.stats['cache_hits']}")
                 print(f"   Cache misses: {self.stats['cache_misses']}")
+                print(f"   Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
+                print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+                print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
+                print(f"PACKAGER:        {self.packager_id}")
+                print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+                print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
+                print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
+                print("=" * 60)
                 
-                if self.stats['aur_failed'] > 0 or self.stats['local_failed'] > 0:
-                    print("⚠️ Some packages failed to build")
-                else:
-                    print("✅ All packages are up to date or built successfully!")
+                if self.built_packages:
+                    print("\n📦 Built packages:")
+                    for pkg in self.built_packages:
+                        print(f"  - {pkg}")
                 
                 # Clean up GPG even if no packages built
                 self.gpg_handler.cleanup()
@@ -1035,23 +1043,23 @@ class PackageBuilder:
             print(f"Total built:     {summary['total_built']}")
             print(f"Skipped:         {summary['skipped']}")
             print(f"Cache hits:      {self.stats['cache_hits']}")
-                print(f"Cache misses:    {self.stats['cache_misses']}")
-                print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
-                print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
-                print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
-                print(f"PACKAGER:        {self.packager_id}")
-                print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-                print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
-                print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
-                print("=" * 60)
-                
-                if self.built_packages:
-                    print("\n📦 Built packages:")
-                    for pkg in self.built_packages:
-                        print(f"  - {pkg}")
-                
-                return 0
-                
+            print(f"Cache misses:    {self.stats['cache_misses']}")
+            print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
+            print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+            print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
+            print(f"PACKAGER:        {self.packager_id}")
+            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+            print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
+            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
+            print("=" * 60)
+            
+            if self.built_packages:
+                print("\n📦 Built packages:")
+                for pkg in self.built_packages:
+                    print(f"  - {pkg}")
+            
+            return 0
+            
         except Exception as e:
             print(f"\n❌ Build failed: {e}")
             import traceback
