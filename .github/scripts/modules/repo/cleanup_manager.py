@@ -164,7 +164,7 @@ class CleanupManager:
         
         logger.info(f"Zero-Residue cleanup initiated with {len(version_tracker._package_target_versions)} target versions")
         
-        # Get ALL files from VPS
+        # Get ALL files from VPS (including signatures)
         vps_files = self._get_vps_file_inventory()
         if vps_files is None:
             logger.error("Failed to get VPS file inventory")
@@ -174,6 +174,17 @@ class CleanupManager:
             logger.info("No files found on VPS - nothing to clean up")
             return
         
+        # First, identify and delete orphaned signatures (signatures without corresponding packages)
+        orphaned_sigs_deleted = self._cleanup_orphaned_signatures_vps(vps_files)
+        if orphaned_sigs_deleted > 0:
+            logger.info(f"Deleted {orphaned_sigs_deleted} orphaned signatures from VPS")
+        
+        # Refresh file list after orphan cleanup
+        vps_files = self._get_vps_file_inventory()
+        if not vps_files:
+            logger.info("No files remaining on VPS after orphan cleanup")
+            return
+        
         # Identify files to keep based on target versions
         files_to_keep = set()
         files_to_delete = []
@@ -181,7 +192,7 @@ class CleanupManager:
         for vps_file in vps_files:
             filename = Path(vps_file).name
             
-            # Skip database and signature files from deletion logic
+            # Skip database and signature files from deletion logic (handled separately)
             is_db_or_sig = any(filename.endswith(ext) for ext in ['.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'])
             if is_db_or_sig:
                 files_to_keep.add(filename)
@@ -244,6 +255,70 @@ class CleanupManager:
                 deleted_count += len(batch)
         
         logger.info(f"Server cleanup complete: Deleted {deleted_count} zombie packages")
+        
+        # After deleting packages, clean up any signatures for deleted packages
+        self._cleanup_orphaned_signatures_vps()
+    
+    def _cleanup_orphaned_signatures_vps(self, vps_files: Optional[List[str]] = None) -> int:
+        """
+        Clean up orphaned signature files on VPS (signatures without corresponding packages).
+        
+        Args:
+            vps_files: List of VPS files (if None, will fetch from server)
+        
+        Returns:
+            Number of orphaned signatures deleted
+        """
+        logger.info("🔍 Sweeping for orphaned signatures on VPS...")
+        
+        if vps_files is None:
+            vps_files = self._get_vps_file_inventory()
+            if not vps_files:
+                return 0
+        
+        # Separate package files and signature files
+        package_files = set()
+        signature_files = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            if filename.endswith('.sig'):
+                signature_files.append(vps_file)
+            elif filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                package_files.add(filename)
+        
+        logger.info(f"Found {len(signature_files)} signature files and {len(package_files)} package files on VPS")
+        
+        # Identify orphaned signatures (signatures without corresponding package)
+        orphaned_signatures = []
+        for sig_file in signature_files:
+            sig_filename = Path(sig_file).name
+            # Corresponding package filename is the signature filename without .sig
+            pkg_filename = sig_filename[:-4]  # Remove .sig extension
+            
+            # Check if this signature is for a package (not database)
+            if pkg_filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                if pkg_filename not in package_files:
+                    orphaned_signatures.append(sig_file)
+                    logger.info(f"Orphaned signature: {sig_filename} (package {pkg_filename} not found)")
+        
+        if not orphaned_signatures:
+            logger.info("✅ No orphaned signatures found on VPS")
+            return 0
+        
+        logger.info(f"Found {len(orphaned_signatures)} orphaned signatures to delete")
+        
+        # Delete orphaned signatures in batches
+        batch_size = 50
+        deleted_count = 0
+        
+        for i in range(0, len(orphaned_signatures), batch_size):
+            batch = orphaned_signatures[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                deleted_count += len(batch)
+        
+        logger.info(f"✅ Deleted {deleted_count} orphaned signatures from VPS")
+        return deleted_count
     
     def _get_vps_file_inventory(self) -> Optional[List[str]]:
         """Get complete inventory of all files on VPS"""

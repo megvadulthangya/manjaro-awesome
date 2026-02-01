@@ -930,6 +930,14 @@ class PackageBuilder:
             if existing_db_files:
                 self.database_manager.fetch_existing_database(existing_db_files)
             
+            # CRITICAL: Clean up orphaned signatures on VPS before building
+            print("\n" + "=" * 60)
+            print("STEP 3.5: VPS ORPHAN SIGNATURE CLEANUP")
+            print("=" * 60)
+            orphaned_sigs_deleted = self.cleanup_manager._cleanup_orphaned_signatures_vps()
+            if orphaned_sigs_deleted > 0:
+                logger.info(f"✅ Deleted {orphaned_sigs_deleted} orphaned signatures from VPS before building")
+            
             # Build packages with cache optimization
             print("\n" + "=" * 60)
             print("STEP 5: PACKAGE BUILDING (CACHE-AWARE SRCINFO VERSIONING)")
