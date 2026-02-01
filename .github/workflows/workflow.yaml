@@ -397,6 +397,7 @@ jobs:
             
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
+          pacman -Sy
           
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
