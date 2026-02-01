@@ -230,6 +230,53 @@ class GPGHandler:
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
             return False
     
+    def _verify_signature(self, package_path: Path, sig_path: Path) -> bool:
+        """
+        Verify a GPG signature
+        
+        Args:
+            package_path: Path to the package file
+            sig_path: Path to the signature file
+            
+        Returns:
+            True if signature is valid, False otherwise
+        """
+        if not package_path.exists():
+            logger.error(f"Package file not found: {package_path}")
+            return False
+        
+        if not sig_path.exists():
+            logger.error(f"Signature file not found: {sig_path}")
+            return False
+        
+        try:
+            verify_cmd = [
+                'gpg', '--verify',
+                str(sig_path),
+                str(package_path)
+            ]
+            
+            verify_process = subprocess.run(
+                verify_cmd,
+                capture_output=True,
+                text=True,
+                env=self.gpg_env if hasattr(self, 'gpg_env') else None,
+                check=False
+            )
+            
+            if verify_process.returncode == 0:
+                logger.debug(f"✅ Signature verification passed for {package_path.name}")
+                return True
+            else:
+                logger.error(f"❌ Signature verification failed for {package_path.name}")
+                if verify_process.stderr:
+                    logger.error(f"   Error: {verify_process.stderr[:200]}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error verifying signature for {package_path.name}: {e}")
+            return False
+    
     def sign_package(self, package_path):
         """
         Sign individual package file with GPG using --detach-sign --no-armor
@@ -238,7 +285,7 @@ class GPGHandler:
             package_path: Path to the package file (.pkg.tar.zst)
         
         Returns:
-            bool: True if signing successful or not required, False on error
+            bool: True if signing successful AND verification passes, False on error
         """
         if not self.sign_packages_enabled:
             logger.debug(f"Package signing disabled, skipping: {package_path}")
@@ -290,34 +337,26 @@ class GPGHandler:
             )
             
             if sign_process.returncode == 0:
-                logger.info(f"✅ Successfully created package signature: {sig_file.name}")
+                logger.info(f"✅ Created package signature: {sig_file.name}")
                 
                 # Verify the signature was created
                 if sig_file.exists():
                     sig_size = sig_file.stat().st_size
                     logger.info(f"   Signature file size: {sig_size} bytes")
                     
-                    # Verify the signature
-                    verify_cmd = [
-                        'gpg', '--verify',
-                        str(sig_file),
-                        str(package_path_obj)
-                    ]
-                    
-                    verify_process = subprocess.run(
-                        verify_cmd,
-                        capture_output=True,
-                        text=True,
-                        env=self.gpg_env,
-                        check=False
-                    )
-                    
-                    if verify_process.returncode == 0:
+                    # REQUIRED: Verify the signature immediately
+                    if self._verify_signature(package_path_obj, sig_file):
                         logger.info(f"✅ Signature verification passed for {package_path_obj.name}")
+                        return True
                     else:
-                        logger.warning(f"⚠️ Signature verification failed: {verify_process.stderr[:200]}")
-                    
-                    return True
+                        # SIGNATURE VERIFICATION FAILED: Delete the invalid signature
+                        logger.error(f"❌ Signature verification failed for {package_path_obj.name}")
+                        try:
+                            sig_file.unlink()
+                            logger.info(f"🗑️ Deleted invalid signature: {sig_file.name}")
+                        except Exception as e:
+                            logger.warning(f"Could not delete invalid signature: {e}")
+                        return False
                 else:
                     logger.error(f"❌ Signature file not created: {sig_file}")
                     return False
@@ -332,6 +371,48 @@ class GPGHandler:
         except Exception as e:
             logger.error(f"❌ Error signing package {package_path}: {e}")
             return False
+    
+    def verify_all_signatures(self, directory: Path) -> Dict[str, bool]:
+        """
+        Verify all signature files in a directory
+        
+        Args:
+            directory: Directory containing packages and signatures
+            
+        Returns:
+            Dictionary mapping package_name -> verification_result
+        """
+        if not self.gpg_enabled:
+            return {}
+        
+        results = {}
+        
+        # Find all signature files
+        for sig_file in directory.glob("*.sig"):
+            # Find corresponding package file (remove .sig extension)
+            package_file = directory / sig_file.name[:-4]
+            
+            if package_file.exists():
+                logger.debug(f"🔍 Verifying signature: {sig_file.name}")
+                if self._verify_signature(package_file, sig_file):
+                    results[package_file.name] = True
+                else:
+                    results[package_file.name] = False
+                    # Delete invalid signature
+                    try:
+                        sig_file.unlink()
+                        logger.info(f"🗑️ Deleted invalid signature: {sig_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete invalid signature: {e}")
+            else:
+                logger.warning(f"Package file not found for signature: {sig_file.name}")
+        
+        valid_count = sum(1 for result in results.values() if result)
+        invalid_count = len(results) - valid_count
+        
+        logger.info(f"📊 Signature verification: {valid_count} valid, {invalid_count} invalid")
+        
+        return results
     
     def sign_repository_files(self, repo_name: str, output_dir: str) -> bool:
         """Sign repository database files with GPG"""
@@ -387,7 +468,19 @@ class GPGHandler:
                 
                 if sign_process.returncode == 0:
                     logger.info(f"✅ Created signature: {sig_file.name}")
-                    signed_count += 1
+                    
+                    # Verify the signature
+                    if self._verify_signature(file_to_sign, sig_file):
+                        signed_count += 1
+                    else:
+                        # Delete invalid signature
+                        try:
+                            sig_file.unlink()
+                            logger.error(f"❌ Signature verification failed for {file_to_sign.name}")
+                            failed_count += 1
+                        except Exception as e:
+                            logger.warning(f"Could not delete invalid signature: {e}")
+                            failed_count += 1
                 else:
                     logger.warning(f"⚠️ Failed to sign {file_to_sign.name}: {sign_process.stderr[:200]}")
                     failed_count += 1

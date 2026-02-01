@@ -78,15 +78,148 @@ class CleanupManager:
         if deleted_count > 0:
             logger.info(f"✅ Removed {deleted_count} local files for {pkg_name} version {version_to_delete}")
     
-    def revalidate_output_dir_before_database(self):
+    def _remove_old_package_versions(self):
+        """
+        🚨 VERSION CLEANUP: Remove all but the newest version of each package from output_dir
+        
+        For each pkgname:
+        - Keep only the newest version
+        - Delete older versions and their .sig files
+        """
+        # Get all package files in output_dir
+        package_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        if not package_files:
+            return
+        
+        # Group files by package name
+        packages_dict: Dict[str, List[Tuple[str, Path]]] = {}
+        
+        for pkg_file in package_files:
+            # Extract package name and version from filename
+            extracted = self._parse_package_filename(pkg_file.name)
+            if extracted:
+                pkg_name, version_str = extracted
+                if pkg_name not in packages_dict:
+                    packages_dict[pkg_name] = []
+                packages_dict[pkg_name].append((version_str, pkg_file))
+        
+        # Process each package
+        total_deleted = 0
+        
+        for pkg_name, files in packages_dict.items():
+            if len(files) <= 1:
+                continue  # Only one version, nothing to do
+            
+            logger.info(f"🔍 Multiple versions found for {pkg_name}: {[v[0] for v in files]}")
+            
+            # Find the newest version
+            newest_version = self._find_newest_version([v[0] for v in files])
+            logger.info(f"📦 Keeping newest version for {pkg_name}: {newest_version}")
+            
+            # Delete older versions
+            for version_str, pkg_file in files:
+                if version_str != newest_version:
+                    try:
+                        # Delete package file
+                        pkg_file.unlink()
+                        logger.info(f"🗑️ Removed old version: {pkg_file.name}")
+                        
+                        # Delete signature file if exists
+                        sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                        if sig_file.exists():
+                            sig_file.unlink()
+                            logger.info(f"🗑️ Removed signature: {sig_file.name}")
+                        
+                        total_deleted += 1
+                    except Exception as e:
+                        logger.warning(f"Could not delete {pkg_file}: {e}")
+        
+        if total_deleted > 0:
+            logger.info(f"✅ Version cleanup: Removed {total_deleted} old package versions")
+    
+    def _find_newest_version(self, versions: List[str]) -> str:
+        """
+        Find the newest version from a list using vercmp
+        
+        Args:
+            versions: List of version strings
+        
+        Returns:
+            The newest version string
+        """
+        if not versions:
+            return ""
+        
+        if len(versions) == 1:
+            return versions[0]
+        
+        # Try to use vercmp for accurate comparison
+        try:
+            newest = versions[0]
+            for i in range(1, len(versions)):
+                result = subprocess.run(
+                    ['vercmp', versions[i], newest],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if result.returncode == 0:
+                    cmp_result = int(result.stdout.strip())
+                    if cmp_result > 0:  # versions[i] is newer than newest
+                        newest = versions[i]
+            
+            return newest
+        except Exception as e:
+            # Fallback: use string comparison
+            logger.warning(f"vercmp failed, using fallback version comparison: {e}")
+            
+            # Try to parse versions and compare components
+            try:
+                parsed_versions = []
+                for v in versions:
+                    if ':' in v:
+                        epoch, rest = v.split(':', 1)
+                        epoch = int(epoch)
+                    else:
+                        epoch = 0
+                        rest = v
+                    
+                    if '-' in rest:
+                        version_part, release_part = rest.split('-', 1)
+                        release = int(release_part)
+                    else:
+                        version_part = rest
+                        release = 1
+                    
+                    parsed_versions.append((epoch, version_part, release, v))
+                
+                # Sort by epoch (desc), then version_part (complex), then release (desc)
+                def version_key(item):
+                    epoch, version, release, original = item
+                    # Split version into components
+                    parts = []
+                    for part in re.split(r'[._-]', version):
+                        if part.isdigit():
+                            parts.append(int(part))
+                        else:
+                            parts.append(part)
+                    return (epoch, parts, release)
+                
+                sorted_versions = sorted(parsed_versions, key=version_key, reverse=True)
+                return sorted_versions[0][3]  # Return original string of newest
+            except:
+                # Ultimate fallback: return the last one
+                return versions[-1]
+    
+    def revalidate_output_dir_before_database(self, version_tracker=None):
         """
         🔥 ZOMBIE PROTECTION: Final validation before database generation
         
         Enhanced to recognize skipped packages as legitimate (not zombies)
         
         Scans output_dir and ensures:
-        1. Only one version per package exists
-        2. If multiple versions exist, keep only the target version
+        1. Only one version per package exists (calls _remove_old_package_versions)
+        2. If multiple versions exist, keep only the newest version
         3. Delete any "zombie" files (old versions that shouldn't be there)
         
         This is the LAST CHANCE to clean up before repo-add runs.
@@ -94,6 +227,9 @@ class CleanupManager:
         print("\n" + "=" * 60)
         print("🚨 FINAL VALIDATION: Removing zombie packages from output_dir")
         print("=" * 60)
+        
+        # First: Remove old versions of packages (keep only newest)
+        self._remove_old_package_versions()
         
         # Get all package files in output_dir
         package_files = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -150,14 +286,14 @@ class CleanupManager:
                     # Check if remaining parts look like version-release-arch
                     remaining = parts[i:]
                     if len(remaining) >= 3:
-                        # Check for epoch format (e.g., "2-26.1.9-1-x86_64")
+                        # Check for epoch format (e.g., "2-26.1.9-1")
                         if remaining[0].isdigit() and '-' in '-'.join(remaining[1:]):
                             epoch = remaining[0]
                             version_part = remaining[1]
                             release_part = remaining[2]
                             version_str = f"{epoch}:{version_part}-{release_part}"
                             return potential_name, version_str
-                        # Standard format (e.g., "26.1.9-1-x86_64")
+                        # Standard format (e.g., "26.1.9-1")
                         elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
                             version_part = remaining[0]
                             release_part = remaining[1]
@@ -219,43 +355,6 @@ class CleanupManager:
             logger.debug(f"Could not extract version from {filename}: {e}")
         
         return None
-    
-    def _find_latest_version(self, versions: List[str]) -> str:
-        """
-        Find the latest version from a list using vercmp
-        
-        Args:
-            versions: List of version strings
-        
-        Returns:
-            The latest version string
-        """
-        if not versions:
-            return ""
-        
-        if len(versions) == 1:
-            return versions[0]
-        
-        # Try to use vercmp for accurate comparison
-        try:
-            latest = versions[0]
-            for i in range(1, len(versions)):
-                result = subprocess.run(
-                    ['vercmp', versions[i], latest],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                if result.returncode == 0:
-                    cmp_result = int(result.stdout.strip())
-                    if cmp_result > 0:
-                        latest = versions[i]
-            
-            return latest
-        except Exception as e:
-            # Fallback: use string comparison (less accurate but works for simple cases)
-            logger.warning(f"vercmp failed, using fallback version comparison: {e}")
-            return max(versions)
     
     def server_cleanup(self, version_tracker):
         """
