@@ -1,212 +1,230 @@
+# FILE: .github/scripts/modules/vps/ssh_client.py
 """
-SSH Client Module - Handles SSH connections and remote operations
+SSH Client Module - Handles SSH connectivity and remote file inventory
+
+This module provides a small, reliable SSH wrapper used by the package builder
+to validate the VPS connection and inspect the remote repository directory.
+
+Design goals:
+- Deterministic, CI-friendly behavior (GitHub Actions containers)
+- No interactive prompts (StrictHostKeyChecking disabled by default)
+- Clear logging and safe timeouts
 """
 
-import os
-import subprocess
-import shutil
+from __future__ import annotations
+
 import logging
+import os
+import shlex
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional
+
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SSHResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
 class SSHClient:
-    """Handles SSH connections and remote VPS operations"""
-    
-    def __init__(self, config: dict):
+    """
+    Lightweight SSH client for the VPS repo host.
+
+    Expected config keys (typically passed in from orchestrator config):
+    - vps_user: str
+    - vps_host: str
+    - remote_dir: str (full path of repo dir on VPS, e.g. /var/www/repo/NAME/x86_64)
+    - ssh_key: Optional[str] (path to private key file in the runner)
+    - ssh_port: Optional[int] (defaults to 22)
+    """
+
+    def __init__(
+        self,
+        vps_user: str,
+        vps_host: str,
+        remote_dir: str,
+        ssh_key: Optional[str] = None,
+        ssh_port: int = 22,
+        connect_timeout: int = 15,
+        command_timeout: int = 60,
+    ) -> None:
+        self.vps_user = vps_user
+        self.vps_host = vps_host
+        self.remote_dir = remote_dir
+        self.ssh_key = ssh_key
+        self.ssh_port = int(ssh_port)
+        self.connect_timeout = int(connect_timeout)
+        self.command_timeout = int(command_timeout)
+
+    # -----------------------------
+    # Setup / basic connectivity
+    # -----------------------------
+    def setup_ssh_config(self, ssh_key_path: str) -> None:
         """
-        Initialize SSHClient with configuration
-        
-        Args:
-            config: Dictionary containing:
-                - vps_user: VPS username
-                - vps_host: VPS hostname
-                - remote_dir: Remote directory on VPS
-                - ssh_options: SSH options list
-                - repo_name: Repository name
+        Ensure the SSH key has correct permissions and store it for later SSH calls.
+
+        This does not require writing ~/.ssh/config, but it ensures that the key
+        is usable in CI (OpenSSH refuses overly-permissive key files).
         """
-        self.vps_user = config['vps_user']
-        self.vps_host = config['vps_host']
-        self.remote_dir = config['remote_dir']
-        self.ssh_options = config.get('ssh_options', [])
-        self.repo_name = config.get('repo_name', '')
-        
-    def setup_ssh_config(self, ssh_key: Optional[str] = None):
-        """Setup SSH config file for builder user - container invariant"""
-        ssh_dir = Path("/home/builder/.ssh")
-        ssh_dir.mkdir(exist_ok=True, mode=0o700)
-        
-        # Write SSH config file using environment variables
-        config_content = f"""Host {self.vps_host}
-  HostName {self.vps_host}
-  User {self.vps_user}
-  IdentityFile ~/.ssh/id_ed25519
-  StrictHostKeyChecking no
-  ConnectTimeout 30
-  ServerAliveInterval 15
-  ServerAliveCountMax 3
-"""
-        
-        config_file = ssh_dir / "config"
-        with open(config_file, "w") as f:
-            f.write(config_content)
-        
-        config_file.chmod(0o600)
-        
-        # Ensure SSH key exists and has correct permissions
-        ssh_key_path = ssh_dir / "id_ed25519"
-        if not ssh_key_path.exists() and ssh_key:
-            with open(ssh_key_path, "w") as f:
-                f.write(ssh_key)
-            ssh_key_path.chmod(0o600)
-        
-        # Set ownership to builder
+        self.ssh_key = ssh_key_path
+
+        key = Path(ssh_key_path)
+        if not key.exists():
+            raise FileNotFoundError(f"SSH key not found: {ssh_key_path}")
+
         try:
-            shutil.chown(ssh_dir, "builder", "builder")
-            for item in ssh_dir.iterdir():
-                shutil.chown(item, "builder", "builder")
-        except Exception as e:
-            logger.warning(f"Could not change SSH dir ownership: {e}")
-    
+            # Ensure key permissions: 600
+            os.chmod(key, 0o600)
+        except PermissionError:
+            # In some CI setups chmod may fail; we still try to continue.
+            logger.warning("Could not chmod SSH key to 600 (permission error). Continuing...")
+
+        # Also ensure ~/.ssh exists with safe perms (useful if other steps write known_hosts)
+        ssh_dir = Path.home() / ".ssh"
+        try:
+            ssh_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(ssh_dir, 0o700)
+        except Exception:
+            # Non-fatal
+            pass
+
+        logger.info("SSH key configured for VPS access.")
+
     def test_ssh_connection(self) -> bool:
-        """Test SSH connection to VPS"""
-        logger.info("Testing SSH connection to VPS...")
-        
-        ssh_test_cmd = [
-            "ssh",
-            f"{self.vps_user}@{self.vps_host}",
-            "echo SSH_TEST_SUCCESS"
-        ]
-        
-        result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, check=False)
-        if result and result.returncode == 0 and "SSH_TEST_SUCCESS" in result.stdout:
-            logger.info("SSH connection successful")
-            return True
+        """
+        Test SSH connectivity to the VPS.
+        Returns True on success.
+        """
+        result = self.run_remote_command("echo OK", timeout=self.connect_timeout)
+        ok = result.returncode == 0 and "OK" in result.stdout
+        if ok:
+            logger.info("SSH connection OK.")
         else:
-            logger.warning(f"SSH connection failed: {result.stderr[:100] if result and result.stderr else 'No output'}")
-            return False
-    
-    def ensure_remote_directory(self):
-        """Ensure remote directory exists and has correct permissions"""
-        logger.info("Ensuring remote directory exists...")
-        
-        remote_cmd = f"""
-        # Check if directory exists
-        if [ ! -d "{self.remote_dir}" ]; then
-            echo "Creating directory"
-            sudo mkdir -p "{self.remote_dir}"
-            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
-            sudo chmod -R 755 "{self.remote_dir}"
-            echo "Directory created and permissions set"
-        else
-            echo "Directory exists"
-            # Ensure correct permissions
-            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
-            sudo chmod -R 755 "{self.remote_dir}"
-            echo "Permissions verified"
-        fi
+            logger.error("SSH connection failed: %s", result.stderr.strip()[:300])
+        return ok
+
+    # -----------------------------
+    # Remote repo directory helpers
+    # -----------------------------
+    def check_repository_exists_on_vps(self) -> bool:
         """
-        
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                logger.info("Remote directory verified")
-            else:
-                logger.warning(f"Could not ensure remote directory: {result.stderr[:200]}")
-                
-        except Exception as e:
-            logger.warning(f"Could not ensure remote directory: {e}")
-    
-    def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
-        """Check if repository exists on VPS via SSH"""
-        logger.info("Checking if repository exists on VPS...")
-        
-        remote_cmd = f"""
-        # Check for package files
-        if find "{self.remote_dir}" -name "*.pkg.tar.*" -type f 2>/dev/null | head -1 >/dev/null; then
-            echo "REPO_EXISTS_WITH_PACKAGES"
-        # Check for database files
-        elif [ -f "{self.remote_dir}/{self.repo_name}.db.tar.gz" ] || [ -f "{self.remote_dir}/{self.repo_name}.db" ]; then
-            echo "REPO_EXISTS_WITH_DB"
-        else
-            echo "REPO_NOT_FOUND"
-        fi
+        Check whether remote_dir exists on the VPS.
         """
-        
-        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", remote_cmd]
-        
+        cmd = f'test -d {shlex.quote(self.remote_dir)} && echo EXISTS || echo MISSING'
+        result = self.run_remote_command(cmd, timeout=self.connect_timeout)
+        return result.returncode == 0 and "EXISTS" in result.stdout
+
+    def ensure_remote_directory(self) -> bool:
+        """
+        Ensure remote_dir exists (mkdir -p).
+        Returns True if the command succeeds.
+        """
+        cmd = f'mkdir -p {shlex.quote(self.remote_dir)}'
+        result = self.run_remote_command(cmd, timeout=self.command_timeout)
+        if result.returncode == 0:
+            logger.info("Remote directory ensured: %s", self.remote_dir)
+            return True
+        logger.error("Failed to ensure remote directory: %s", result.stderr.strip()[:300])
+        return False
+
+    def list_remote_packages(self) -> List[str]:
+        """
+        List files in remote_dir relevant for the repo, returning full paths.
+
+        Includes:
+        - packages (*.pkg.tar.zst, *.pkg.tar.xz)
+        - signatures (*.sig)
+        - repo databases (*.db, *.db.tar.gz, *.files, *.files.tar.gz, *.abs.tar.gz)
+
+        Returns:
+            List[str]: full remote file paths (one per line)
+        """
+        # IMPORTANT:
+        # - Use a raw string for the literal \( \) in the find expression (avoid invalid escapes)
+        # - Keep \n as a literal for tools that interpret it (find -printf, printf, etc.)
+        remote_find_cmd = (
+            f'find {shlex.quote(self.remote_dir)} -maxdepth 1 -type f '
+            r'\( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" '
+            r'-o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" '
+            r'-o -name "*.abs.tar.gz" \) '
+            r'-print 2>/dev/null || true'
+        )
+
+        result = self.run_remote_command(remote_find_cmd, timeout=self.command_timeout)
+        if result.returncode != 0:
+            logger.warning("Could not list remote files: %s", result.stderr.strip()[:300])
+            return []
+
+        files_raw = result.stdout.strip()
+        if not files_raw:
+            return []
+
+        return [line.strip() for line in files_raw.splitlines() if line.strip()]
+
+    # -----------------------------
+    # Core execution helper
+    # -----------------------------
+    def run_remote_command(self, command: str, timeout: Optional[int] = None) -> SSHResult:
+        """
+        Run a shell command on the VPS via SSH (non-interactive).
+
+        Args:
+            command: shell command to run on remote host
+            timeout: seconds; if None uses self.command_timeout
+
+        Returns:
+            SSHResult(returncode, stdout, stderr)
+        """
+        if timeout is None:
+            timeout = self.command_timeout
+
+        ssh_cmd = self._build_ssh_base_cmd() + [
+            # Run via bash -lc for consistent quoting and to allow compound commands
+            "bash",
+            "-lc",
+            command,
+        ]
+
         try:
-            result = subprocess.run(
+            proc = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=30
+                timeout=timeout,
             )
-            
-            if result.returncode == 0:
-                if "REPO_EXISTS_WITH_PACKAGES" in result.stdout:
-                    logger.info("Repository exists on VPS (has package files)")
-                    return True, True
-                elif "REPO_EXISTS_WITH_DB" in result.stdout:
-                    logger.info("Repository exists on VPS (has database)")
-                    return True, False
-                else:
-                    logger.info("Repository does not exist on VPS (first run)")
-                    return False, False
-            else:
-                logger.warning(f"Could not check repository existence: {result.stderr[:200]}")
-                return False, False
-                
+            return SSHResult(proc.returncode, proc.stdout or "", proc.stderr or "")
         except subprocess.TimeoutExpired:
-            logger.error("SSH timeout checking repository existence")
-            return False, False
+            return SSHResult(124, "", f"SSH command timed out after {timeout}s")
         except Exception as e:
-            logger.error(f"Error checking repository: {e}")
-            return False, False
-    
-    def list_remote_packages(self) -> List[str]:
-        """List all *.pkg.tar.zst and *.pkg.tar.xz files in the remote repository directory (basenames only)"""
-        logger.info("Listing remote repository packages (SSH find)...")
-        
-        ssh_key_path = "/home/builder/.ssh/id_ed25519"
-        if not os.path.exists(ssh_key_path):
-            logger.error(f"SSH key not found")
-            return []
-        
-        # SECURITY FIX: Use -printf "%f\n" to get only basenames, no directory paths
-        ssh_cmd = [
+            return SSHResult(1, "", f"SSH execution error: {e}")
+
+    def _build_ssh_base_cmd(self) -> List[str]:
+        """
+        Build the base ssh command with safe, CI-friendly options.
+        """
+        cmd: List[str] = [
             "ssh",
-            f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            "-p",
+            str(self.ssh_port),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self.connect_timeout}",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
         ]
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
-                logger.info(f"Found {len(files)} package files on remote server")
-                return files
-            else:
-                logger.warning(f"SSH find returned error")
-                return []
-                
-        except Exception as e:
-            logger.error(f"SSH command failed: {e}")
-            return []
+
+        if self.ssh_key:
+            cmd += ["-i", self.ssh_key]
+
+        cmd.append(f"{self.vps_user}@{self.vps_host}")
+        return cmd
