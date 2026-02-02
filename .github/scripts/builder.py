@@ -1,4 +1,3 @@
-# FILE: .github/scripts/builder.py
 """
 Main Orchestration Script for Arch Linux Package Builder
 """
