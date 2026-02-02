@@ -11,6 +11,7 @@ This module now handles ONLY:
 import os
 import subprocess
 import shutil
+import hashlib
 import logging
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -147,6 +148,87 @@ class CleanupManager:
             logger.info(f"✅ Removed {orphaned_count} orphaned signature files")
         else:
             logger.info("✅ No orphaned signature files found")
+    
+    def cleanup_vps_orphaned_signatures(self) -> Tuple[int, int, int]:
+        """
+        🚨 VPS ORPHAN SIGNATURE SWEEP: Delete signature files without corresponding packages on VPS.
+        
+        Returns:
+            Tuple of (package_count, signature_count, deleted_orphan_count)
+        """
+        # Generate privacy-safe hash for logging
+        remote_dir_hash = hashlib.sha256(self.remote_dir.encode()).hexdigest()[:8]
+        logger.info(f"Starting VPS orphan signature sweep (remote_dir_hash: {remote_dir_hash})...")
+        
+        # Get ALL files from VPS (including signatures)
+        vps_files = self._get_vps_file_inventory()
+        if vps_files is None:
+            logger.error("Failed to get VPS file inventory")
+            return 0, 0, 0
+        
+        if not vps_files:
+            logger.info("No files found on VPS")
+            return 0, 0, 0
+        
+        # Separate package files and signature files
+        package_files = set()
+        signature_files = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            if filename.endswith('.sig'):
+                signature_files.append(vps_file)
+            elif filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                package_files.add(filename)
+        
+        # Log counts (privacy-safe)
+        logger.info(f"Found {len(package_files)} package files and {len(signature_files)} signature files on VPS")
+        
+        # Identify orphaned signatures (signatures without corresponding package)
+        orphaned_signatures = []
+        for sig_file in signature_files:
+            sig_filename = Path(sig_file).name
+            # Corresponding package filename is the signature filename without .sig
+            pkg_filename = sig_filename[:-4]  # Remove .sig extension
+            
+            # Check if this signature is for a package (not database)
+            if pkg_filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                if pkg_filename not in package_files:
+                    orphaned_signatures.append(sig_file)
+        
+        if not orphaned_signatures:
+            logger.info("✅ No orphaned signatures found on VPS")
+            return len(package_files), len(signature_files), 0
+        
+        logger.info(f"Found {len(orphaned_signatures)} orphaned signatures to delete")
+        
+        # Delete orphaned signatures in batches
+        batch_size = 50
+        deleted_count = 0
+        deletion_status = 0
+        
+        for i in range(0, len(orphaned_signatures), batch_size):
+            batch = orphaned_signatures[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                deleted_count += len(batch)
+            else:
+                deletion_status = 1  # Mark failure
+        
+        # Log final status (privacy-safe)
+        logger.info(f"VPS orphan sweep complete:")
+        logger.info(f"  remote_dir_hash: {remote_dir_hash}")
+        logger.info(f"  package_files_count: {len(package_files)}")
+        logger.info(f"  signature_files_count: {len(signature_files)}")
+        logger.info(f"  orphaned_signatures_found: {len(orphaned_signatures)}")
+        logger.info(f"  deleted_orphan_signatures_count: {deleted_count}")
+        logger.info(f"  deletion_exit_status: {deletion_status}")
+        
+        if deletion_status == 0:
+            logger.info("✅ VPS orphan signature sweep completed successfully")
+        else:
+            logger.error("❌ VPS orphan signature sweep had failures")
+        
+        return len(package_files), len(signature_files), deleted_count
     
     def server_cleanup(self, version_tracker):
         """

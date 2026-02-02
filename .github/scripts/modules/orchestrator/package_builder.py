@@ -490,6 +490,58 @@ class PackageBuilder:
         """Get the version of a package from remote server using SRCINFO-based extraction"""
         return self.version_tracker.get_remote_version(pkg_name, self.remote_files)
     
+    def _sign_existing_packages_in_output_dir(self) -> Tuple[int, int, int]:
+        """
+        Sign existing packages in output_dir that don't have signatures.
+        
+        Returns:
+            Tuple of (unsigned_packages_found, packages_signed, signing_failures)
+        """
+        if not self.gpg_handler.sign_packages_enabled:
+            logger.info("Package signing disabled, skipping existing package signing")
+            return 0, 0, 0
+        
+        logger.info("🔐 Scanning output_dir for unsigned packages...")
+        
+        # Find all package files in output_dir
+        package_files = []
+        for ext in ['.pkg.tar.zst', '.pkg.tar.xz']:
+            package_files.extend(self.output_dir.glob(f"*{ext}"))
+        
+        unsigned_packages_found = 0
+        packages_signed = 0
+        signing_failures = 0
+        
+        for pkg_file in package_files:
+            # Check if signature already exists
+            sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+            if not sig_file.exists():
+                unsigned_packages_found += 1
+                logger.info(f"Found unsigned package: {pkg_file.name}")
+                
+                # Attempt to sign
+                if self.gpg_handler.sign_package(str(pkg_file)):
+                    packages_signed += 1
+                    logger.info(f"Successfully signed: {pkg_file.name}")
+                else:
+                    signing_failures += 1
+                    logger.error(f"Failed to sign: {pkg_file.name}")
+        
+        # Log summary (privacy-safe)
+        logger.info(f"Existing package signing complete:")
+        logger.info(f"  unsigned_packages_found: {unsigned_packages_found}")
+        logger.info(f"  packages_signed: {packages_signed}")
+        logger.info(f"  signing_failures: {signing_failures}")
+        
+        if unsigned_packages_found == 0:
+            logger.info("✅ All packages in output_dir are already signed")
+        elif signing_failures == 0:
+            logger.info(f"✅ Successfully signed {packages_signed} previously unsigned packages")
+        else:
+            logger.warning(f"⚠️ Signed {packages_signed} packages but failed to sign {signing_failures}")
+        
+        return unsigned_packages_found, packages_signed, signing_failures
+    
     def _build_aur_package(self, pkg_name: str) -> bool:
         """Build AUR package with proper version checking and signing"""
         # Step 1: Fetch current version from AUR
@@ -934,9 +986,8 @@ class PackageBuilder:
             print("\n" + "=" * 60)
             print("STEP 3.5: VPS ORPHAN SIGNATURE CLEANUP")
             print("=" * 60)
-            orphaned_sigs_deleted = self.cleanup_manager._cleanup_orphaned_signatures_vps()
-            if orphaned_sigs_deleted > 0:
-                logger.info(f"✅ Deleted {orphaned_sigs_deleted} orphaned signatures from VPS before building")
+            package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
+            logger.info(f"VPS state: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
             
             # Build packages with cache optimization
             print("\n" + "=" * 60)
@@ -944,6 +995,13 @@ class PackageBuilder:
             print("=" * 60)
             
             total_built = self.build_packages()
+            
+            # STEP 5.5: Sign existing packages in output_dir
+            print("\n" + "=" * 60)
+            print("STEP 5.5: SIGN EXISTING PACKAGES IN OUTPUT_DIR")
+            print("=" * 60)
+            unsigned_found, signed_count, signing_failures = self._sign_existing_packages_in_output_dir()
+            logger.info(f"Signed {signed_count} previously unsigned packages (found {unsigned_found}, failed {signing_failures})")
             
             # Check if we have any packages locally (mirrored + newly built)
             local_packages = self.database_manager._get_all_local_packages()
