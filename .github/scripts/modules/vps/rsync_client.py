@@ -194,13 +194,18 @@ class RsyncClient:
         
         return True
     
-    def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
+    def upload_files(self, files_to_upload: List[str], output_dir: Path, cleanup_manager=None) -> bool:
         """
         Upload files to server using RSYNC WITHOUT --delete flag (transport-only)
         
         CRITICAL: This is now a transport-only function. Deletions are handled
         separately via CleanupManager over SSH (outside this module).
         
+        Args:
+            files_to_upload: List of file paths to upload
+            output_dir: Output directory (unused, kept for backward compatibility)
+            cleanup_manager: Ignored (kept for backward compatibility only)
+            
         Returns:
             True if successful, False otherwise
         """
