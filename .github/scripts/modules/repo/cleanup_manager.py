@@ -1,18 +1,16 @@
+# FILE: .github/scripts/modules/repo/cleanup_manager.py
 """
 Cleanup Manager Module - Handles Zero-Residue policy and server cleanup ONLY
 
 CRITICAL: Version cleanup logic has been moved to SmartCleanup.
 This module now handles ONLY:
-- Server cleanup (VPS zombie package + orphan signature removal)
+- Server cleanup (VPS zombie package removal)
 - Database file cleanup
-
-Design principle:
-- **Local output_dir is the source of truth.**
-- VPS repo directory should be *mirrored* to match output_dir, except for repo DB/files artifacts
-  that are regenerated.
 """
 
+import os
 import subprocess
+import shutil
 import hashlib
 import logging
 from pathlib import Path
@@ -24,29 +22,17 @@ logger = logging.getLogger(__name__)
 class CleanupManager:
     """
     Manages server-side cleanup operations ONLY.
-
+    
+    CRITICAL: Version cleanup is now handled by SmartCleanup.
     This module only handles:
-    1. VPS cleanup (make VPS mirror local output_dir packages + their signatures)
-    2. Database file maintenance (local output_dir)
+    1. Server cleanup (removing zombie packages from VPS)
+    2. Database file maintenance
     """
-
-    DB_SUFFIXES = (
-        ".db",
-        ".db.tar.gz",
-        ".files",
-        ".files.tar.gz",
-        ".abs.tar.gz",
-    )
-
-    PKG_SUFFIXES = (
-        ".pkg.tar.zst",
-        ".pkg.tar.xz",
-    )
-
+    
     def __init__(self, config: dict):
         """
-        Initialize CleanupManager with configuration.
-
+        Initialize CleanupManager with configuration
+        
         Args:
             config: Dictionary containing:
                 - repo_name: Repository name
@@ -56,73 +42,457 @@ class CleanupManager:
                 - vps_user: VPS username
                 - vps_host: VPS hostname
         """
-        self.repo_name = config["repo_name"]
-        self.output_dir = Path(config["output_dir"])
-        self.remote_dir = config["remote_dir"]
-        self.mirror_temp_dir = Path(config.get("mirror_temp_dir", "/tmp/repo_mirror"))
-        self.vps_user = config["vps_user"]
-        self.vps_host = config["vps_host"]
-
-    # ---------------------------
-    # Local output_dir maintenance
-    # ---------------------------
-
-    def revalidate_output_dir_before_database(self, allowlist: Optional[Set[str]] = None) -> None:
+        self.repo_name = config['repo_name']
+        self.output_dir = Path(config['output_dir'])
+        self.remote_dir = config['remote_dir']
+        self.mirror_temp_dir = Path(config.get('mirror_temp_dir', '/tmp/repo_mirror'))
+        self.vps_user = config['vps_user']
+        self.vps_host = config['vps_host']
+    
+    def revalidate_output_dir_before_database(self, allowlist: Optional[Set[str]] = None):
         """
         🚨 PRE-DATABASE VALIDATION: Remove outdated package versions and orphaned signatures.
         Operates ONLY on output_dir.
-
+        
         Enforces:
         - Only the latest version of each package remains.
         - Orphaned .sig files (without a package) are removed.
         - Packages not in allowlist are removed (if allowlist provided).
-
+        
         Args:
             allowlist: Set of valid package names from PKGBUILD extraction (optional)
         """
         logger.info("🚨 PRE-DATABASE VALIDATION: Starting output_dir revalidation...")
-
+        
         # Import SmartCleanup here to avoid circular imports
         from modules.repo.smart_cleanup import SmartCleanup
-
+        
+        # Create SmartCleanup instance for output_dir cleanup
         smart_cleanup = SmartCleanup(self.repo_name, self.output_dir)
-
-        # 1) Keep only newest per package
+        
+        # Step 1: Remove old package versions (keep only newest per package)
         smart_cleanup.remove_old_package_versions()
-
-        # 2) Remove packages not in allowlist (if provided)
+        
+        # Step 2: Remove packages not in allowlist (if allowlist provided)
         if allowlist:
             smart_cleanup.remove_packages_not_in_allowlist(allowlist)
-
-        # 3) Remove orphaned .sig files locally
-        self._remove_orphaned_signatures_local()
-
+        
+        # Step 3: Remove orphaned .sig files
+        self._remove_orphaned_signatures()
+        
         logger.info("✅ PRE-DATABASE VALIDATION: Output directory revalidated successfully.")
-
-    def _remove_orphaned_signatures_local(self) -> None:
-        """Remove orphaned .sig files in output_dir that don't have a corresponding package"""
-        logger.info("🔍 Checking for orphaned signature files in output_dir...")
-
-        orphaned = 0
+    
+    def get_vps_files_to_delete(self, version_tracker) -> Tuple[List[str], List[str]]:
+        """
+        Identify files that should be deleted from VPS based on local output_dir state.
+        
+        Returns:
+            Tuple of (files_to_delete, files_to_keep)
+        """
+        logger.info("Identifying VPS files for deletion based on local state...")
+        
+        # Get current VPS files
+        vps_files = self._get_vps_file_inventory()
+        if not vps_files:
+            logger.info("No VPS files found")
+            return [], []
+        
+        # Get local files from output_dir
+        local_files = set(f.name for f in self.output_dir.glob("*"))
+        
+        # Identify files to delete (on VPS but not locally)
+        files_to_delete = []
+        files_to_keep = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            
+            # Always keep database and signature files (they'll be regenerated)
+            is_db_or_sig = any(filename.endswith(ext) for ext in [
+                '.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'
+            ])
+            
+            if is_db_or_sig:
+                # Database/signature files are handled separately
+                files_to_keep.append(vps_file)
+                continue
+            
+            if filename in local_files:
+                files_to_keep.append(vps_file)
+                logger.debug(f"Keeping {filename} (exists locally)")
+            else:
+                files_to_delete.append(vps_file)
+                logger.info(f"Marking for deletion: {filename} (not in local output)")
+        
+        logger.info(f"VPS cleanup: {len(files_to_keep)} to keep, {len(files_to_delete)} to delete")
+        return files_to_delete, files_to_keep
+    
+    def _remove_orphaned_signatures(self):
+        """Remove orphaned .sig files that don't have a corresponding package"""
+        logger.info("🔍 Checking for orphaned signature files...")
+        
+        orphaned_count = 0
         for sig_file in self.output_dir.glob("*.sig"):
-            base_file = sig_file.with_suffix("")  # remove .sig
-            if not base_file.exists():
+            # Corresponding package file (remove .sig extension)
+            pkg_file = sig_file.with_suffix('')
+            
+            if not pkg_file.exists():
                 try:
                     sig_file.unlink()
-                    logger.info("Removed orphaned signature: %s", sig_file.name)
-                    orphaned += 1
+                    logger.info(f"Removed orphaned signature: {sig_file.name}")
+                    orphaned_count += 1
                 except Exception as e:
-                    logger.warning("Could not delete orphaned signature %s: %s", sig_file, e)
-
-        if orphaned:
-            logger.info("✅ Removed %d orphaned signature files from output_dir", orphaned)
+                    logger.warning(f"Could not delete orphaned signature {sig_file}: {e}")
+        
+        if orphaned_count > 0:
+            logger.info(f"✅ Removed {orphaned_count} orphaned signature files")
         else:
-            logger.info("✅ No orphaned signatures found in output_dir")
-
-    def cleanup_database_files(self) -> None:
-        """Clean up old database files from output_dir"""
-        logger.info("Cleaning up old database files from output_dir...")
-
+            logger.info("✅ No orphaned signature files found")
+    
+    def cleanup_vps_orphaned_signatures(self) -> Tuple[int, int, int]:
+        """
+        🚨 VPS ORPHAN SIGNATURE SWEEP: Delete signature files without corresponding packages on VPS.
+        
+        Returns:
+            Tuple of (package_count, signature_count, deleted_orphan_count)
+        """
+        # Generate privacy-safe hash for logging
+        remote_dir_hash = hashlib.sha256(self.remote_dir.encode()).hexdigest()[:8]
+        logger.info(f"Starting VPS orphan signature sweep (remote_dir_hash: {remote_dir_hash})...")
+        
+        # Get ALL files from VPS (including signatures)
+        vps_files = self._get_vps_file_inventory()
+        if vps_files is None:
+            logger.error("Failed to get VPS file inventory")
+            return 0, 0, 0
+        
+        if not vps_files:
+            logger.info("No files found on VPS")
+            return 0, 0, 0
+        
+        # Separate package files and signature files
+        package_files = set()
+        signature_files = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            if filename.endswith('.sig'):
+                signature_files.append(vps_file)
+            elif filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                package_files.add(filename)
+        
+        # Log counts (privacy-safe)
+        logger.info(f"Found {len(package_files)} package files and {len(signature_files)} signature files on VPS")
+        
+        # Identify orphaned signatures (signatures without corresponding package)
+        orphaned_signatures = []
+        for sig_file in signature_files:
+            sig_filename = Path(sig_file).name
+            # Corresponding package filename is the signature filename without .sig
+            pkg_filename = sig_filename[:-4]  # Remove .sig extension
+            
+            # Check if this signature is for a package (not database)
+            if pkg_filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                if pkg_filename not in package_files:
+                    orphaned_signatures.append(sig_file)
+        
+        if not orphaned_signatures:
+            logger.info("✅ No orphaned signatures found on VPS")
+            return len(package_files), len(signature_files), 0
+        
+        logger.info(f"Found {len(orphaned_signatures)} orphaned signatures to delete")
+        
+        # Delete orphaned signatures in batches
+        batch_size = 50
+        deleted_count = 0
+        deletion_status = 0
+        
+        for i in range(0, len(orphaned_signatures), batch_size):
+            batch = orphaned_signatures[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                deleted_count += len(batch)
+            else:
+                deletion_status = 1  # Mark failure
+        
+        # Log final status (privacy-safe)
+        logger.info(f"VPS orphan sweep complete:")
+        logger.info(f"  remote_dir_hash: {remote_dir_hash}")
+        logger.info(f"  package_files_count: {len(package_files)}")
+        logger.info(f"  signature_files_count: {len(signature_files)}")
+        logger.info(f"  orphaned_signatures_found: {len(orphaned_signatures)}")
+        logger.info(f"  deleted_orphan_signatures_count: {deleted_count}")
+        logger.info(f"  deletion_exit_status: {deletion_status}")
+        
+        if deletion_status == 0:
+            logger.info("✅ VPS orphan signature sweep completed successfully")
+        else:
+            logger.error("❌ VPS orphan signature sweep had failures")
+        
+        return len(package_files), len(signature_files), deleted_count
+    
+    def server_cleanup(self, version_tracker):
+        """
+        🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
+        using TARGET VERSIONS as SOURCE OF TRUTH.
+        
+        Only keeps packages that match registered target versions.
+        """
+        logger.info("Server cleanup: Removing zombie packages from VPS...")
+        
+        # Check if we have any target versions registered
+        if not version_tracker._package_target_versions:
+            logger.warning("No target versions registered - skipping server cleanup")
+            return
+        
+        logger.info(f"Zero-Residue cleanup initiated with {len(version_tracker._package_target_versions)} target versions")
+        
+        # Get ALL files from VPS (including signatures)
+        vps_files = self._get_vps_file_inventory()
+        if vps_files is None:
+            logger.error("Failed to get VPS file inventory")
+            return
+        
+        if not vps_files:
+            logger.info("No files found on VPS - nothing to clean up")
+            return
+        
+        # First, identify and delete orphaned signatures (signatures without corresponding packages)
+        orphaned_sigs_deleted = self._cleanup_orphaned_signatures_vps(vps_files)
+        if orphaned_sigs_deleted > 0:
+            logger.info(f"Deleted {orphaned_sigs_deleted} orphaned signatures from VPS")
+        
+        # Refresh file list after orphan cleanup
+        vps_files = self._get_vps_file_inventory()
+        if not vps_files:
+            logger.info("No files remaining on VPS after orphan cleanup")
+            return
+        
+        # Identify files to keep based on target versions
+        files_to_keep = set()
+        files_to_delete = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            
+            # Skip database and signature files from deletion logic (handled separately)
+            is_db_or_sig = any(filename.endswith(ext) for ext in ['.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'])
+            if is_db_or_sig:
+                files_to_keep.add(filename)
+                continue
+            
+            # Simple package name extraction (basic logic)
+            # CRITICAL: Full version parsing is done by SmartCleanup
+            # This is just for server cleanup matching
+            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
+            parts = base.split('-')
+            
+            # Try to extract pkgname (everything before version)
+            pkg_name = None
+            for i in range(len(parts) - 3, 0, -1):
+                potential_name = '-'.join(parts[:i])
+                remaining = parts[i:]
+                
+                if len(remaining) >= 3:
+                    # Check if remaining parts look like version-release-arch
+                    if remaining[0].isdigit() or any(c.isdigit() for c in remaining[0]):
+                        pkg_name = potential_name
+                        break
+            
+            if not pkg_name:
+                # Can't parse, keep to be safe
+                files_to_keep.add(filename)
+                continue
+            
+            # Check if this package has a target version
+            # We only check by pkgname, not full version (simpler logic for server)
+            if pkg_name in version_tracker._package_target_versions:
+                # Keep the file (version cleanup is handled elsewhere)
+                files_to_keep.add(filename)
+                logger.debug(f"Keeping {filename} (has target version)")
+            else:
+                # No target version registered for this package
+                # Check if it's in our skipped packages
+                if pkg_name in version_tracker._skipped_packages:
+                    files_to_keep.add(filename)
+                    logger.debug(f"Keeping {filename} (skipped package)")
+                else:
+                    # Not in target versions or skipped packages - mark for deletion
+                    files_to_delete.append(vps_file)
+                    logger.info(f"Marking for deletion: {filename} (not in target versions)")
+        
+        # Execute deletion
+        if not files_to_delete:
+            logger.info("No zombie packages found on VPS")
+            return
+        
+        logger.info(f"Identified {len(files_to_delete)} zombie packages for deletion")
+        
+        # Delete files in batches
+        batch_size = 50
+        deleted_count = 0
+        
+        for i in range(0, len(files_to_delete), batch_size):
+            batch = files_to_delete[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                deleted_count += len(batch)
+        
+        logger.info(f"Server cleanup complete: Deleted {deleted_count} zombie packages")
+        
+        # After deleting packages, clean up any signatures for deleted packages
+        self._cleanup_orphaned_signatures_vps()
+    
+    def _cleanup_orphaned_signatures_vps(self, vps_files: Optional[List[str]] = None) -> int:
+        """
+        Clean up orphaned signature files on VPS (signatures without corresponding packages).
+        
+        Args:
+            vps_files: List of VPS files (if None, will fetch from server)
+        
+        Returns:
+            Number of orphaned signatures deleted
+        """
+        logger.info("🔍 Sweeping for orphaned signatures on VPS...")
+        
+        if vps_files is None:
+            vps_files = self._get_vps_file_inventory()
+            if not vps_files:
+                return 0
+        
+        # Separate package files and signature files
+        package_files = set()
+        signature_files = []
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            if filename.endswith('.sig'):
+                signature_files.append(vps_file)
+            elif filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                package_files.add(filename)
+        
+        logger.info(f"Found {len(signature_files)} signature files and {len(package_files)} package files on VPS")
+        
+        # Identify orphaned signatures (signatures without corresponding package)
+        orphaned_signatures = []
+        for sig_file in signature_files:
+            sig_filename = Path(sig_file).name
+            # Corresponding package filename is the signature filename without .sig
+            pkg_filename = sig_filename[:-4]  # Remove .sig extension
+            
+            # Check if this signature is for a package (not database)
+            if pkg_filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                if pkg_filename not in package_files:
+                    orphaned_signatures.append(sig_file)
+                    logger.info(f"Orphaned signature: {sig_filename} (package {pkg_filename} not found)")
+        
+        if not orphaned_signatures:
+            logger.info("✅ No orphaned signatures found on VPS")
+            return 0
+        
+        logger.info(f"Found {len(orphaned_signatures)} orphaned signatures to delete")
+        
+        # Delete orphaned signatures in batches
+        batch_size = 50
+        deleted_count = 0
+        
+        for i in range(0, len(orphaned_signatures), batch_size):
+            batch = orphaned_signatures[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                deleted_count += len(batch)
+        
+        logger.info(f"✅ Deleted {deleted_count} orphaned signatures from VPS")
+        return deleted_count
+    
+    def _get_vps_file_inventory(self) -> Optional[List[str]]:
+        """Get complete inventory of all files on VPS"""
+        logger.info("Getting complete VPS file inventory...")
+        
+        remote_cmd = rf"""
+        # Get all package files, signatures, and database files
+        find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" -o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" -o -name "*.abs.tar.gz" \) 2>/dev/null
+        """
+        
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            remote_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                logger.warning(f"Could not list VPS files: {result.stderr[:200]}")
+                return None
+            
+            vps_files_raw = result.stdout.strip()
+            if not vps_files_raw:
+                logger.info("No files found on VPS")
+                return []
+            
+            vps_files = [f.strip() for f in vps_files_raw.split('\n') if f.strip()]
+            logger.info(f"Found {len(vps_files)} files on VPS")
+            return vps_files
+            
+        except subprocess.TimeoutExpired:
+            logger.error("SSH timeout getting VPS file inventory")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting VPS file inventory: {e}")
+            return None
+    
+    def _delete_files_remote(self, files_to_delete: List[str]) -> bool:
+        """Delete files from remote server"""
+        if not files_to_delete:
+            return True
+        
+        # Quote each filename for safety
+        quoted_files = [f"'{f}'" for f in files_to_delete]
+        files_to_delete_str = ' '.join(quoted_files)
+        
+        delete_cmd = f"rm -fv {files_to_delete_str}"
+        
+        logger.info(f"Executing deletion command for {len(files_to_delete)} files")
+        
+        # Execute the deletion command
+        ssh_delete = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            delete_cmd
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_delete,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Deletion successful for batch of {len(files_to_delete)} files")
+                return True
+            else:
+                logger.error(f"Deletion failed: {result.stderr[:500]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("SSH command timed out - aborting cleanup for safety")
+            return False
+        except Exception as e:
+            logger.error(f"Error during deletion: {e}")
+            return False
+    
+    def cleanup_database_files(self):
+        """Clean up old database files from output directory"""
+        logger.info("Cleaning up old database files...")
+        
         db_patterns = [
             f"{self.repo_name}.db",
             f"{self.repo_name}.db.tar.gz",
@@ -131,276 +501,21 @@ class CleanupManager:
             f"{self.repo_name}.db.sig",
             f"{self.repo_name}.db.tar.gz.sig",
             f"{self.repo_name}.files.sig",
-            f"{self.repo_name}.files.tar.gz.sig",
+            f"{self.repo_name}.files.tar.gz.sig"
         ]
-
-        deleted = 0
+        
+        deleted_count = 0
         for pattern in db_patterns:
-            p = self.output_dir / pattern
-            if p.exists():
+            db_file = self.output_dir / pattern
+            if db_file.exists():
                 try:
-                    p.unlink()
-                    logger.info("Removed database file: %s", pattern)
-                    deleted += 1
+                    db_file.unlink()
+                    logger.info(f"Removed database file: {pattern}")
+                    deleted_count += 1
                 except Exception as e:
-                    logger.warning("Could not delete %s: %s", pattern, e)
-
-        if deleted:
-            logger.info("Cleaned up %d old database files", deleted)
+                    logger.warning(f"Could not delete {pattern}: {e}")
+        
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} old database files")
         else:
             logger.info("No old database files to clean up")
-
-    # ---------------------------
-    # VPS cleanup (mirror output_dir)
-    # ---------------------------
-
-    def server_cleanup(self, version_tracker=None) -> Tuple[int, int]:
-        """
-        🚨 ZERO-RESIDUE SERVER CLEANUP (VPS):
-        Make the VPS repo directory match local output_dir:
-
-        - Delete any VPS package files that are not present locally (post SmartCleanup).
-        - Delete any VPS .sig files that do not have a corresponding local file (package or db artifact).
-        - Keep database/files artifacts (they will be regenerated) and the public key.
-
-        Why this solves your current issues:
-        - Orphaned .sig on VPS get deleted automatically (e.g. geany-plugin-preview...sig).
-        - Old versions on VPS get deleted when a new version exists locally (e.g. qownnotes old versions).
-        - Nothing is kept "just because it's on VPS" — VPS mirrors local state.
-
-        Returns:
-            (deleted_count, kept_count) based on VPS inventory.
-        """
-        logger.info("Server cleanup: Mirroring VPS to local output_dir state...")
-
-        vps_files = self._get_vps_file_inventory()
-        if vps_files is None:
-            logger.error("Failed to get VPS file inventory")
-            return 0, 0
-
-        if not vps_files:
-            logger.info("No files found on VPS - nothing to clean up")
-            return 0, 0
-
-        # Local source of truth:
-        local_files = set(p.name for p in self.output_dir.glob("*"))
-
-        # Always keep the public key if present on VPS
-        always_keep_names = {f"{self.repo_name}.pub", "manjaro-awesome.pub"}  # tolerate legacy name
-
-        files_to_delete: List[str] = []
-        kept = 0
-
-        for vps_path in vps_files:
-            name = Path(vps_path).name
-
-            # Keep repo public key
-            if name in always_keep_names or name.endswith(".pub"):
-                kept += 1
-                continue
-
-            # Keep (or regenerate) DB/files artifacts - we do not delete these here
-            if any(name.endswith(sfx) for sfx in self.DB_SUFFIXES) or any(
-                name.endswith(sfx + ".sig") for sfx in self.DB_SUFFIXES
-            ):
-                kept += 1
-                continue
-
-            # For signatures: keep only if the corresponding base file exists locally
-            if name.endswith(".sig"):
-                base = name[:-4]
-                if base in local_files:
-                    kept += 1
-                else:
-                    files_to_delete.append(vps_path)
-                    logger.info("Marking orphan signature for deletion: %s", name)
-                continue
-
-            # For packages: keep only if the package exists locally
-            if any(name.endswith(sfx) for sfx in self.PKG_SUFFIXES):
-                if name in local_files:
-                    kept += 1
-                else:
-                    files_to_delete.append(vps_path)
-                    logger.info("Marking package for deletion (not in local output): %s", name)
-                continue
-
-            # Any other file types: if not in local, delete (safe default)
-            if name in local_files:
-                kept += 1
-            else:
-                files_to_delete.append(vps_path)
-                logger.info("Marking unknown extra file for deletion: %s", name)
-
-        if not files_to_delete:
-            logger.info("✅ VPS already matches local output_dir (no deletions required).")
-            return 0, kept
-
-        logger.info("VPS cleanup: %d files to delete, %d to keep", len(files_to_delete), kept)
-
-        # Delete in batches
-        batch_size = 50
-        deleted = 0
-        failures = 0
-
-        for i in range(0, len(files_to_delete), batch_size):
-            batch = files_to_delete[i : i + batch_size]
-            if self._delete_files_remote(batch):
-                deleted += len(batch)
-            else:
-                failures += len(batch)
-
-        if failures:
-            logger.error("❌ VPS cleanup had failures: failed_batches=%d", (failures + batch_size - 1) // batch_size)
-
-        # Final orphan sweep (belt-and-suspenders)
-        self.cleanup_vps_orphaned_signatures()
-
-        logger.info("✅ Server cleanup complete: deleted=%d, kept=%d", deleted, kept)
-        return deleted, kept
-
-    def cleanup_vps_orphaned_signatures(self) -> Tuple[int, int, int]:
-        """
-        🚨 VPS ORPHAN SIGNATURE SWEEP:
-        Delete signature files without corresponding packages on VPS.
-
-        Returns:
-            (package_count, signature_count, deleted_orphan_count)
-        """
-        remote_dir_hash = hashlib.sha256(self.remote_dir.encode()).hexdigest()[:8]
-        logger.info("Starting VPS orphan signature sweep (remote_dir_hash: %s)...", remote_dir_hash)
-
-        vps_files = self._get_vps_file_inventory()
-        if vps_files is None:
-            logger.error("Failed to get VPS file inventory")
-            return 0, 0, 0
-
-        if not vps_files:
-            logger.info("No files found on VPS")
-            return 0, 0, 0
-
-        package_files = set()
-        signature_paths: List[str] = []
-
-        for vps_path in vps_files:
-            name = Path(vps_path).name
-            if name.endswith(".sig"):
-                signature_paths.append(vps_path)
-            elif name.endswith(self.PKG_SUFFIXES):
-                package_files.add(name)
-
-        orphaned: List[str] = []
-        for sig_path in signature_paths:
-            sig_name = Path(sig_path).name
-            base = sig_name[:-4]
-            if base.endswith(self.PKG_SUFFIXES) and base not in package_files:
-                orphaned.append(sig_path)
-
-        if not orphaned:
-            logger.info("✅ No orphaned signatures found on VPS")
-            return len(package_files), len(signature_paths), 0
-
-        logger.info("Found %d orphaned signatures to delete", len(orphaned))
-
-        batch_size = 50
-        deleted = 0
-        for i in range(0, len(orphaned), batch_size):
-            batch = orphaned[i : i + batch_size]
-            if self._delete_files_remote(batch):
-                deleted += len(batch)
-
-        logger.info(
-            "VPS orphan sweep complete: remote_dir_hash=%s packages=%d signatures=%d deleted_orphans=%d",
-            remote_dir_hash,
-            len(package_files),
-            len(signature_paths),
-            deleted,
-        )
-        return len(package_files), len(signature_paths), deleted
-
-    # ---------------------------
-    # Remote helpers
-    # ---------------------------
-
-    def _get_vps_file_inventory(self) -> Optional[List[str]]:
-        """Get complete inventory of relevant files on VPS"""
-        logger.info("Getting complete VPS file inventory...")
-
-        remote_cmd = rf'''
-        find "{self.remote_dir}" -maxdepth 1 -type f \
-          \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" -o -name "*.sig" \
-             -o -name "*.db" -o -name "*.db.tar.gz" -o -name "*.files" -o -name "*.files.tar.gz" \
-             -o -name "*.abs.tar.gz" -o -name "*.pub" \) 2>/dev/null
-        '''.strip()
-
-        ssh_cmd = ["ssh", f"{self.vps_user}@{self.vps_host}", remote_cmd]
-
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-
-            if result.returncode != 0:
-                logger.warning("Could not list VPS files: %s", (result.stderr or "")[:200])
-                return None
-
-            raw = (result.stdout or "").strip()
-            if not raw:
-                logger.info("No files found on VPS")
-                return []
-
-            vps_files = [line.strip() for line in raw.splitlines() if line.strip()]
-            logger.info("Found %d files on VPS", len(vps_files))
-            return vps_files
-
-        except subprocess.TimeoutExpired:
-            logger.error("SSH timeout getting VPS file inventory")
-            return None
-        except Exception as e:
-            logger.error("Error getting VPS file inventory: %s", e)
-            return None
-
-    def _delete_files_remote(self, files_to_delete: List[str]) -> bool:
-        """Delete files from remote server"""
-        if not files_to_delete:
-            return True
-
-        # Quote each path for safety (paths come from find output)
-        quoted = []
-        for p in files_to_delete:
-            p = str(p)
-            # Safest: single-quote wrap, escape embedded quotes if any
-            quoted.append("'" + p.replace("'", "'\\''") + "'")
-
-        delete_cmd = "rm -fv " + " ".join(quoted)
-
-        logger.info("Executing deletion command for %d files", len(files_to_delete))
-
-        ssh_delete = ["ssh", f"{self.vps_user}@{self.vps_host}", delete_cmd]
-
-        try:
-            result = subprocess.run(
-                ssh_delete,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=60,
-            )
-
-            if result.returncode == 0:
-                logger.info("Deletion successful for batch of %d files", len(files_to_delete))
-                return True
-
-            logger.error("Deletion failed: %s", (result.stderr or "")[:500])
-            return False
-
-        except subprocess.TimeoutExpired:
-            logger.error("SSH command timed out - aborting cleanup for safety")
-            return False
-        except Exception as e:
-            logger.error("Error during deletion: %s", e)
-            return False

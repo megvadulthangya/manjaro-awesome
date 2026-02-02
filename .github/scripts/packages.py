@@ -60,3 +60,4 @@ PACKAGE_CATEGORIES = {
     "tools": ["libinput-gestures", "betterlockscreen", "simplescreenrecorder"],
     "drivers": ["nvidia-driver-assistant", "a4tech-bloody-driver-git"]
 }
+

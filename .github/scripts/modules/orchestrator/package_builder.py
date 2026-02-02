@@ -490,77 +490,58 @@ class PackageBuilder:
         """Get the version of a package from remote server using SRCINFO-based extraction"""
         return self.version_tracker.get_remote_version(pkg_name, self.remote_files)
     
-    def _sign_existing_packages_in_output_dir(self) -> int:
+    def _sign_existing_packages_in_output_dir(self) -> Tuple[int, int, int]:
         """
-        Sign every package currently present in output_dir that does not yet have a .sig.
-
-        This intentionally covers:
-        - Newly built packages
-        - Mirrored packages pulled from the VPS repo
-        - Any cached packages restored into output_dir
-
-        If signature enforcement is enabled and we cannot produce signatures, this raises
-        to prevent uploading unsigned packages or creating a database referencing them.
+        Sign existing packages in output_dir that don't have signatures.
+        
+        Returns:
+            Tuple of (unsigned_packages_found, packages_signed, signing_failures)
         """
-        if not self.output_dir.exists():
-            logger.warning(f"Output directory does not exist: {self.output_dir}")
-            return 0
-
-        # Signature enforcement flag (default: enforced)
-        signature_enforced = bool(self.python_config.get('signature_policy', {}).get('enforce', True))
-
-        if not self.gpg_handler:
-            msg = "GPG handler is not initialized; cannot sign packages."
-            if signature_enforced:
-                raise RuntimeError(msg + " Signature policy is enforced; refusing to proceed.")
-            logger.warning(msg + " Proceeding because signature policy enforcement is disabled.")
-            return 0
-
-        logger.info("Signing any unsigned packages already in output_dir...")
-
-        package_files: List[Path] = []
-        package_files.extend(sorted(self.output_dir.glob("*.pkg.tar.zst")))
-        package_files.extend(sorted(self.output_dir.glob("*.pkg.tar.xz")))
-
-        if not package_files:
-            logger.info("No package files found in output_dir to sign")
-            return 0
-
-        signed_count = 0
-        missing_after_sign: List[str] = []
-
+        if not self.gpg_handler.sign_packages_enabled:
+            logger.info("Package signing disabled, skipping existing package signing")
+            return 0, 0, 0
+        
+        logger.info("🔐 Scanning output_dir for unsigned packages...")
+        
+        # Find all package files in output_dir
+        package_files = []
+        for ext in ['.pkg.tar.zst', '.pkg.tar.xz']:
+            package_files.extend(self.output_dir.glob(f"*{ext}"))
+        
+        unsigned_packages_found = 0
+        packages_signed = 0
+        signing_failures = 0
+        
         for pkg_file in package_files:
-            sig_file = pkg_file.with_suffix(pkg_file.suffix + ".sig")
-
-            if sig_file.exists():
-                continue
-
-            logger.info(f"Signing existing package: {pkg_file.name}")
-
-            try:
-                success = self.gpg_handler.sign_package(pkg_file)
-            except Exception as e:
-                logger.error(f"Signing failed for {pkg_file.name}: {e}")
-                success = False
-
-            if success and sig_file.exists():
-                signed_count += 1
-                logger.info(f"✅ Signed: {pkg_file.name}")
-            else:
-                missing_after_sign.append(pkg_file.name)
-                logger.error(f"❌ Could not create signature for: {pkg_file.name}")
-
-        if missing_after_sign and signature_enforced:
-            logger.error("Signature policy violation: some packages in output_dir are missing .sig")
-            for pkg in missing_after_sign:
-                logger.error(f"  - {pkg}")
-            raise RuntimeError(
-                "Signature policy violation: some packages in output_dir are missing .sig. "
-                "Fix signing step; refusing to proceed."
-            )
-
-        logger.info(f"Signed {signed_count} existing packages in output_dir")
-        return signed_count
+            # Check if signature already exists
+            sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+            if not sig_file.exists():
+                unsigned_packages_found += 1
+                logger.info(f"Found unsigned package: {pkg_file.name}")
+                
+                # Attempt to sign
+                if self.gpg_handler.sign_package(str(pkg_file)):
+                    packages_signed += 1
+                    logger.info(f"Successfully signed: {pkg_file.name}")
+                else:
+                    signing_failures += 1
+                    logger.error(f"Failed to sign: {pkg_file.name}")
+        
+        # Log summary (privacy-safe)
+        logger.info(f"Existing package signing complete:")
+        logger.info(f"  unsigned_packages_found: {unsigned_packages_found}")
+        logger.info(f"  packages_signed: {packages_signed}")
+        logger.info(f"  signing_failures: {signing_failures}")
+        
+        if unsigned_packages_found == 0:
+            logger.info("✅ All packages in output_dir are already signed")
+        elif signing_failures == 0:
+            logger.info(f"✅ Successfully signed {packages_signed} previously unsigned packages")
+        else:
+            logger.warning(f"⚠️ Signed {packages_signed} packages but failed to sign {signing_failures}")
+        
+        return unsigned_packages_found, packages_signed, signing_failures
+    
     def _build_aur_package(self, pkg_name: str) -> bool:
         """Build AUR package with proper version checking and signing"""
         # Step 1: Fetch current version from AUR
@@ -909,59 +890,6 @@ class PackageBuilder:
         
         return upload_success
     
-    def _sync_vps_repo_to_local_output_dir(self) -> int:
-        """
-        ZERO-RESIDUE SYNC:
-        After a successful build+sign+database generation, make the VPS repo match local output_dir.
-
-        Deletes from VPS:
-        - Orphaned package signatures
-        - Old package versions (local output_dir already keeps only newest)
-        - Any files not present locally (except the repo public key)
-
-        Returns:
-            Number of files deleted on the VPS.
-        """
-        if not self.cleanup_manager:
-            logger.warning("Cleanup manager not initialized; cannot sync VPS repo")
-            return 0
-
-        vps_files = self.cleanup_manager._get_vps_file_inventory()
-        if vps_files is None:
-            logger.warning("Could not get VPS file inventory; skipping VPS sync")
-            return 0
-
-        if not vps_files:
-            logger.info("No files found on VPS for sync")
-            return 0
-
-        local_files = set(f.name for f in self.output_dir.glob("*"))
-        keep = {f"{self.repo_name}.pub"}
-
-        files_to_delete = []
-        for remote_path in vps_files:
-            name = Path(remote_path).name
-            if name in keep:
-                continue
-            if name not in local_files:
-                files_to_delete.append(remote_path)
-
-        if not files_to_delete:
-            logger.info("VPS already matches local output_dir (no deletions needed)")
-            return 0
-
-        logger.info(f"VPS sync: deleting {len(files_to_delete)} files not present locally")
-
-        batch_size = 50
-        deleted = 0
-        for i in range(0, len(files_to_delete), batch_size):
-            batch = files_to_delete[i:i + batch_size]
-            if self.cleanup_manager._delete_files_remote(batch):
-                deleted += len(batch)
-
-        logger.info(f"VPS sync complete: deleted {deleted} files")
-        return deleted
-
     def create_artifact_archive_for_github(self) -> Optional[Path]:
         """
         Create a tar.gz archive of all built artifacts for GitHub upload.
@@ -1068,14 +996,6 @@ class PackageBuilder:
             
             total_built = self.build_packages()
             
-            # STEP 5.4: Pre-database output_dir revalidation (keep only newest versions, remove orphan sigs)
-            logger.info("STEP 5.4: Pre-database output_dir revalidation...")
-            try:
-                self.cleanup_manager.revalidate_output_dir_before_database()
-            except Exception as e:
-                logger.error(f"Pre-database revalidation failed: {e}")
-                raise
-
             # STEP 5.5: Sign existing packages in output_dir
             print("\n" + "=" * 60)
             print("STEP 5.5: SIGN EXISTING PACKAGES IN OUTPUT_DIR")
@@ -1117,15 +1037,6 @@ class PackageBuilder:
                         print("🚨 POST-UPLOAD CLEANUP: Final zombie package removal")
                         print("=" * 60)
                         self.cleanup_manager.server_cleanup(self.version_tracker)
-
-                        # STEP 7: ZERO-RESIDUE VPS SYNC (delete anything not present locally)
-                        logger.info("STEP 7: Zero-Residue VPS sync (match VPS to local output_dir)...")
-                        try:
-                            deleted = self._sync_vps_repo_to_local_output_dir()
-                            logger.info(f"VPS sync deleted {deleted} files")
-                        except Exception as e:
-                            logger.error(f"VPS sync failed: {e}")
-                            raise
                     
                     # Clean up GPG temporary directory
                     self.gpg_handler.cleanup()
