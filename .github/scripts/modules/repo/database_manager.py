@@ -53,8 +53,9 @@ class DatabaseManager:
             logger.info("No packages available for database generation")
             return False
         
-        logger.info(f"Generating database with {len(all_packages)} packages...")
-        logger.info(f"Packages: {', '.join(all_packages[:10])}{'...' if len(all_packages) > 10 else ''}")
+        # Log the packages being included (first 10)
+        package_names = [os.path.basename(pkg) for pkg in all_packages]
+        logger.info(f"Database input packages ({len(package_names)}): {package_names[:10]}{'...' if len(package_names) > 10 else ''}")
         
         old_cwd = os.getcwd()
         os.chdir(self.output_dir)
@@ -92,16 +93,16 @@ class DatabaseManager:
             
             logger.info(f"✅ All {len(valid_packages)} package files verified locally")
             
-            # Generate database with repo-add using shell=True for wildcard expansion
-            cmd = f"repo-add {db_file} *.pkg.tar.zst"
+            # Generate database with repo-add using explicit package list (NO shell=True, NO wildcards)
+            repo_add_cmd = ["repo-add", db_file] + valid_packages
             
-            logger.info(f"Running repo-add with shell=True to include ALL packages...")
-            logger.info(f"Command: {cmd}")
+            logger.info(f"Running repo-add with explicit package list...")
+            logger.info(f"Command: {' '.join(['repo-add', db_file, '...'])}")
             logger.info(f"Current directory: {os.getcwd()}")
             
             result = subprocess.run(
-                cmd,
-                shell=True,  # CRITICAL: Use shell=True for wildcard expansion
+                repo_add_cmd,
+                shell=False,  # Explicitly use shell=False for safety
                 capture_output=True,
                 text=True,
                 check=False
@@ -144,19 +145,36 @@ class DatabaseManager:
             os.chdir(old_cwd)
     
     def _get_all_local_packages(self) -> List[str]:
-        """Get ALL package files from local output directory (mirrored + newly built)"""
+        """
+        Get ALL real package files from local output directory (mirrored + newly built)
+        EXCLUDES: .sig files, database artifacts
+        """
         print("\n🔍 Getting complete package list from local directory...")
         
-        local_files = list(self.output_dir.glob("*.pkg.tar.*"))
+        # Get all files matching package patterns
+        package_files = []
         
-        if not local_files:
-            logger.info("ℹ️ No package files found locally")
+        # Include only real package files
+        for ext in ['.pkg.tar.zst', '.pkg.tar.xz', '.pkg.tar.gz', '.pkg.tar.bz2', '.pkg.tar.lzo']:
+            package_files.extend(self.output_dir.glob(f"*{ext}"))
+        
+        # Filter out signature files
+        package_files = [f for f in package_files if not f.name.endswith('.sig')]
+        
+        # Filter out database artifacts (even if they somehow match patterns)
+        package_files = [
+            f for f in package_files 
+            if not (f.name.startswith(f"{self.repo_name}.db") or f.name.startswith(f"{self.repo_name}.files"))
+        ]
+        
+        if not package_files:
+            logger.info("ℹ️ No real package files found locally (excluding .sig files and database artifacts)")
             return []
         
-        local_filenames = [f.name for f in local_files]
+        local_filenames = [f.name for f in package_files]
         
-        logger.info(f"📊 Local package count: {len(local_filenames)}")
-        logger.info(f"Sample packages: {local_filenames[:10]}")
+        logger.info(f"📊 Local package count (excluding .sig files): {len(local_filenames)}")
+        logger.info(f"Sample real packages (no .sig): {local_filenames[:10]}")
         
         return local_filenames
     
