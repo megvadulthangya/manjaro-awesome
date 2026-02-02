@@ -1,3 +1,4 @@
+FILE: .github/scripts/modules/vps/rsync_client.py
 """
 Rsync Client Module - Handles file transfers using Rsync
 """
@@ -194,35 +195,16 @@ class RsyncClient:
         
         return True
     
-    def upload_files(self, files_to_upload: List[str], output_dir: Path, cleanup_manager) -> bool:
+    def upload_files(self, files_to_upload: List[str], output_dir: Path) -> bool:
         """
-        Upload files to server using RSYNC WITH --delete flag
+        Upload files to server using RSYNC WITHOUT --delete flag (transport-only)
         
-        CRITICAL: Remove from VPS any files not present in output_dir
+        CRITICAL: This is now a transport-only function. Deletions are handled
+        separately via CleanupManager over SSH (outside this module).
         
         Returns:
             True if successful, False otherwise
         """
-        # First, identify files to delete from VPS
-        from modules.repo.version_tracker import VersionTracker
-        dummy_tracker = VersionTracker({
-            'repo_name': self.repo_name,
-            'output_dir': output_dir,
-            'remote_dir': self.remote_dir,
-            'vps_user': self.vps_user,
-            'vps_host': self.vps_host
-        })
-        
-        files_to_delete, _ = cleanup_manager.get_vps_files_to_delete(dummy_tracker)
-        
-        # Delete files from VPS first
-        if files_to_delete:
-            logger.info(f"Deleting {len(files_to_delete)} files from VPS...")
-            cleanup_manager._delete_files_remote(files_to_delete)
-        
-        # Ensure remote directory exists first
-        # Note: This requires SSHClient, will be called from PackageBuilder
-        
         if not files_to_upload:
             logger.warning("No files to upload")
             return False
@@ -240,17 +222,16 @@ class RsyncClient:
             except Exception:
                 logger.info(f"  - {os.path.basename(f)} [UNKNOWN SIZE]")
         
-        # Build RSYNC command WITH --delete to ensure VPS matches local state
+        # Build RSYNC command WITHOUT --delete (transport-only)
         rsync_cmd = f"""
         rsync -avz \
           --progress \
           --stats \
-          --delete \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC COMMAND WITH --delete")
+        logger.info(f"RUNNING RSYNC COMMAND (NO --delete)")
         
         # FIRST ATTEMPT
         start_time = time.time()
@@ -294,13 +275,12 @@ class RsyncClient:
         rsync -avz \
           --progress \
           --stats \
-          --delete \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
           '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
         """
         
-        logger.info(f"RUNNING RSYNC RETRY COMMAND WITH --delete")
+        logger.info(f"RUNNING RSYNC RETRY COMMAND (NO --delete)")
         
         start_time = time.time()
         
