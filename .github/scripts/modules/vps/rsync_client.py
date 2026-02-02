@@ -1,4 +1,3 @@
-FILE: .github/scripts/modules/vps/rsync_client.py
 """
 Rsync Client Module - Handles file transfers using Rsync
 """
