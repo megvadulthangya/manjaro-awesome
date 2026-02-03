@@ -1,4 +1,3 @@
-FILE: .github/scripts/modules/repo/cleanup_manager.py
 """
 Cleanup Manager Module - Handles Zero-Residue policy and server cleanup ONLY
 WITH IMPROVED DELETION OBSERVABILITY
