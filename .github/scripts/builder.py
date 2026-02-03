@@ -480,6 +480,11 @@ class PackageBuilderOrchestrator:
             self.output_dir,
             self.cleanup_manager
         )
+        
+        # NEW: UP3 POST-UPLOAD VERIFICATION
+        if upload_success:
+            upload_success = self._up3_verify_upload_completeness(files_to_upload)
+        
         self.gate_state['upload_success'] = upload_success
         
         if not upload_success:
@@ -502,6 +507,75 @@ class PackageBuilderOrchestrator:
             logger.info("Gates blocked destructive VPS cleanup")
         
         return upload_success
+    
+    def _up3_verify_upload_completeness(self, uploaded_files: List[Path]) -> bool:
+        """
+        UP3 POST-UPLOAD VERIFICATION: Verify all uploaded artifacts exist on VPS
+        
+        Args:
+            uploaded_files: List of local file paths that were uploaded
+            
+        Returns:
+            True if all uploaded files are present on VPS, False otherwise
+        """
+        logger.info("UP3: Starting post-upload VPS verification...")
+        
+        # Get basenames of uploaded files
+        expected_basenames = {f.name for f in uploaded_files}
+        
+        # Fetch fresh VPS inventory (packages + signatures + repo DB/files)
+        vps_packages = self.ssh_client.list_remote_packages()
+        vps_signatures = self._get_vps_signatures()
+        vps_db_files = self._get_vps_database_files()
+        
+        # Combine all VPS files
+        vps_all_files = set(vps_packages + vps_signatures + vps_db_files)
+        
+        # Check for missing files
+        missing_files = expected_basenames - vps_all_files
+        
+        if not missing_files:
+            logger.info(f"UP3 OK: all uploaded artifacts present on VPS (expected={len(expected_basenames)}, missing=0)")
+            return True
+        else:
+            missing_list = list(missing_files)
+            # Limit to first 20 for logging
+            missing_display = missing_list[:20]
+            logger.error(f"UP3 FAIL: missing on VPS (expected={len(expected_basenames)}, missing={len(missing_files)}) missing: {', '.join(missing_display)}")
+            return False
+    
+    def _get_vps_database_files(self) -> List[str]:
+        """Get database files from VPS"""
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found")
+            return []
+        
+        # Get database files
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                return files
+            else:
+                logger.warning(f"SSH find for database files returned error")
+                return []
+                
+        except Exception as e:
+            logger.error(f"SSH command for database files failed: {e}")
+            return []
     
     def _run_safe_operations_only(self):
         """

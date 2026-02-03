@@ -1,5 +1,6 @@
 """
 Rsync Client Module - Handles file transfers using Rsync
+WITH UP3 POST-UPLOAD VERIFICATION
 """
 
 import os
@@ -226,7 +227,7 @@ class RsyncClient:
             cleanup_manager: Ignored (kept for backward compatibility only)
             
         Returns:
-            True if successful, False otherwise
+            True if rsync transport succeeded, False otherwise
         """
         if not files_to_upload:
             logger.warning("No files to upload")
