@@ -34,28 +34,30 @@ class RsyncClient:
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
     
-    def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path, vps_file_list: List[str]) -> bool:
+    def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path, vps_package_files: List[str]) -> bool:
         """
-        Download ALL remote package files to local directory with proper sync logic
+        Download ONLY remote package files (*.pkg.tar.*) to local directory.
         
-        CRITICAL FIX: Mirror directory must reflect VPS state exactly
-        - Files deleted on VPS must be deleted from mirror
-        - New files on VPS must be downloaded to mirror
-        - Cache is preserved but VPS state overrides mirror content
+        CRITICAL CONTRACT: This method handles ONLY package archive files.
+        Signatures and database files are excluded from mirror sync validation.
         
         Args:
             mirror_temp_dir: Temporary directory for mirror
             output_dir: Output directory for built packages
-            vps_file_list: List of package filenames currently on VPS (obtained via SSH)
+            vps_package_files: List of package filenames (basenames) currently on VPS
+                             MUST contain ONLY *.pkg.tar.* files (no .sig, no .db)
             
         Returns:
             True if successful, False otherwise
         """
-        logger.info("CRITICAL PHASE: Mirror Synchronization with VPS State")
+        logger.info("CRITICAL PHASE: Mirror Synchronization (Package Files Only)")
         
-        # Convert VPS file list to set for fast lookup
-        vps_files_set = set(vps_file_list)
-        logger.info(f"VPS state: {len(vps_files_set)} package files")
+        # Filter to ensure only package files
+        package_files_only = [f for f in vps_package_files if f.endswith(('.pkg.tar.zst', '.pkg.tar.xz'))]
+        logger.info(f"VPS package state: {len(package_files_only)} package files (excluded {len(vps_package_files) - len(package_files_only)} non-package files)")
+        
+        # Convert to set for fast lookup
+        vps_packages_set = set(package_files_only)
         
         # Create a temporary local repository directory
         if mirror_temp_dir.exists():
@@ -66,7 +68,7 @@ class RsyncClient:
             logger.info(f"Cache state: {len(cached_file_names)} package files in mirror directory")
             
             # Step 1: Delete files from mirror that are NOT on VPS
-            files_to_delete = cached_file_names - vps_files_set
+            files_to_delete = cached_file_names - vps_packages_set
             if files_to_delete:
                 logger.info(f"Deleting {len(files_to_delete)} files from mirror (not on VPS)")
                 
@@ -80,23 +82,27 @@ class RsyncClient:
                         logger.warning(f"Could not remove {file_name}: {e}")
             
             # Step 2: Identify files on VPS that are NOT in mirror
-            files_to_download = vps_files_set - cached_file_names
+            files_to_download = vps_packages_set - cached_file_names
             if files_to_download:
-                logger.info(f"Need to download {len(files_to_download)} new files from VPS")
+                logger.info(f"Need to download {len(files_to_download)} new package files from VPS")
         else:
             # Mirror directory doesn't exist, create it
             mirror_temp_dir.mkdir(parents=True, exist_ok=True)
-            files_to_download = vps_files_set
+            files_to_download = vps_packages_set
             if files_to_download:
-                logger.info(f"Mirror directory empty, downloading {len(files_to_download)} files from VPS")
+                logger.info(f"Mirror directory empty, downloading {len(files_to_download)} package files from VPS")
         
         # If there are files to download, use rsync with specific file list
         if files_to_download:
             # Build rsync command with specific files
             download_list = []
             for file_name in files_to_download:
-                remote_path = f"{self.remote_dir}/{file_name}"
-                download_list.append(f"'{self.vps_user}@{self.vps_host}:{remote_path}'")
+                # Ensure it's a package file (safety check)
+                if file_name.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                    remote_path = f"{self.remote_dir}/{file_name}"
+                    download_list.append(f"'{self.vps_user}@{self.vps_host}:{remote_path}'")
+                else:
+                    logger.warning(f"Skipping non-package file in download list: {file_name}")
             
             if download_list:
                 files_str = ' '.join(download_list)
@@ -109,7 +115,7 @@ class RsyncClient:
                   '{mirror_temp_dir}/' 2>/dev/null || true
                 """
                 
-                logger.info(f"RUNNING RSYNC DOWNLOAD COMMAND for {len(download_list)} files")
+                logger.info(f"RUNNING RSYNC DOWNLOAD COMMAND for {len(download_list)} package files")
                 
                 start_time = time.time()
                 
@@ -162,28 +168,41 @@ class RsyncClient:
         if copied_count > 0:
             logger.info(f"Copied {copied_count} mirrored packages to output directory")
         
-        # Verify final state
+        # CRITICAL VALIDATION: Ensure mirror matches VPS package state ONLY
         final_mirror_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
-        logger.info(f"Mirror synchronization complete:")
-        logger.info(f"  - Mirror now has {len(final_mirror_files)} files")
-        logger.info(f"  - VPS has {len(vps_files_set)} files")
-        logger.info(f"  - Output directory has {len(output_files) + copied_count} files")
+        final_mirror_names = set(f.name for f in final_mirror_files)
         
-        # CRITICAL VALIDATION: Ensure mirror matches VPS state
-        mirror_file_names = set(f.name for f in final_mirror_files)
-        if mirror_file_names != vps_files_set:
-            missing_in_mirror = vps_files_set - mirror_file_names
-            extra_in_mirror = mirror_file_names - vps_files_set
-            
-            if missing_in_mirror:
-                logger.error(f"CRITICAL: Mirror missing {len(missing_in_mirror)} files from VPS")
-            
-            if extra_in_mirror:
-                logger.error(f"CRITICAL: Mirror has {len(extra_in_mirror)} extra files not on VPS")
-            
+        # Log validation details
+        logger.info(f"Mirror synchronization validation:")
+        logger.info(f"  - Mirror now has {len(final_mirror_names)} package files")
+        logger.info(f"  - VPS has {len(vps_packages_set)} package files")
+        logger.info(f"  - Output directory has {len(output_files) + copied_count} package files")
+        
+        # Check for discrepancies with detailed logging
+        missing_in_mirror = vps_packages_set - final_mirror_names
+        extra_in_mirror = final_mirror_names - vps_packages_set
+        
+        if missing_in_mirror:
+            logger.error(f"CRITICAL: Mirror missing {len(missing_in_mirror)} package files from VPS")
+            # Log first 50 missing files
+            for i, filename in enumerate(list(missing_in_mirror)[:50]):
+                logger.error(f"  Missing [{i+1}]: {filename}")
+            if len(missing_in_mirror) > 50:
+                logger.error(f"  ... and {len(missing_in_mirror) - 50} more")
+        
+        if extra_in_mirror:
+            logger.error(f"CRITICAL: Mirror has {len(extra_in_mirror)} extra package files not on VPS")
+            # Log first 50 extra files
+            for i, filename in enumerate(list(extra_in_mirror)[:50]):
+                logger.error(f"  Extra [{i+1}]: {filename}")
+            if len(extra_in_mirror) > 50:
+                logger.error(f"  ... and {len(extra_in_mirror) - 50} more")
+        
+        if missing_in_mirror or extra_in_mirror:
+            logger.error("Mirror package synchronization FAILED")
             return False
         
-        logger.info("Mirror perfectly synchronized with VPS state")
+        logger.info("Mirror perfectly synchronized with VPS package state")
         
         # Clean up mirror directory after use (it will be recreated from cache next time)
         try:

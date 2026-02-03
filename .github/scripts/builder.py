@@ -88,6 +88,7 @@ class PackageBuilderOrchestrator:
         
         # State tracking
         self.vps_files = []
+        self.vps_packages = []  # NEW: Separate list for package files only
         self.allowlist = set()
         self.built_packages = []
         self.skipped_packages = []
@@ -165,25 +166,27 @@ class PackageBuilderOrchestrator:
         self.ssh_client.ensure_remote_directory()
         
         # List remote packages
-        remote_files = self.ssh_client.list_remote_packages()
-        self.vps_files = remote_files  # Already basenames
+        remote_packages = self.ssh_client.list_remote_packages()
+        self.vps_packages = remote_packages  # Already basenames, ONLY package files
         
-        # NEW: Also get signatures for completeness check
+        # NEW: Also get signatures for completeness check (separate list)
         remote_signatures = self._get_vps_signatures()
-        self.vps_files.extend(remote_signatures)
         
-        logger.info(f"Found {len(self.vps_files)} files on VPS (packages + signatures)")
+        # Combine for completeness checks (but keep separate for mirror sync)
+        self.vps_files = self.vps_packages + remote_signatures
+        
+        logger.info(f"Found {len(self.vps_packages)} package files and {len(remote_signatures)} signatures on VPS")
         
         # Set VPS files in package builder for completeness checks
         self.package_builder.set_vps_files(self.vps_files)
         
-        # Mirror remote packages locally
-        if remote_files:
-            logger.info("Mirroring remote packages locally...")
+        # Mirror remote packages locally (PACKAGE FILES ONLY)
+        if self.vps_packages:
+            logger.info("Mirroring remote packages locally (package files only)...")
             success = self.rsync_client.mirror_remote_packages(
                 self.mirror_temp_dir,
                 self.output_dir,
-                remote_files  # Pass the list of basenames
+                self.vps_packages  # Pass ONLY package files, no signatures
             )
             if not success:
                 logger.warning("Failed to mirror remote packages")

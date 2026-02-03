@@ -53,6 +53,7 @@ class PackageBuilder:
         self.version_tracker = version_tracker  # Store version tracker
         self.debug_mode = debug_mode
         self.vps_files = vps_files or []  # NEW: Store VPS file inventory
+        self._recently_built_files: List[str] = []  # NEW: Track files built in current session
         
         # Ensure output directory exists
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -118,11 +119,11 @@ class PackageBuilder:
         
         # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
-        built = self._build_local_package(pkg_dir, source_version)
+        built_files = self._build_local_package(pkg_dir, source_version)
         
-        if built:
-            # Step 5: Sign the built package immediately
-            self._sign_new_packages(pkg_dir.name, source_version)
+        if built_files:
+            # Step 5: Sign ALL built package files (including split packages)
+            self._sign_built_packages(built_files, source_version)
             
             # NEW: Register target version for ALL pkgname entries
             self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
@@ -203,11 +204,11 @@ class PackageBuilder:
             
             # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
-            built = self._build_aur_package(temp_path, aur_package_name, source_version)
+            built_files = self._build_aur_package(temp_path, aur_package_name, source_version)
             
-            if built:
-                # Step 6: Sign the built package immediately
-                self._sign_new_packages(aur_package_name, source_version)
+            if built_files:
+                # Step 6: Sign ALL built package files (including split packages)
+                self._sign_built_packages(built_files, source_version)
                 
                 # NEW: Register target version for ALL pkgname entries
                 self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
@@ -330,8 +331,8 @@ class PackageBuilder:
         logger.error(f"❌ Failed to clone {pkg_name} from any AUR URL")
         return False
     
-    def _build_local_package(self, pkg_dir: Path, version: str) -> bool:
-        """Build local package using makepkg."""
+    def _build_local_package(self, pkg_dir: Path, version: str) -> List[str]:
+        """Build local package using makepkg and return list of built files."""
         try:
             # Clean workspace
             self._clean_workspace(pkg_dir)
@@ -354,7 +355,7 @@ class PackageBuilder:
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                return False
+                return []
             
             # Build package
             logger.info("   Building package...")
@@ -375,27 +376,27 @@ class PackageBuilder:
             
             if build_result.returncode != 0:
                 logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
-                return False
+                return []
             
-            # Move built packages to output directory
-            moved = self._move_built_packages(pkg_dir, pkg_dir.name, version)
+            # Move built packages to output directory and return list
+            built_files = self._move_built_packages(pkg_dir, pkg_dir.name, version)
             
-            if moved:
+            if built_files:
                 logger.info(f"✅ Successfully built {pkg_dir.name}")
-                return True
+                return built_files
             else:
                 logger.error(f"❌ No package files created for {pkg_dir.name}")
-                return False
+                return []
                 
         except subprocess.TimeoutExpired:
             logger.error(f"❌ Build timed out for {pkg_dir.name}")
-            return False
+            return []
         except Exception as e:
             logger.error(f"❌ Error building {pkg_dir.name}: {e}")
-            return False
+            return []
     
-    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> bool:
-        """Build AUR package using makepkg."""
+    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> List[str]:
+        """Build AUR package using makepkg and return list of built files."""
         try:
             # Clean workspace
             self._clean_workspace(pkg_dir)
@@ -418,7 +419,7 @@ class PackageBuilder:
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                return False
+                return []
             
             # Build package
             logger.info("   Building package...")
@@ -434,24 +435,24 @@ class PackageBuilder:
             
             if build_result.returncode != 0:
                 logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
-                return False
+                return []
             
-            # Move built packages to output directory
-            moved = self._move_built_packages(pkg_dir, pkg_name, version)
+            # Move built packages to output directory and return list
+            built_files = self._move_built_packages(pkg_dir, pkg_name, version)
             
-            if moved:
+            if built_files:
                 logger.info(f"✅ Successfully built AUR {pkg_name}")
-                return True
+                return built_files
             else:
                 logger.error(f"❌ No package files created for {pkg_name}")
-                return False
+                return []
                 
         except subprocess.TimeoutExpired:
             logger.error(f"❌ Build timed out for {pkg_name}")
-            return False
+            return []
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
-            return False
+            return []
     
     def _clean_workspace(self, pkg_dir: Path):
         """Clean workspace before building."""
@@ -469,40 +470,87 @@ class PackageBuilder:
         for leftover in pkg_dir.glob("*.pkg.tar.*"):
             leftover.unlink(missing_ok=True)
     
-    def _move_built_packages(self, source_dir: Path, pkg_name: str, version: str) -> bool:
-        """Move built packages to output directory."""
-        moved = False
+    def _move_built_packages(self, source_dir: Path, pkg_name: str, version: str) -> List[str]:
+        """Move built packages to output directory and return list of moved files."""
+        moved_files = []
         
         for pkg_file in source_dir.glob("*.pkg.tar.*"):
+            # Skip signature files
+            if pkg_file.suffix == '.sig':
+                continue
+                
             dest = self.output_dir / pkg_file.name
             try:
                 shutil.move(str(pkg_file), str(dest))
                 logger.info(f"   Moved: {pkg_file.name}")
-                moved = True
+                moved_files.append(pkg_file.name)
+                
+                # Also track for signing
+                self._recently_built_files.append(pkg_file.name)
             except Exception as e:
                 logger.error(f"   Failed to move {pkg_file.name}: {e}")
         
-        return moved
+        return moved_files
     
-    def _sign_new_packages(self, pkg_name: str, version: str):
-        """Sign newly built packages using gpg_handler."""
-        logger.info(f"🔐 Signing new packages for {pkg_name}...")
+    def _sign_built_packages(self, built_files: List[str], version: str):
+        """
+        Sign ALL built package files from a build session.
         
-        # Find package files for this version
+        FIX: Sign all package files produced by the build, not just those
+        matching the main package name. This handles split/multi-package PKGBUILDs.
+        """
+        if not self.gpg_handler.sign_packages_enabled:
+            logger.info(f"Package signing disabled, skipping signing for version {version}")
+            return
+        
+        logger.info(f"🔐 Signing ALL built packages for version {version}...")
+        
+        # Build version string for filename matching (epoch:version -> epoch-version)
+        version_in_filename = version.replace(':', '-')
+        
         signed_count = 0
-        for pkg_file in self.output_dir.glob("*.pkg.tar.*"):
-            # Check if this file belongs to our package
-            if pkg_name in pkg_file.name and version.replace(':', '-') in pkg_file.name:
+        failed_count = 0
+        
+        # First, sign the files we just built
+        for built_file in built_files:
+            pkg_file = self.output_dir / built_file
+            if pkg_file.exists():
                 if self.gpg_handler.sign_package(str(pkg_file)):
                     signed_count += 1
-                    logger.info(f"✅ Signed: {pkg_file.name}")
+                    logger.info(f"✅ Signed built package: {built_file}")
                 else:
-                    logger.error(f"❌ Failed to sign: {pkg_file.name}")
+                    failed_count += 1
+                    logger.error(f"❌ Failed to sign built package: {built_file}")
+            else:
+                logger.warning(f"Built file not found in output_dir: {built_file}")
+        
+        # Second, check for any other packages with this version that might be missing signatures
+        # This catches cached/mirrored packages that were skipped but need signatures
+        for pkg_file in self.output_dir.glob("*.pkg.tar.*"):
+            # Skip signature files
+            if pkg_file.suffix == '.sig':
+                continue
+            
+            # Check if this file has the version we just built/skipped
+            if version_in_filename in pkg_file.name:
+                sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                if not sig_file.exists():
+                    # This is a package with our version but no signature
+                    if pkg_file.name not in built_files:  # Not already signed above
+                        if self.gpg_handler.sign_package(str(pkg_file)):
+                            signed_count += 1
+                            logger.info(f"✅ Signed existing package: {pkg_file.name}")
+                        else:
+                            failed_count += 1
+                            logger.error(f"❌ Failed to sign existing package: {pkg_file.name}")
         
         if signed_count > 0:
-            logger.info(f"✅ Signed {signed_count} packages for {pkg_name}")
+            logger.info(f"✅ Signed {signed_count} packages for version {version}")
         else:
-            logger.warning(f"⚠️ No packages signed for {pkg_name}")
+            logger.info(f"ℹ️ No packages needed signing for version {version}")
+        
+        if failed_count > 0:
+            logger.warning(f"⚠️ Failed to sign {failed_count} packages for version {version}")
     
     def get_package_metadata(self, pkg_dir: Path) -> Optional[Dict[str, Any]]:
         """
