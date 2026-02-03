@@ -244,7 +244,7 @@ class PackageBuilderOrchestrator:
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            rf'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
@@ -555,7 +555,7 @@ class PackageBuilderOrchestrator:
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            rf'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
