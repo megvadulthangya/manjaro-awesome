@@ -91,6 +91,7 @@ class PackageBuilderOrchestrator:
         self.allowlist = set()
         self.built_packages = []
         self.skipped_packages = []
+        self.desired_inventory = set()  # NEW: Desired inventory for cleanup guard
         
         logger.info("PackageBuilderOrchestrator initialized")
     
@@ -231,9 +232,45 @@ class PackageBuilderOrchestrator:
         logger.info(f"Processing {len(package_sources)} package sources...")
         self.allowlist = ManifestFactory.build_allowlist(package_sources)
         
+        # NEW: Build desired inventory from PKGBUILDs
+        self.desired_inventory = self._build_desired_inventory(package_sources)
+        logger.info(f"Desired inventory package names: {len(self.desired_inventory)}")
+        if self.desired_inventory:
+            first_ten = list(self.desired_inventory)[:10]
+            logger.info(f"First 10 names: {first_ten}")
+        
         logger.info(f"Allowlist generated: {len(self.allowlist)} package names")
         
         return len(self.allowlist) > 0
+    
+    def _build_desired_inventory(self, package_sources: List[str]) -> Set[str]:
+        """
+        Build desired inventory set from all PKGBUILDs.
+        This includes ALL pkgname entries from multi-package PKGBUILDs.
+        
+        Args:
+            package_sources: List of package sources (local paths or AUR names)
+            
+        Returns:
+            Set of all package names that should exist in the repository
+        """
+        desired_inventory = set()
+        
+        for source in package_sources:
+            pkgbuild_content = ManifestFactory.get_pkgbuild(source)
+            
+            if pkgbuild_content:
+                pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
+                
+                if pkg_names:
+                    desired_inventory.update(pkg_names)
+                    logger.debug(f"Added to desired inventory from {source}: {pkg_names}")
+                else:
+                    logger.warning(f"No pkgname found in {source}")
+            else:
+                logger.warning(f"Could not load PKGBUILD from {source}")
+        
+        return desired_inventory
     
     def phase_iv_version_audit_and_build(self) -> Tuple[List[str], List[str]]:
         """
@@ -262,6 +299,9 @@ class PackageBuilderOrchestrator:
         for pkg_name in aur_packages:
             remote_version = self.version_tracker.get_remote_version(pkg_name, self.vps_files)
             aur_packages_with_versions.append((pkg_name, remote_version))
+        
+        # NEW: Set desired inventory in version tracker for cleanup guard
+        self.version_tracker.set_desired_inventory(self.desired_inventory)
         
         # Batch audit and build
         built_packages, skipped_packages, failed_packages = (
@@ -356,9 +396,9 @@ class PackageBuilderOrchestrator:
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
         logger.info(f"VPS orphan sweep complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
         
-        # Step 6: Final server cleanup with version tracker
-        logger.info("Final server cleanup...")
-        self.cleanup_manager.server_cleanup(self.version_tracker)
+        # Step 6: Final server cleanup with version tracker AND desired inventory
+        logger.info("Final server cleanup with desired inventory guard...")
+        self.cleanup_manager.server_cleanup(self.version_tracker, self.desired_inventory)
         
         return True
     
@@ -400,6 +440,7 @@ class PackageBuilderOrchestrator:
             logger.info(f"Packages built: {len(built_packages)}")
             logger.info(f"Packages skipped: {len(skipped_packages)}")
             logger.info(f"Allowlist entries: {len(self.allowlist)}")
+            logger.info(f"Desired inventory: {len(self.desired_inventory)}")
             logger.info(f"VPS files after cleanup: {len(self.vps_files)}")
             logger.info(f"Package signing: {'Enabled' if self.sign_packages else 'Disabled'}")
             logger.info(f"GPG signing: {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")

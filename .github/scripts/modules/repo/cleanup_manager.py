@@ -229,14 +229,19 @@ class CleanupManager:
         
         return len(package_files), len(signature_files), deleted_count
     
-    def server_cleanup(self, version_tracker):
+    def server_cleanup(self, version_tracker, desired_inventory: Optional[Set[str]] = None):
         """
         🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
-        using TARGET VERSIONS as SOURCE OF TRUTH.
+        using TARGET VERSIONS as SOURCE OF TRUTH with desired inventory guard.
         
         Only keeps packages that match registered target versions.
+        Adds safety guard: NEVER delete a package whose pkgname is in desired_inventory.
+        
+        Args:
+            version_tracker: VersionTracker instance with target versions
+            desired_inventory: Set of package names that should exist in repository (optional)
         """
-        logger.info("Server cleanup: Removing zombie packages from VPS...")
+        logger.info("Server cleanup: Removing zombie packages from VPS with desired inventory guard...")
         
         # Check if we have any target versions registered
         if not version_tracker._package_target_versions:
@@ -244,6 +249,8 @@ class CleanupManager:
             return
         
         logger.info(f"Zero-Residue cleanup initiated with {len(version_tracker._package_target_versions)} target versions")
+        if desired_inventory:
+            logger.info(f"Desired inventory guard enabled with {len(desired_inventory)} package names")
         
         # Get ALL files from VPS (including signatures)
         vps_files = self._get_vps_file_inventory()
@@ -266,7 +273,10 @@ class CleanupManager:
             logger.info("No files remaining on VPS after orphan cleanup")
             return
         
-        # Identify files to keep based on target versions
+        # Import SmartCleanup for package name extraction
+        from modules.repo.smart_cleanup import SmartCleanup
+        
+        # Identify files to keep based on target versions with desired inventory guard
         files_to_keep = set()
         files_to_delete = []
         
@@ -279,27 +289,19 @@ class CleanupManager:
                 files_to_keep.add(filename)
                 continue
             
-            # Simple package name extraction (basic logic)
-            # CRITICAL: Full version parsing is done by SmartCleanup
-            # This is just for server cleanup matching
-            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-            parts = base.split('-')
-            
-            # Try to extract pkgname (everything before version)
-            pkg_name = None
-            for i in range(len(parts) - 3, 0, -1):
-                potential_name = '-'.join(parts[:i])
-                remaining = parts[i:]
-                
-                if len(remaining) >= 3:
-                    # Check if remaining parts look like version-release-arch
-                    if remaining[0].isdigit() or any(c.isdigit() for c in remaining[0]):
-                        pkg_name = potential_name
-                        break
+            # Extract package name from filename
+            pkg_name = SmartCleanup.extract_package_name_from_filename(filename)
             
             if not pkg_name:
                 # Can't parse, keep to be safe
                 files_to_keep.add(filename)
+                continue
+            
+            # SAFETY GUARD: Check if package is in desired inventory
+            if desired_inventory and pkg_name in desired_inventory:
+                # Package is in desired inventory, keep it even if no target version
+                files_to_keep.add(filename)
+                logger.info(f"Guard keep: {filename} (pkgname {pkg_name} in desired inventory)")
                 continue
             
             # Check if this package has a target version

@@ -4,7 +4,7 @@ Version Tracker Module - Handles package version tracking and comparison
 
 import re
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,11 @@ class VersionTracker:
         self._package_target_versions: Dict[str, str] = {}  # {pkg_name: target_version} - versions we want to keep
         self._built_packages: Dict[str, str] = {}  # {pkg_name: built_version} - packages we just built
         self._upload_successful = False
+        self._desired_inventory: Set[str] = set()  # NEW: Desired inventory for cleanup guard
+    
+    def set_desired_inventory(self, desired_inventory: Set[str]):
+        """Set the desired inventory for cleanup guard"""
+        self._desired_inventory = desired_inventory
     
     def set_upload_successful(self, successful: bool):
         """Set the upload success flag for safety valve"""
@@ -68,6 +73,24 @@ class VersionTracker:
         self._package_target_versions[pkg_name] = remote_version
         
         logger.info(f"📝 Registered skipped package: {pkg_name} ({remote_version})")
+    
+    def register_split_packages(self, pkg_names: List[str], version: str, is_built: bool = True):
+        """
+        NEW: Register target/skipped versions for ALL pkgname entries in a split/multi-package PKGBUILD.
+        
+        Args:
+            pkg_names: List of package names produced by the PKGBUILD
+            version: The version to register for all packages
+            is_built: True if package was built, False if skipped
+        """
+        for pkg_name in pkg_names:
+            if is_built:
+                self._package_target_versions[pkg_name] = version
+                logger.info(f"📝 Registered split package target version for {pkg_name}: {version}")
+            else:
+                self._skipped_packages[pkg_name] = version
+                self._package_target_versions[pkg_name] = version
+                logger.info(f"📝 Registered split skipped package: {pkg_name} ({version})")
     
     def package_exists(self, pkg_name: str, remote_files: List[str]) -> bool:
         """Check if package exists on server"""

@@ -42,7 +42,8 @@ class SmartCleanup:
         self.repo_name = repo_name
         self.output_dir = output_dir
     
-    def extract_package_name_from_filename(self, filename: str) -> Optional[str]:
+    @staticmethod
+    def extract_package_name_from_filename(filename: str) -> Optional[str]:
         """
         Extract package name from package filename.
         
@@ -79,7 +80,8 @@ class SmartCleanup:
         
         return None
     
-    def extract_version_from_filename(self, filename: str, pkg_name: str) -> Optional[str]:
+    @staticmethod
+    def extract_version_from_filename(filename: str, pkg_name: str) -> Optional[str]:
         """
         Extract version from package filename.
         

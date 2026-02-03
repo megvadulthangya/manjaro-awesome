@@ -1,0 +1,2 @@
+#!/bin/bash
+find .github/scripts -name "*.py" -exec printf "\n--- FILE: {} ---\n" \; -exec cat {} \; > full_project.txt

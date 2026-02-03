@@ -84,33 +84,41 @@ class PackageBuilder:
             logger.error(f"❌ Failed to extract version from {pkg_dir}: {e}")
             return False, None, None
         
-        # Step 2: Version comparison (skip if forced)
+        # Step 2: Extract all package names from PKGBUILD
+        pkg_names = self._extract_package_names(pkg_dir)
+        
+        # Step 3: Version comparison (skip if forced)
         if not skip_check and remote_version:
             should_build = self.version_manager.compare_versions(
                 remote_version, pkgver, pkgrel, epoch
             )
             if not should_build:
                 logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version})")
-                # REGISTER SKIPPED PACKAGE
-                self.version_tracker.register_skipped_package(pkg_dir.name, remote_version)
+                # NEW: Register skipped package for ALL pkgname entries
+                self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                 return False, source_version, {
                     "pkgver": pkgver,
                     "pkgrel": pkgrel,
-                    "epoch": epoch
+                    "epoch": epoch,
+                    "pkgnames": pkg_names
                 }
         
-        # Step 3: Build package
+        # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
         built = self._build_local_package(pkg_dir, source_version)
         
         if built:
-            # Step 4: Sign the built package immediately
+            # Step 5: Sign the built package immediately
             self._sign_new_packages(pkg_dir.name, source_version)
+            
+            # NEW: Register target version for ALL pkgname entries
+            self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
             
             return True, source_version, {
                 "pkgver": pkgver,
                 "pkgrel": pkgrel,
-                "epoch": epoch
+                "epoch": epoch,
+                "pkgnames": pkg_names
             }
         
         return False, source_version, None
@@ -155,33 +163,41 @@ class PackageBuilder:
             logger.info(f"📦 AUR source version: {source_version}")
             logger.info(f"📦 Remote version: {remote_version or 'Not found'}")
             
-            # Step 3: Version comparison (skip if forced)
+            # Step 3: Extract all package names from PKGBUILD
+            pkg_names = self._extract_package_names(temp_path)
+            
+            # Step 4: Version comparison (skip if forced)
             if not skip_check and remote_version:
                 should_build = self.version_manager.compare_versions(
                     remote_version, pkgver, pkgrel, epoch
                 )
                 if not should_build:
                     logger.info(f"✅ {aur_package_name}: Up to date ({remote_version})")
-                    # REGISTER SKIPPED PACKAGE
-                    self.version_tracker.register_skipped_package(aur_package_name, remote_version)
+                    # NEW: Register skipped package for ALL pkgname entries
+                    self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                     return False, source_version, {
                         "pkgver": pkgver,
                         "pkgrel": pkgrel,
-                        "epoch": epoch
+                        "epoch": epoch,
+                        "pkgnames": pkg_names
                     }
             
-            # Step 4: Build package
+            # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
             built = self._build_aur_package(temp_path, aur_package_name, source_version)
             
             if built:
-                # Step 5: Sign the built package immediately
+                # Step 6: Sign the built package immediately
                 self._sign_new_packages(aur_package_name, source_version)
+                
+                # NEW: Register target version for ALL pkgname entries
+                self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
                 
                 return True, source_version, {
                     "pkgver": pkgver,
                     "pkgrel": pkgrel,
-                    "epoch": epoch
+                    "epoch": epoch,
+                    "pkgnames": pkg_names
                 }
             
             return False, source_version, None
@@ -193,6 +209,28 @@ class PackageBuilder:
             # Cleanup temporary directory
             if temp_dir and Path(temp_dir).exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    def _extract_package_names(self, pkg_dir: Path) -> List[str]:
+        """
+        Extract all package names from PKGBUILD.
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            List of package names (single or multiple for split packages)
+        """
+        try:
+            pkgbuild_content = ManifestFactory.get_pkgbuild(str(pkg_dir))
+            if pkgbuild_content:
+                pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
+                if pkg_names:
+                    return pkg_names
+        except Exception as e:
+            logger.warning(f"Could not extract package names from {pkg_dir}: {e}")
+        
+        # Fallback: use directory name
+        return [pkg_dir.name]
     
     def _clone_aur_package(self, pkg_name: str, target_dir: Path) -> bool:
         """Clone AUR package from Arch Linux AUR."""
@@ -471,8 +509,7 @@ class PackageBuilder:
                 
                 if built:
                     built_packages.append(f"{pkg_dir.name} ({version})")
-                    # Register target version for cleanup
-                    self.version_tracker.register_package_target_version(pkg_dir.name, version)
+                    # Note: Target versions are now registered in audit_and_build_local
                 elif version:
                     skipped_packages.append(f"{pkg_dir.name} ({version})")
                     # Note: Skipped packages are now registered in audit_and_build_local
@@ -493,8 +530,7 @@ class PackageBuilder:
                 
                 if built:
                     built_packages.append(f"{aur_name} ({version})")
-                    # Register target version for cleanup
-                    self.version_tracker.register_package_target_version(aur_name, version)
+                    # Note: Target versions are now registered in audit_and_build_aur
                 elif version:
                     skipped_packages.append(f"{aur_name} ({version})")
                     # Note: Skipped packages are now registered in audit_and_build_aur
