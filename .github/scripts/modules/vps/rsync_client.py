@@ -1,4 +1,3 @@
-```python
 """
 Rsync Client Module - Handles file transfers using Rsync
 WITH UP3 POST-UPLOAD VERIFICATION
