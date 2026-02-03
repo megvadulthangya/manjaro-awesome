@@ -136,7 +136,7 @@ class PackageBuilderOrchestrator:
         # Shell executor
         self.shell_executor = ShellExecutor(self.debug_mode)
         
-        # Package builder
+        # Package builder - initialized without vps_files first, will be set in phase_i_vps_sync
         self.package_builder = create_package_builder(
             packager_id=self.packager_id,
             output_dir=self.output_dir,
@@ -148,23 +148,6 @@ class PackageBuilderOrchestrator:
         )
         
         logger.info("All modules initialized successfully")
-    
-    def get_package_lists(self) -> Tuple[List[str], List[str]]:
-        """Get package lists from packages.py"""
-        try:
-            import packages
-            logger.info("Using package lists from packages.py")
-            return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
-        except ImportError:
-            try:
-                import sys
-                sys.path.insert(0, str(self.repo_root))
-                import scripts.packages as packages
-                logger.info("Using package lists from packages.py")
-                return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
-            except ImportError:
-                logger.error("Cannot load package lists from packages.py")
-                sys.exit(1)
     
     def phase_i_vps_sync(self) -> bool:
         """
@@ -185,7 +168,14 @@ class PackageBuilderOrchestrator:
         remote_files = self.ssh_client.list_remote_packages()
         self.vps_files = remote_files  # Already basenames
         
-        logger.info(f"Found {len(self.vps_files)} files on VPS")
+        # NEW: Also get signatures for completeness check
+        remote_signatures = self._get_vps_signatures()
+        self.vps_files.extend(remote_signatures)
+        
+        logger.info(f"Found {len(self.vps_files)} files on VPS (packages + signatures)")
+        
+        # Set VPS files in package builder for completeness checks
+        self.package_builder.set_vps_files(self.vps_files)
         
         # Mirror remote packages locally
         if remote_files:
@@ -200,6 +190,59 @@ class PackageBuilderOrchestrator:
                 return False
         
         return True
+    
+    def _get_vps_signatures(self) -> List[str]:
+        """Get signature files from VPS for completeness check"""
+        logger.info("Fetching VPS signature file list...")
+        
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found")
+            return []
+        
+        # Get signature files
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f'find "{self.remote_dir}" -maxdepth 1 -type f -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                logger.info(f"Found {len(files)} signature files on remote server")
+                return files
+            else:
+                logger.warning(f"SSH find for signatures returned error")
+                return []
+                
+        except Exception as e:
+            logger.error(f"SSH command for signatures failed: {e}")
+            return []
+    
+    def get_package_lists(self) -> Tuple[List[str], List[str]]:
+        """Get package lists from packages.py"""
+        try:
+            import packages
+            logger.info("Using package lists from packages.py")
+            return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
+        except ImportError:
+            try:
+                import sys
+                sys.path.insert(0, str(self.repo_root))
+                import scripts.packages as packages
+                logger.info("Using package lists from packages.py")
+                return packages.LOCAL_PACKAGES, packages.AUR_PACKAGES
+            except ImportError:
+                logger.error("Cannot load package lists from packages.py")
+                sys.exit(1)
     
     def phase_ii_dynamic_allowlist(self) -> bool:
         """

@@ -31,7 +31,8 @@ class PackageBuilder:
         packager_id: str,
         output_dir: Path,
         version_tracker,  # Added: VersionTracker for skipped package registration
-        debug_mode: bool = False
+        debug_mode: bool = False,
+        vps_files: Optional[List[str]] = None  # NEW: VPS file inventory for completeness check
     ):
         """
         Initialize PackageBuilder with dependencies.
@@ -43,6 +44,7 @@ class PackageBuilder:
             output_dir: Directory for built packages
             version_tracker: VersionTracker instance for tracking skipped packages
             debug_mode: Enable debug logging
+            vps_files: List of files on VPS for completeness check
         """
         self.version_manager = version_manager
         self.gpg_handler = gpg_handler
@@ -50,9 +52,14 @@ class PackageBuilder:
         self.output_dir = output_dir
         self.version_tracker = version_tracker  # Store version tracker
         self.debug_mode = debug_mode
+        self.vps_files = vps_files or []  # NEW: Store VPS file inventory
         
         # Ensure output directory exists
         self.output_dir.mkdir(exist_ok=True, parents=True)
+    
+    def set_vps_files(self, vps_files: List[str]):
+        """Set VPS file inventory for completeness checks"""
+        self.vps_files = vps_files
     
     def audit_and_build_local(
         self,
@@ -93,15 +100,21 @@ class PackageBuilder:
                 remote_version, pkgver, pkgrel, epoch
             )
             if not should_build:
-                logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version})")
-                # NEW: Register skipped package for ALL pkgname entries
-                self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
-                return False, source_version, {
-                    "pkgver": pkgver,
-                    "pkgrel": pkgrel,
-                    "epoch": epoch,
-                    "pkgnames": pkg_names
-                }
+                # NEW: Check completeness of split packages on VPS
+                is_complete = self._check_split_package_completeness(pkg_dir.name, pkg_names, pkgver, pkgrel, epoch)
+                if is_complete:
+                    logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version}) and all split artifacts present")
+                    # Register skipped package for ALL pkgname entries
+                    self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                    return False, source_version, {
+                        "pkgver": pkgver,
+                        "pkgrel": pkgrel,
+                        "epoch": epoch,
+                        "pkgnames": pkg_names
+                    }
+                else:
+                    # Incomplete on VPS - force build
+                    logger.info(f"🔄 {pkg_dir.name}: Version matches but VPS is incomplete - FORCING BUILD")
         
         # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
@@ -172,15 +185,21 @@ class PackageBuilder:
                     remote_version, pkgver, pkgrel, epoch
                 )
                 if not should_build:
-                    logger.info(f"✅ {aur_package_name}: Up to date ({remote_version})")
-                    # NEW: Register skipped package for ALL pkgname entries
-                    self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
-                    return False, source_version, {
-                        "pkgver": pkgver,
-                        "pkgrel": pkgrel,
-                        "epoch": epoch,
-                        "pkgnames": pkg_names
-                    }
+                    # NEW: Check completeness of split packages on VPS
+                    is_complete = self._check_split_package_completeness(aur_package_name, pkg_names, pkgver, pkgrel, epoch)
+                    if is_complete:
+                        logger.info(f"✅ {aur_package_name}: Up to date ({remote_version}) and all split artifacts present")
+                        # Register skipped package for ALL pkgname entries
+                        self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                        return False, source_version, {
+                            "pkgver": pkgver,
+                            "pkgrel": pkgrel,
+                            "epoch": epoch,
+                            "pkgnames": pkg_names
+                        }
+                    else:
+                        # Incomplete on VPS - force build
+                        logger.info(f"🔄 {aur_package_name}: Version matches but VPS is incomplete - FORCING BUILD")
             
             # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
@@ -209,6 +228,55 @@ class PackageBuilder:
             # Cleanup temporary directory
             if temp_dir and Path(temp_dir).exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    def _check_split_package_completeness(self, pkgbuild_name: str, pkg_names: List[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+        """
+        NEW: Check if ALL split package artifacts exist on VPS.
+        
+        Args:
+            pkgbuild_name: Name of the PKGBUILD (for logging)
+            pkg_names: List of package names produced by the PKGBUILD
+            pkgver: Package version
+            pkgrel: Package release
+            epoch: Package epoch (optional)
+            
+        Returns:
+            True if all expected artifacts exist on VPS, False otherwise
+        """
+        if not self.vps_files:
+            logger.warning(f"No VPS file inventory available for {pkgbuild_name}")
+            return False
+        
+        missing_artifacts = []
+        
+        for pkg_name in pkg_names:
+            # Build expected filename pattern without architecture
+            if epoch and epoch != '0':
+                base_pattern = f"{pkg_name}-{epoch}-{pkgver}-{pkgrel}"
+            else:
+                base_pattern = f"{pkg_name}-{pkgver}-{pkgrel}"
+            
+            # Check for package files (any architecture, any compression)
+            package_found = False
+            for vps_file in self.vps_files:
+                if vps_file.startswith(base_pattern) and (vps_file.endswith('.pkg.tar.zst') or vps_file.endswith('.pkg.tar.xz')):
+                    package_found = True
+                    # Check for corresponding signature
+                    sig_file = vps_file + '.sig'
+                    if sig_file not in self.vps_files:
+                        missing_artifacts.append(f"{vps_file}.sig")
+                    break
+            
+            if not package_found:
+                missing_artifacts.append(f"{base_pattern}-*.pkg.tar.*")
+        
+        if missing_artifacts:
+            example = missing_artifacts[0] if missing_artifacts else "unknown"
+            logger.warning(f"FORCE BUILD (incomplete VPS): {pkgbuild_name} missing {len(missing_artifacts)} artifacts, e.g. {example}")
+            return False
+        
+        logger.info(f"SKIP OK (complete VPS): {pkgbuild_name} all split artifacts present")
+        return True
     
     def _extract_package_names(self, pkg_dir: Path) -> List[str]:
         """
@@ -559,7 +627,8 @@ def create_package_builder(
     gpg_private_key: Optional[str] = None,
     sign_packages: bool = True,
     debug_mode: bool = False,
-    version_tracker = None  # Added: VersionTracker for skipped package registration
+    version_tracker = None,  # Added: VersionTracker for skipped package registration
+    vps_files: Optional[List[str]] = None  # NEW: VPS file inventory for completeness check
 ) -> PackageBuilder:
     """
     Create a PackageBuilder instance with all dependencies.
@@ -572,6 +641,7 @@ def create_package_builder(
         sign_packages: Enable package signing
         debug_mode: Enable debug logging
         version_tracker: VersionTracker instance for tracking skipped packages
+        vps_files: VPS file inventory for completeness check
         
     Returns:
         PackageBuilder instance
@@ -593,5 +663,6 @@ def create_package_builder(
         packager_id=packager_id,
         output_dir=output_dir,
         version_tracker=version_tracker,  # Pass version tracker
-        debug_mode=debug_mode
+        debug_mode=debug_mode,
+        vps_files=vps_files  # NEW: Pass VPS file inventory
     )

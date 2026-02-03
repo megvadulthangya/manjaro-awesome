@@ -148,6 +148,19 @@ class PackageBuilder:
             # Shell executor
             self.shell_executor = ShellExecutor(self.debug_mode)
             
+            # Package builder from modules/build/package_builder.py
+            from modules.build.package_builder import create_package_builder
+            self.package_builder = create_package_builder(
+                packager_id=self.packager_id,
+                output_dir=self.output_dir,
+                gpg_key_id=env_config.get('gpg_key_id'),
+                gpg_private_key=env_config.get('gpg_private_key'),
+                sign_packages=self.sign_packages,
+                debug_mode=self.debug_mode,
+                version_tracker=self.version_tracker,
+                vps_files=self.remote_files  # NEW: Pass VPS file inventory
+            )
+            
             logger.info("✅ All modules initialized successfully")
             logger.info(f"📝 Package signing: {'ENABLED' if self.sign_packages else 'DISABLED'}")
             
@@ -167,6 +180,84 @@ class PackageBuilder:
         except Exception as e:
             logger.error(f"❌ Error initializing modules: {e}")
             sys.exit(1)
+    
+    def phase_i_vps_sync(self) -> bool:
+        """
+        Phase I: VPS State Fetch
+        - List VPS repo files
+        - Sync missing files locally
+        """
+        logger.info("PHASE I: VPS State Fetch")
+        
+        # Test SSH connection
+        if not self.ssh_client.test_ssh_connection():
+            logger.warning("SSH connection test failed")
+        
+        # Ensure remote directory exists
+        self.ssh_client.ensure_remote_directory()
+        
+        # List remote packages
+        remote_packages = self.ssh_client.list_remote_packages()
+        self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
+        
+        # NEW: Also get signatures for completeness check
+        remote_signatures = self._get_vps_signatures()
+        self.remote_files.extend(remote_signatures)
+        
+        logger.info(f"Found {len(self.remote_files)} files on VPS (packages + signatures)")
+        
+        # Update package builder with VPS files
+        self.package_builder.set_vps_files(self.remote_files)
+        
+        # Mirror remote packages locally
+        if remote_packages:
+            logger.info("Mirroring remote packages locally...")
+            success = self.rsync_client.mirror_remote_packages(
+                self.mirror_temp_dir,
+                self.output_dir,
+                remote_packages
+            )
+            if not success:
+                logger.warning("Failed to mirror remote packages")
+                return False
+        
+        return True
+    
+    def _get_vps_signatures(self) -> List[str]:
+        """Get signature files from VPS for completeness check"""
+        logger.info("Fetching VPS signature file list...")
+        
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found")
+            return []
+        
+        # Get signature files
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f'find "{self.remote_dir}" -maxdepth 1 -type f -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                logger.info(f"Found {len(files)} signature files on remote server")
+                return files
+            else:
+                logger.warning(f"SSH find for signatures returned error")
+                return []
+                
+        except Exception as e:
+            logger.error(f"SSH command for signatures failed: {e}")
+            return []
     
     def get_package_lists(self):
         """Get package lists from packages.py or exit if not available"""
@@ -560,122 +651,129 @@ class PackageBuilder:
         if remote_version:
             should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
             if not should_build:
-                logger.info(f"✅ {pkg_name}: AUR version {aur_version} matches remote version {remote_version} - SKIPPING")
-                self.skipped_packages.append(f"{pkg_name} ({aur_version})")
-                self.version_tracker.register_skipped_package(pkg_name, remote_version)
-                return False
+                # NEW: Check completeness of split packages on VPS
+                # Need to extract package names from AUR PKGBUILD first
+                temp_dir = None
+                try:
+                    temp_dir = tempfile.mkdtemp(prefix=f"aur_check_{pkg_name}_")
+                    temp_path = Path(temp_dir)
+                    
+                    # Clone AUR package temporarily to check PKGBUILD
+                    for aur_url_template in self.aur_urls:
+                        aur_url = aur_url_template.format(pkg_name=pkg_name)
+                        result = subprocess.run(
+                            ["git", "clone", "--depth", "1", aur_url, str(temp_path)],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=300
+                        )
+                        if result.returncode == 0:
+                            break
+                    
+                    # Extract package names
+                    from modules.repo.manifest_factory import ManifestFactory
+                    pkgbuild_content = ManifestFactory.get_pkgbuild(str(temp_path))
+                    pkg_names = []
+                    if pkgbuild_content:
+                        pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
+                    
+                    # Check completeness
+                    is_complete = True
+                    if pkg_names and len(pkg_names) > 1:
+                        # This is a multi-package PKGBUILD, check completeness
+                        is_complete = self._check_split_package_completeness(pkg_name, pkg_names, pkgver, pkgrel, epoch)
+                    
+                    if is_complete:
+                        logger.info(f"✅ {pkg_name}: AUR version {aur_version} matches remote version {remote_version} - SKIPPING")
+                        self.skipped_packages.append(f"{pkg_name} ({aur_version})")
+                        self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                        return False
+                    else:
+                        logger.info(f"🔄 {pkg_name}: Version matches but VPS is incomplete - FORCING BUILD")
+                except Exception as e:
+                    logger.warning(f"Could not check completeness for {pkg_name}: {e}")
+                    # Fall back to regular skip if we can't check completeness
+                    logger.info(f"✅ {pkg_name}: AUR version {aur_version} matches remote version {remote_version} - SKIPPING")
+                    self.skipped_packages.append(f"{pkg_name} ({aur_version})")
+                    # Try to get pkg_names from PKGBUILD if we have it cached
+                    try:
+                        pkg_names = [pkg_name]  # Default
+                        self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                    except:
+                        pass
+                    return False
+                finally:
+                    if temp_dir and Path(temp_dir).exists():
+                        shutil.rmtree(temp_dir, ignore_errors=True)
             else:
                 logger.info(f"🔄 {pkg_name}: AUR version {aur_version} is NEWER than remote {remote_version} - BUILDING")
         else:
             logger.info(f"🔄 {pkg_name}: No remote version found, building AUR version {aur_version}")
         
-        # Step 4: Clone and build
-        aur_dir = self.aur_build_dir
-        aur_dir.mkdir(exist_ok=True)
+        # Step 4: Clone and build using the package_builder module
+        logger.info(f"🔨 Building {pkg_name} ({aur_version})...")
         
-        pkg_dir = aur_dir / pkg_name
-        if pkg_dir.exists():
-            shutil.rmtree(pkg_dir, ignore_errors=True)
+        # Use the package_builder module for building
+        built, version, metadata = self.package_builder.audit_and_build_aur(
+            pkg_name, remote_version, self.aur_build_dir
+        )
         
-        logger.info(f"📥 Cloning {pkg_name} from AUR...")
+        if built:
+            self.built_packages.append(f"{pkg_name} ({version})")
+            return True
+        else:
+            logger.error(f"❌ Failed to build {pkg_name}")
+            return False
+    
+    def _check_split_package_completeness(self, pkgbuild_name: str, pkg_names: List[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+        """
+        NEW: Check if ALL split package artifacts exist on VPS.
         
-        # Try different AUR URLs from config
-        clone_success = False
-        for aur_url_template in self.aur_urls:
-            aur_url = aur_url_template.format(pkg_name=pkg_name)
-            logger.info(f"   Trying AUR URL: {aur_url}")
-            result = self.shell_executor.run_command(
-                f"git clone --depth 1 {aur_url} {pkg_dir}",
-                check=False
-            )
-            if result and result.returncode == 0:
-                clone_success = True
-                logger.info(f"   Successfully cloned {pkg_name} from {aur_url}")
-                break
+        Args:
+            pkgbuild_name: Name of the PKGBUILD (for logging)
+            pkg_names: List of package names produced by the PKGBUILD
+            pkgver: Package version
+            pkgrel: Package release
+            epoch: Package epoch (optional)
+            
+        Returns:
+            True if all expected artifacts exist on VPS, False otherwise
+        """
+        if not self.remote_files:
+            logger.warning(f"No VPS file inventory available for {pkgbuild_name}")
+            return False
+        
+        missing_artifacts = []
+        
+        for pkg_name in pkg_names:
+            # Build expected filename pattern without architecture
+            if epoch and epoch != '0':
+                base_pattern = f"{pkg_name}-{epoch}-{pkgver}-{pkgrel}"
             else:
-                if pkg_dir.exists():
-                    shutil.rmtree(pkg_dir, ignore_errors=True)
-                logger.warning(f"   Failed to clone from {aur_url}")
+                base_pattern = f"{pkg_name}-{pkgver}-{pkgrel}"
+            
+            # Check for package files (any architecture, any compression)
+            package_found = False
+            for vps_file in self.remote_files:
+                if vps_file.startswith(base_pattern) and (vps_file.endswith('.pkg.tar.zst') or vps_file.endswith('.pkg.tar.xz')):
+                    package_found = True
+                    # Check for corresponding signature
+                    sig_file = vps_file + '.sig'
+                    if sig_file not in self.remote_files:
+                        missing_artifacts.append(f"{vps_file}.sig")
+                    break
+            
+            if not package_found:
+                missing_artifacts.append(f"{base_pattern}-*.pkg.tar.*")
         
-        if not clone_success:
-            logger.error(f"❌ Failed to clone {pkg_name} from any AUR URL")
+        if missing_artifacts:
+            example = missing_artifacts[0] if missing_artifacts else "unknown"
+            logger.warning(f"FORCE BUILD (incomplete VPS): {pkgbuild_name} missing {len(missing_artifacts)} artifacts, e.g. {example}")
             return False
         
-        # Set correct permissions
-        self.shell_executor.run_command(f"chown -R builder:builder {pkg_dir}", check=False)
-        
-        pkgbuild = pkg_dir / "PKGBUILD"
-        if not pkgbuild.exists():
-            logger.error(f"❌ No PKGBUILD found for {pkg_name}")
-            shutil.rmtree(pkg_dir, ignore_errors=True)
-            return False
-        
-        try:
-            logger.info(f"🔨 Building {pkg_name} ({aur_version})...")
-            
-            # Clean workspace before building
-            self.artifact_manager.clean_workspace(pkg_dir)
-            
-            # Download sources
-            logger.info("   Downloading sources...")
-            source_result = self.shell_executor.run_command(
-                f"makepkg -od --noconfirm",
-                cwd=pkg_dir,
-                check=False,
-                capture=True,
-                timeout=600,
-                extra_env={"PACKAGER": self.packager_id}
-            )
-            
-            if source_result.returncode != 0:
-                logger.error(f"❌ Failed to download sources for {pkg_name}")
-                shutil.rmtree(pkg_dir, ignore_errors=True)
-                return False
-            
-            # Build package
-            logger.info("   Building package...")
-            build_result = self.shell_executor.run_command(
-                f"makepkg -si --noconfirm --clean --nocheck",
-                cwd=pkg_dir,
-                capture=True,
-                check=False,
-                timeout=3600,
-                extra_env={"PACKAGER": self.packager_id}
-            )
-            
-            if build_result.returncode != 0:
-                logger.error(f"❌ Failed to build {pkg_name}")
-                shutil.rmtree(pkg_dir, ignore_errors=True)
-                return False
-            
-            # Move and sign built packages
-            moved = False
-            for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
-                dest = self.output_dir / pkg_file.name
-                shutil.move(str(pkg_file), str(dest))
-                logger.info(f"✅ Built: {pkg_file.name}")
-                moved = True
-                
-                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
-                print(f"🔐 Attempting to sign: {dest}")
-                if not self.gpg_handler.sign_package(str(dest)):
-                    logger.error(f"❌ Failed to sign package: {dest}")
-                    # Continue anyway - the package is built but not signed
-            
-            shutil.rmtree(pkg_dir, ignore_errors=True)
-            
-            if moved:
-                self.built_packages.append(f"{pkg_name} ({aur_version})")
-                self.version_tracker.register_package_target_version(pkg_name, aur_version)
-                return True
-            else:
-                logger.error(f"❌ No package files created for {pkg_name}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error building {pkg_name}: {e}")
-            shutil.rmtree(pkg_dir, ignore_errors=True)
-            return False
+        logger.info(f"SKIP OK (complete VPS): {pkgbuild_name} all split artifacts present")
+        return True
     
     def _build_local_package(self, pkg_name: str) -> bool:
         """Build local package with proper version checking and signing"""
@@ -705,86 +803,51 @@ class PackageBuilder:
         if remote_version:
             should_build = self.version_manager.compare_versions(remote_version, pkgver, pkgrel, epoch)
             if not should_build:
-                logger.info(f"✅ {pkg_name}: Local version {local_version} matches remote version {remote_version} - SKIPPING")
-                self.skipped_packages.append(f"{pkg_name} ({local_version})")
-                self.version_tracker.register_skipped_package(pkg_name, remote_version)
-                return False
+                # NEW: Check completeness of split packages on VPS
+                # Extract package names from PKGBUILD
+                from modules.repo.manifest_factory import ManifestFactory
+                pkgbuild_content = ManifestFactory.get_pkgbuild(str(pkg_dir))
+                pkg_names = []
+                if pkgbuild_content:
+                    pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
+                
+                # Check completeness
+                is_complete = True
+                if pkg_names and len(pkg_names) > 1:
+                    # This is a multi-package PKGBUILD, check completeness
+                    is_complete = self._check_split_package_completeness(pkg_name, pkg_names, pkgver, pkgrel, epoch)
+                
+                if is_complete:
+                    logger.info(f"✅ {pkg_name}: Local version {local_version} matches remote version {remote_version} - SKIPPING")
+                    self.skipped_packages.append(f"{pkg_name} ({local_version})")
+                    self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                    return False
+                else:
+                    logger.info(f"🔄 {pkg_name}: Version matches but VPS is incomplete - FORCING BUILD")
             else:
                 logger.info(f"🔄 {pkg_name}: Local version {local_version} is NEWER than remote {remote_version} - BUILDING")
         else:
             logger.info(f"🔄 {pkg_name}: No remote version found, building local version {local_version}")
         
-        try:
-            logger.info(f"🔨 Building {pkg_name} ({local_version})...")
+        # Step 4: Build using the package_builder module
+        logger.info(f"🔨 Building {pkg_name} ({local_version})...")
+        
+        # Use the package_builder module for building
+        built, version, metadata = self.package_builder.audit_and_build_local(
+            pkg_dir, remote_version
+        )
+        
+        if built:
+            self.built_packages.append(f"{pkg_name} ({local_version})")
+            self.rebuilt_local_packages.append(pkg_name)
             
-            # Clean workspace before building
-            self.artifact_manager.clean_workspace(pkg_dir)
+            # Collect metadata for hokibot
+            self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
+            logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {local_version}")
             
-            # Download sources
-            logger.info("   Downloading sources...")
-            source_result = self.shell_executor.run_command(
-                f"makepkg -od --noconfirm",
-                cwd=pkg_dir,
-                check=False,
-                capture=True,
-                timeout=600,
-                extra_env={"PACKAGER": self.packager_id}
-            )
-            
-            if source_result.returncode != 0:
-                logger.error(f"❌ Failed to download sources for {pkg_name}")
-                return False
-            
-            # Build package with appropriate flags
-            makepkg_flags = "-si --noconfirm --clean"
-            if pkg_name == "gtk2":
-                makepkg_flags += " --nocheck"
-                logger.info("   GTK2: Skipping check step (long)")
-            
-            logger.info("   Building package...")
-            build_result = self.shell_executor.run_command(
-                f"makepkg {makepkg_flags}",
-                cwd=pkg_dir,
-                capture=True,
-                check=False,
-                timeout=3600,
-                extra_env={"PACKAGER": self.packager_id}
-            )
-            
-            if build_result.returncode != 0:
-                logger.error(f"❌ Failed to build {pkg_name}")
-                return False
-            
-            # Move and sign built packages
-            moved = False
-            for pkg_file in pkg_dir.glob("*.pkg.tar.*"):
-                dest = self.output_dir / pkg_file.name
-                shutil.move(str(pkg_file), str(dest))
-                logger.info(f"✅ Built: {pkg_file.name}")
-                moved = True
-                
-                # SIGN THE PACKAGE IMMEDIATELY AFTER MOVING
-                print(f"🔐 Attempting to sign: {dest}")
-                if not self.gpg_handler.sign_package(str(dest)):
-                    logger.error(f"❌ Failed to sign package: {dest}")
-                    # Continue anyway - the package is built but not signed
-            
-            if moved:
-                self.built_packages.append(f"{pkg_name} ({local_version})")
-                self.rebuilt_local_packages.append(pkg_name)
-                self.version_tracker.register_package_target_version(pkg_name, local_version)
-                
-                # Collect metadata for hokibot
-                self.build_tracker.add_hokibot_data(pkg_name, pkgver, pkgrel, epoch)
-                logger.info(f"📝 HOKIBOT observed: {pkg_name} -> {local_version}")
-                
-                return True
-            else:
-                logger.error(f"❌ No package files created for {pkg_name}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error building {pkg_name}: {e}")
+            return True
+        else:
+            logger.error(f"❌ Failed to build {pkg_name}")
             return False
     
     def _build_single_package(self, pkg_name: str, is_aur: bool) -> bool:
@@ -821,6 +884,11 @@ class PackageBuilder:
         print("\n" + "=" * 60)
         print("Building packages (Cache-aware)")
         print("=" * 60)
+        
+        # Run Phase I first to get VPS files
+        if not self.phase_i_vps_sync():
+            logger.error("Failed to sync with VPS")
+            return 0
         
         local_packages, aur_packages = self.get_package_lists()
         
@@ -945,13 +1013,13 @@ class PackageBuilder:
             self.ssh_client.ensure_remote_directory()
             
             # STEP 2: List remote packages for version comparison
-            remote_packages = self.ssh_client.list_remote_packages()
-            self.remote_files = [os.path.basename(f) for f in remote_packages] if remote_packages else []
+            # Note: remote_packages already fetched in phase_i_vps_sync
             
-            logger.info(f"📊 Found {len(self.remote_files)} remote packages for version comparison")
+            logger.info(f"📊 Found {len(self.remote_files)} remote files for version comparison")
             
             # MANDATORY STEP: Mirror ALL remote packages locally before any database operations
             # But check cache first
+            remote_packages = [f for f in self.remote_files if f.endswith('.pkg.tar.zst') or f.endswith('.pkg.tar.xz')]
             if remote_packages:
                 print("\n" + "=" * 60)
                 print("MANDATORY PRECONDITION: Mirroring remote packages locally")
@@ -968,7 +1036,7 @@ class PackageBuilder:
                             shutil.copy2(cached_file, dest)
                 else:
                     # No cache, perform fresh mirror
-                    if not self.rsync_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir):
+                    if not self.rsync_client.mirror_remote_packages(self.mirror_temp_dir, self.output_dir, remote_packages):
                         logger.error("❌ FAILED to mirror remote packages locally")
                         logger.error("Cannot proceed without local package mirror")
                         return 1
