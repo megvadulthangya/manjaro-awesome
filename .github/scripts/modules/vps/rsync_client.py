@@ -1,3 +1,4 @@
+```python
 """
 Rsync Client Module - Handles file transfers using Rsync
 WITH UP3 POST-UPLOAD VERIFICATION
@@ -94,6 +95,7 @@ class RsyncClient:
                 logger.info(f"Mirror directory empty, downloading {len(files_to_download)} package files from VPS")
         
         # If there are files to download, use rsync with specific file list
+        downloaded_count = 0
         if files_to_download:
             # Build rsync command with specific files
             download_list = []
@@ -138,15 +140,21 @@ class RsyncClient:
                             if line.strip():
                                 logger.info(f"RSYNC: {line}")
                     
-                    # Verify downloaded files
-                    downloaded_files = list(mirror_temp_dir.glob("*.pkg.tar.*"))
-                    actual_downloaded = len(downloaded_files) - (len(cached_file_names) if 'cached_file_names' in locals() else 0)
+                    # Count actual downloaded files by checking which of the files_to_download now exist
+                    downloaded_count = 0
+                    for file_name in files_to_download:
+                        if (mirror_temp_dir / file_name).exists():
+                            downloaded_count += 1
                     
-                    logger.info(f"Downloaded {actual_downloaded} new package files ({duration} seconds)")
+                    logger.info(f"Downloaded {downloaded_count} new package files ({duration} seconds)")
                     
                 except Exception as e:
                     logger.error(f"RSYNC download execution error: {e}")
                     return False
+            else:
+                logger.info("No files to download (empty download list after filtering)")
+        else:
+            logger.info("No new package files to download from VPS")
         
         # Step 3: Sync output directory with mirror (but preserve newly built packages)
         # Only copy from mirror to output_dir if file doesn't exist in output_dir
@@ -178,6 +186,7 @@ class RsyncClient:
         logger.info(f"  - Mirror now has {len(final_mirror_names)} package files")
         logger.info(f"  - VPS has {len(vps_packages_set)} package files")
         logger.info(f"  - Output directory has {len(output_files) + copied_count} package files")
+        logger.info(f"  - Files downloaded in this sync: {downloaded_count}")
         
         # Check for discrepancies with detailed logging
         missing_in_mirror = vps_packages_set - final_mirror_names
