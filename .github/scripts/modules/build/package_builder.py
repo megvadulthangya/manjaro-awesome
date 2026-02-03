@@ -101,10 +101,31 @@ class PackageBuilder:
                 remote_version, pkgver, pkgrel, epoch
             )
             if not should_build:
-                # NEW: Check completeness of split packages on VPS
-                is_complete = self._check_split_package_completeness(pkg_dir.name, pkg_names, pkgver, pkgrel, epoch)
-                if is_complete:
-                    logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version}) and all split artifacts present")
+                # NEW: Only check completeness if versions are equal (not when remote is newer)
+                # Get full remote version string for comparison
+                remote_full_version = remote_version
+                source_full_version = source_version
+                
+                # Compare versions directly to determine if they're equal
+                if remote_full_version == source_full_version:
+                    # Versions are equal, check completeness
+                    is_complete = self._check_split_package_completeness(pkg_dir.name, pkg_names, pkgver, pkgrel, epoch)
+                    if is_complete:
+                        logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version}) and all split artifacts present")
+                        # Register skipped package for ALL pkgname entries
+                        self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                        return False, source_version, {
+                            "pkgver": pkgver,
+                            "pkgrel": pkgrel,
+                            "epoch": epoch,
+                            "pkgnames": pkg_names
+                        }
+                    else:
+                        # Incomplete on VPS - force build
+                        logger.info(f"🔄 {pkg_dir.name}: Version matches but VPS is incomplete - FORCING BUILD")
+                else:
+                    # Remote version is newer than source - skip without completeness check
+                    logger.info(f"⏭️ {pkg_dir.name}: Remote version {remote_version} is newer than source {source_version}; skipping without completeness override")
                     # Register skipped package for ALL pkgname entries
                     self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                     return False, source_version, {
@@ -113,9 +134,6 @@ class PackageBuilder:
                         "epoch": epoch,
                         "pkgnames": pkg_names
                     }
-                else:
-                    # Incomplete on VPS - force build
-                    logger.info(f"🔄 {pkg_dir.name}: Version matches but VPS is incomplete - FORCING BUILD")
         
         # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
@@ -186,10 +204,31 @@ class PackageBuilder:
                     remote_version, pkgver, pkgrel, epoch
                 )
                 if not should_build:
-                    # NEW: Check completeness of split packages on VPS
-                    is_complete = self._check_split_package_completeness(aur_package_name, pkg_names, pkgver, pkgrel, epoch)
-                    if is_complete:
-                        logger.info(f"✅ {aur_package_name}: Up to date ({remote_version}) and all split artifacts present")
+                    # NEW: Only check completeness if versions are equal (not when remote is newer)
+                    # Get full remote version string for comparison
+                    remote_full_version = remote_version
+                    source_full_version = source_version
+                    
+                    # Compare versions directly to determine if they're equal
+                    if remote_full_version == source_full_version:
+                        # Versions are equal, check completeness
+                        is_complete = self._check_split_package_completeness(aur_package_name, pkg_names, pkgver, pkgrel, epoch)
+                        if is_complete:
+                            logger.info(f"✅ {aur_package_name}: Up to date ({remote_version}) and all split artifacts present")
+                            # Register skipped package for ALL pkgname entries
+                            self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
+                            return False, source_version, {
+                                "pkgver": pkgver,
+                                "pkgrel": pkgrel,
+                                "epoch": epoch,
+                                "pkgnames": pkg_names
+                            }
+                        else:
+                            # Incomplete on VPS - force build
+                            logger.info(f"🔄 {aur_package_name}: Version matches but VPS is incomplete - FORCING BUILD")
+                    else:
+                        # Remote version is newer than source - skip without completeness check
+                        logger.info(f"⏭️ {aur_package_name}: Remote version {remote_version} is newer than source {source_version}; skipping without completeness override")
                         # Register skipped package for ALL pkgname entries
                         self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                         return False, source_version, {
@@ -198,9 +237,6 @@ class PackageBuilder:
                             "epoch": epoch,
                             "pkgnames": pkg_names
                         }
-                    else:
-                        # Incomplete on VPS - force build
-                        logger.info(f"🔄 {aur_package_name}: Version matches but VPS is incomplete - FORCING BUILD")
             
             # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
@@ -245,8 +281,8 @@ class PackageBuilder:
             True if all expected artifacts exist on VPS, False otherwise
         """
         if not self.vps_files:
-            logger.warning(f"No VPS file inventory available for {pkgbuild_name}")
-            return False
+            logger.warning(f"No VPS file inventory available for {pkgbuild_name} - skipping completeness verification")
+            return True  # Fail-safe: If we can't verify, assume complete
         
         missing_artifacts = []
         

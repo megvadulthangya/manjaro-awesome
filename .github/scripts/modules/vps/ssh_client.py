@@ -184,11 +184,11 @@ class SSHClient:
             logger.error(f"SSH key not found")
             return []
         
-        # FIX: Use raw string to avoid SyntaxWarning for escape sequences
+        # FIX: Use correct find command with -type f
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            rf'find "{self.remote_dir}" -maxdepth 1 -type \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            rf'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "*.pkg.tar.zst" -o -name "*.pkg.tar.xz" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
