@@ -30,6 +30,7 @@ class PackageBuilder:
         gpg_handler: GPGHandler,
         packager_id: str,
         output_dir: Path,
+        version_tracker,  # Added: VersionTracker for skipped package registration
         debug_mode: bool = False
     ):
         """
@@ -40,12 +41,14 @@ class PackageBuilder:
             gpg_handler: GPGHandler instance for signing
             packager_id: Packager identity string
             output_dir: Directory for built packages
+            version_tracker: VersionTracker instance for tracking skipped packages
             debug_mode: Enable debug logging
         """
         self.version_manager = version_manager
         self.gpg_handler = gpg_handler
         self.packager_id = packager_id
         self.output_dir = output_dir
+        self.version_tracker = version_tracker  # Store version tracker
         self.debug_mode = debug_mode
         
         # Ensure output directory exists
@@ -88,6 +91,8 @@ class PackageBuilder:
             )
             if not should_build:
                 logger.info(f"✅ {pkg_dir.name}: Up to date ({remote_version})")
+                # REGISTER SKIPPED PACKAGE
+                self.version_tracker.register_skipped_package(pkg_dir.name, remote_version)
                 return False, source_version, {
                     "pkgver": pkgver,
                     "pkgrel": pkgrel,
@@ -157,6 +162,8 @@ class PackageBuilder:
                 )
                 if not should_build:
                     logger.info(f"✅ {aur_package_name}: Up to date ({remote_version})")
+                    # REGISTER SKIPPED PACKAGE
+                    self.version_tracker.register_skipped_package(aur_package_name, remote_version)
                     return False, source_version, {
                         "pkgver": pkgver,
                         "pkgrel": pkgrel,
@@ -464,8 +471,11 @@ class PackageBuilder:
                 
                 if built:
                     built_packages.append(f"{pkg_dir.name} ({version})")
+                    # Register target version for cleanup
+                    self.version_tracker.register_package_target_version(pkg_dir.name, version)
                 elif version:
                     skipped_packages.append(f"{pkg_dir.name} ({version})")
+                    # Note: Skipped packages are now registered in audit_and_build_local
                 else:
                     failed_packages.append(pkg_dir.name)
                     
@@ -483,8 +493,11 @@ class PackageBuilder:
                 
                 if built:
                     built_packages.append(f"{aur_name} ({version})")
+                    # Register target version for cleanup
+                    self.version_tracker.register_package_target_version(aur_name, version)
                 elif version:
                     skipped_packages.append(f"{aur_name} ({version})")
+                    # Note: Skipped packages are now registered in audit_and_build_aur
                 else:
                     failed_packages.append(aur_name)
                     
@@ -509,7 +522,8 @@ def create_package_builder(
     gpg_key_id: Optional[str] = None,
     gpg_private_key: Optional[str] = None,
     sign_packages: bool = True,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    version_tracker = None  # Added: VersionTracker for skipped package registration
 ) -> PackageBuilder:
     """
     Create a PackageBuilder instance with all dependencies.
@@ -521,6 +535,7 @@ def create_package_builder(
         gpg_private_key: GPG private key (optional)
         sign_packages: Enable package signing
         debug_mode: Enable debug logging
+        version_tracker: VersionTracker instance for tracking skipped packages
         
     Returns:
         PackageBuilder instance
@@ -541,5 +556,6 @@ def create_package_builder(
         gpg_handler=gpg_handler,
         packager_id=packager_id,
         output_dir=output_dir,
+        version_tracker=version_tracker,  # Pass version tracker
         debug_mode=debug_mode
     )

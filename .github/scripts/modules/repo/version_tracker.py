@@ -67,7 +67,7 @@ class VersionTracker:
         # 🚨 CRITICAL: Explicitly set target version to remote version
         self._package_target_versions[pkg_name] = remote_version
         
-        logger.info(f"📝 Registered SKIPPED package: {pkg_name} (remote: {remote_version}, target: {remote_version})")
+        logger.info(f"📝 Registered skipped package: {pkg_name} ({remote_version})")
     
     def package_exists(self, pkg_name: str, remote_files: List[str]) -> bool:
         """Check if package exists on server"""

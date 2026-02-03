@@ -142,7 +142,8 @@ class PackageBuilderOrchestrator:
             gpg_key_id=self.gpg_key_id,
             gpg_private_key=self.gpg_private_key,
             sign_packages=self.sign_packages,
-            debug_mode=self.debug_mode
+            debug_mode=self.debug_mode,
+            version_tracker=self.version_tracker  # Pass version tracker
         )
         
         logger.info("All modules initialized successfully")
@@ -349,6 +350,11 @@ class PackageBuilderOrchestrator:
         if not upload_success:
             logger.error("Failed to upload files to VPS")
             return False
+        
+        # Step 5.5: VPS orphan signature sweep (ALWAYS RUN)
+        logger.info("Running VPS orphan signature sweep...")
+        package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
+        logger.info(f"VPS orphan sweep complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
         
         # Step 6: Final server cleanup with version tracker
         logger.info("Final server cleanup...")
