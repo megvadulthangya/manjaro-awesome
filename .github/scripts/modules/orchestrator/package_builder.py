@@ -236,7 +236,7 @@ class PackageBuilder:
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            rf'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
@@ -1017,7 +1017,7 @@ class PackageBuilder:
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            rf'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
@@ -1259,14 +1259,14 @@ class PackageBuilder:
             print(f"Skipped:         {summary['skipped']}")
             print(f"Cache hits:      {self.stats['cache_hits']}")
             print(f"Cache misses:    {self.stats['cache_misses']}")
-            print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
-            print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
-            print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
-            print(f"PACKAGER:        {self.packager_id}")
-            print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
-            print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
-            print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
-            print("=" * 60)
+                print(f"Cache efficiency: {self.stats['cache_hits']/(self.stats['cache_hits']+self.stats['cache_misses'])*100:.1f}%")
+                print(f"GPG signing:     {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+                print(f"Package signing: {'Enabled' if self.gpg_handler.sign_packages_enabled else 'Disabled'}")
+                print(f"PACKAGER:        {self.packager_id}")
+                print(f"Zero-Residue:    ✅ Exact-filename-match cleanup active")
+                print(f"Target Version:  ✅ Package target versions registered: {len(self.version_tracker._package_target_versions)}")
+                print(f"Skipped Registry:✅ Skipped packages tracked: {len(self.version_tracker._skipped_packages)}")
+                print("=" * 60)
             
             if self.built_packages:
                 print("\n📦 Built packages:")
