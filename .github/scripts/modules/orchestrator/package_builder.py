@@ -678,7 +678,7 @@ class PackageBuilder:
                     if pkgbuild_content:
                         pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
                     
-                    # Check completeness
+                    # Check completeness with FIXED epoch handling
                     is_complete = True
                     if pkg_names and len(pkg_names) > 1:
                         # This is a multi-package PKGBUILD, check completeness
@@ -729,6 +729,7 @@ class PackageBuilder:
     def _check_split_package_completeness(self, pkgbuild_name: str, pkg_names: List[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """
         NEW: Check if ALL split package artifacts exist on VPS.
+        FIXED: Correct epoch handling (colon instead of hyphen)
         
         Args:
             pkgbuild_name: Name of the PKGBUILD (for logging)
@@ -747,15 +748,19 @@ class PackageBuilder:
         missing_artifacts = []
         
         for pkg_name in pkg_names:
-            # Build expected filename pattern without architecture
+            # FIXED: Build correct version segment with colon for epoch
             if epoch and epoch != '0':
-                base_pattern = f"{pkg_name}-{epoch}-{pkgver}-{pkgrel}"
+                version_segment = f"{epoch}:{pkgver}-{pkgrel}"
             else:
-                base_pattern = f"{pkg_name}-{pkgver}-{pkgrel}"
+                version_segment = f"{pkgver}-{pkgrel}"
+            
+            # Build base pattern with correct version formatting
+            base_pattern = f"{pkg_name}-{version_segment}"
             
             # Check for package files (any architecture, any compression)
             package_found = False
             for vps_file in self.remote_files:
+                # Check if file starts with base_pattern and has package extension
                 if vps_file.startswith(base_pattern) and (vps_file.endswith('.pkg.tar.zst') or vps_file.endswith('.pkg.tar.xz')):
                     package_found = True
                     # Check for corresponding signature
@@ -811,7 +816,7 @@ class PackageBuilder:
                 if pkgbuild_content:
                     pkg_names = ManifestFactory.extract_pkgnames(pkgbuild_content)
                 
-                # Check completeness
+                # Check completeness with FIXED epoch handling
                 is_complete = True
                 if pkg_names and len(pkg_names) > 1:
                     # This is a multi-package PKGBUILD, check completeness
@@ -956,7 +961,83 @@ class PackageBuilder:
         # Set upload success flag for cleanup
         self.version_tracker.set_upload_successful(upload_success)
         
+        # NEW: Post-upload verification (UP3)
+        if upload_success:
+            upload_success = self._verify_upload_completeness(files_to_upload)
+            self.version_tracker.set_upload_successful(upload_success)
+        
         return upload_success
+    
+    def _verify_upload_completeness(self, uploaded_files: List[str]) -> bool:
+        """
+        UP3: Verify that all uploaded artifacts exist on VPS after rsync.
+        
+        Args:
+            uploaded_files: List of local file paths that were uploaded
+            
+        Returns:
+            True if all uploaded files are present on VPS, False otherwise
+        """
+        logger.info("UP3: Verifying upload completeness...")
+        
+        # Get basenames of uploaded files
+        expected_basenames = set(os.path.basename(f) for f in uploaded_files)
+        logger.info(f"Expected on VPS: {len(expected_basenames)} files")
+        
+        # Fetch fresh VPS inventory
+        vps_packages = self.ssh_client.list_remote_packages()
+        vps_signatures = self._get_vps_signatures()
+        vps_db_files = self._get_vps_database_files()
+        
+        # Combine all VPS files
+        vps_all_files = set(vps_packages + vps_signatures + vps_db_files)
+        logger.info(f"Found on VPS: {len(vps_all_files)} files")
+        
+        # Check for missing files
+        missing_files = expected_basenames - vps_all_files
+        
+        if not missing_files:
+            logger.info(f"UP3 OK: all uploaded artifacts present on VPS (expected={len(expected_basenames)}, missing=0)")
+            return True
+        else:
+            missing_list = list(missing_files)
+            logger.error(f"UP3 FAIL: missing on VPS (expected={len(expected_basenames)}, missing={len(missing_files)}) missing: {', '.join(missing_list[:10])}")
+            if len(missing_files) > 10:
+                logger.error(f"... and {len(missing_files) - 10} more")
+            return False
+    
+    def _get_vps_database_files(self) -> List[str]:
+        """Get database files from VPS"""
+        ssh_key_path = "/home/builder/.ssh/id_ed25519"
+        if not os.path.exists(ssh_key_path):
+            logger.error(f"SSH key not found")
+            return []
+        
+        # Get database files
+        ssh_cmd = [
+            "ssh",
+            f"{self.vps_user}@{self.vps_host}",
+            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') if f.strip() and f.strip() != 'NO_FILES']
+                return files
+            else:
+                logger.warning(f"SSH find for database files returned error")
+                return []
+                
+        except Exception as e:
+            logger.error(f"SSH command for database files failed: {e}")
+            return []
     
     def create_artifact_archive_for_github(self) -> Optional[Path]:
         """

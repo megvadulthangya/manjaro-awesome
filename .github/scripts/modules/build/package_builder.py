@@ -287,15 +287,19 @@ class PackageBuilder:
         missing_artifacts = []
         
         for pkg_name in pkg_names:
-            # Build expected filename pattern without architecture
+            # FIXED: Build correct version segment with colon for epoch
             if epoch and epoch != '0':
-                base_pattern = f"{pkg_name}-{epoch}-{pkgver}-{pkgrel}"
+                version_segment = f"{epoch}:{pkgver}-{pkgrel}"
             else:
-                base_pattern = f"{pkg_name}-{pkgver}-{pkgrel}"
+                version_segment = f"{pkgver}-{pkgrel}"
+            
+            # Build base pattern with correct version formatting
+            base_pattern = f"{pkg_name}-{version_segment}"
             
             # Check for package files (any architecture, any compression)
             package_found = False
             for vps_file in self.vps_files:
+                # Check if file starts with base_pattern and has package extension
                 if vps_file.startswith(base_pattern) and (vps_file.endswith('.pkg.tar.zst') or vps_file.endswith('.pkg.tar.xz')):
                     package_found = True
                     # Check for corresponding signature
