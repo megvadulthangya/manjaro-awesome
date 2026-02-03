@@ -87,58 +87,75 @@ class VersionManager:
             return f"{epoch}:{pkgver}-{pkgrel}"
         return f"{pkgver}-{pkgrel}"
     
+    def normalize_version_string(self, version_string: str) -> str:
+        """
+        Canonical version normalization: strip architecture suffix and ensure epoch format.
+        
+        Args:
+            version_string: Raw version string that may include architecture suffix
+            
+        Returns:
+            Normalized version string in format epoch:pkgver-pkgrel
+        """
+        if not version_string:
+            return version_string
+            
+        # Remove known architecture suffixes from the end
+        # These are only stripped if they appear as the final token
+        import re
+        arch_patterns = [r'-x86_64$', r'-any$', r'-i686$', r'-aarch64$', r'-armv7h$', r'-armv6h$']
+        for pattern in arch_patterns:
+            version_string = re.sub(pattern, '', version_string)
+        
+        # Ensure epoch format: if no epoch, prepend "0:"
+        if ':' not in version_string:
+            # Check if there's already a dash in the version part
+            if '-' in version_string:
+                # Already in pkgver-pkgrel format, add epoch
+                version_string = f"0:{version_string}"
+            else:
+                # No dash, assume it's just pkgver, add default pkgrel
+                version_string = f"0:{version_string}-1"
+        
+        return version_string
+    
     def compare_versions(self, remote_version: Optional[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """
-        Compare versions using vercmp-style logic
+        Compare versions using vercmp-style logic with canonical normalization
         
         Returns:
             True if AUR_VERSION > REMOTE_VERSION (should build), False otherwise
         """
         # If no remote version exists, we should build
         if not remote_version:
-            logger.info(f"[DEBUG] Comparing Package: Remote(NONE) vs New({pkgver}-{pkgrel}) -> BUILD TRIGGERED (no remote)")
+            norm_remote = "None"
+            norm_source = self.get_full_version_string(pkgver, pkgrel, epoch)
+            norm_source = self.normalize_version_string(norm_source)
+            logger.info(f"[DEBUG] Comparing Package: Remote({norm_remote}) vs New({norm_source}) -> BUILD TRIGGERED (no remote)")
             return True
         
-        # Parse remote version
-        remote_epoch = None
-        remote_pkgver = None
-        remote_pkgrel = None
+        # Build source version string
+        source_version = self.get_full_version_string(pkgver, pkgrel, epoch)
         
-        # Check if remote has epoch
-        if ':' in remote_version:
-            remote_epoch_str, rest = remote_version.split(':', 1)
-            remote_epoch = remote_epoch_str
-            if '-' in rest:
-                remote_pkgver, remote_pkgrel = rest.split('-', 1)
-            else:
-                remote_pkgver = rest
-                remote_pkgrel = "1"
-        else:
-            if '-' in remote_version:
-                remote_pkgver, remote_pkgrel = remote_version.split('-', 1)
-            else:
-                remote_pkgver = remote_version
-                remote_pkgrel = "1"
-        
-        # Build version strings for comparison
-        new_version_str = f"{epoch or '0'}:{pkgver}-{pkgrel}"
-        remote_version_str = f"{remote_epoch or '0'}:{remote_pkgver}-{remote_pkgrel}"
+        # Normalize both versions
+        norm_remote = self.normalize_version_string(remote_version)
+        norm_source = self.normalize_version_string(source_version)
         
         # Use vercmp for proper version comparison
         try:
-            result = subprocess.run(['vercmp', new_version_str, remote_version_str], 
+            result = subprocess.run(['vercmp', norm_source, norm_remote], 
                                   capture_output=True, text=True, check=False)
             if result.returncode == 0:
                 cmp_result = int(result.stdout.strip())
                 
                 if cmp_result > 0:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> BUILD TRIGGERED (new version is newer)")
+                    logger.info(f"[DEBUG] Comparing Package: Remote(raw={remote_version}, norm={norm_remote}) vs New(raw={source_version}, norm={norm_source}) -> BUILD TRIGGERED (new version is newer)")
                     return True
                 elif cmp_result == 0:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> SKIP (versions identical)")
+                    logger.info(f"[DEBUG] Comparing Package: Remote(raw={remote_version}, norm={norm_remote}) vs New(raw={source_version}, norm={norm_source}) -> SKIP (versions identical)")
                     return False
                 else:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({pkgver}-{pkgrel}) -> SKIP (remote version is newer)")
+                    logger.info(f"[DEBUG] Comparing Package: Remote(raw={remote_version}, norm={norm_remote}) vs New(raw={source_version}, norm={norm_source}) -> SKIP (remote version is newer)")
                     return False
             else:
                 # Fallback to simple comparison if vercmp fails
@@ -151,13 +168,20 @@ class VersionManager:
     
     def _fallback_version_comparison(self, remote_version: str, pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """Fallback version comparison when vercmp is not available"""
-        # Parse remote version
+        # Normalize versions for fallback comparison too
+        source_version = self.get_full_version_string(pkgver, pkgrel, epoch)
+        norm_remote = self.normalize_version_string(remote_version)
+        norm_source = self.normalize_version_string(source_version)
+        
+        logger.info(f"[DEBUG] Fallback comparison: Remote(norm={norm_remote}) vs New(norm={norm_source})")
+        
+        # Parse normalized remote version
         remote_epoch = None
         remote_pkgver = None
         remote_pkgrel = None
         
-        if ':' in remote_version:
-            remote_epoch_str, rest = remote_version.split(':', 1)
+        if ':' in norm_remote:
+            remote_epoch_str, rest = norm_remote.split(':', 1)
             remote_epoch = remote_epoch_str
             if '-' in rest:
                 remote_pkgver, remote_pkgrel = rest.split('-', 1)
@@ -165,48 +189,68 @@ class VersionManager:
                 remote_pkgver = rest
                 remote_pkgrel = "1"
         else:
-            if '-' in remote_version:
-                remote_pkgver, remote_pkgrel = remote_version.split('-', 1)
+            if '-' in norm_remote:
+                remote_pkgver, remote_pkgrel = norm_remote.split('-', 1)
             else:
-                remote_pkgver = remote_version
+                remote_pkgver = norm_remote
                 remote_pkgrel = "1"
         
+        # Parse normalized source version
+        source_epoch = None
+        source_pkgver = None
+        source_pkgrel = None
+        
+        if ':' in norm_source:
+            source_epoch_str, rest = norm_source.split(':', 1)
+            source_epoch = source_epoch_str
+            if '-' in rest:
+                source_pkgver, source_pkgrel = rest.split('-', 1)
+            else:
+                source_pkgver = rest
+                source_pkgrel = "1"
+        else:
+            if '-' in norm_source:
+                source_pkgver, source_pkgrel = norm_source.split('-', 1)
+            else:
+                source_pkgver = norm_source
+                source_pkgrel = "1"
+        
         # Compare epochs first
-        if epoch != remote_epoch:
+        if source_epoch != remote_epoch:
             try:
-                epoch_int = int(epoch or 0)
+                epoch_int = int(source_epoch or 0)
                 remote_epoch_int = int(remote_epoch or 0)
                 if epoch_int > remote_epoch_int:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (epoch {epoch_int} > {remote_epoch_int})")
+                    logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> BUILD TRIGGERED (epoch {epoch_int} > {remote_epoch_int})")
                     return True
                 else:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (epoch {epoch_int} <= {remote_epoch_int})")
+                    logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> SKIP (epoch {epoch_int} <= {remote_epoch_int})")
                     return False
             except ValueError:
-                if epoch != remote_epoch:
-                    logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (epoch string mismatch)")
+                if source_epoch != remote_epoch:
+                    logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> SKIP (epoch string mismatch)")
                     return False
         
         # Compare pkgver
-        if pkgver != remote_pkgver:
-            logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgver different)")
+        if source_pkgver != remote_pkgver:
+            logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> BUILD TRIGGERED (pkgver different)")
             return True
         
         # Compare pkgrel
         try:
             remote_pkgrel_int = int(remote_pkgrel)
-            pkgrel_int = int(pkgrel)
+            pkgrel_int = int(source_pkgrel)
             if pkgrel_int > remote_pkgrel_int:
-                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> BUILD TRIGGERED (pkgrel {pkgrel_int} > {remote_pkgrel_int})")
+                logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> BUILD TRIGGERED (pkgrel {pkgrel_int} > {remote_pkgrel_int})")
                 return True
             else:
-                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (pkgrel {pkgrel_int} <= {remote_pkgrel_int})")
+                logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> SKIP (pkgrel {pkgrel_int} <= {remote_pkgrel_int})")
                 return False
         except ValueError:
-            if pkgrel != remote_pkgrel:
-                logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (pkgrel string mismatch)")
+            if source_pkgrel != remote_pkgrel:
+                logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> SKIP (pkgrel string mismatch)")
                 return False
         
         # Versions are identical
-        logger.info(f"[DEBUG] Comparing Package: Remote({remote_version}) vs New({epoch or ''}{pkgver}-{pkgrel}) -> SKIP (versions identical)")
+        logger.info(f"[DEBUG] Comparing Package: Remote(norm={norm_remote}) vs New(norm={norm_source}) -> SKIP (versions identical)")
         return False

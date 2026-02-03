@@ -106,6 +106,37 @@ class VersionTracker:
         
         return False
     
+    def normalize_version_string(self, version_string: str) -> str:
+        """
+        Canonical version normalization: strip architecture suffix and ensure epoch format.
+        
+        Args:
+            version_string: Raw version string that may include architecture suffix
+            
+        Returns:
+            Normalized version string in format epoch:pkgver-pkgrel
+        """
+        if not version_string:
+            return version_string
+            
+        # Remove known architecture suffixes from the end
+        # These are only stripped if they appear as the final token
+        arch_patterns = [r'-x86_64$', r'-any$', r'-i686$', r'-aarch64$', r'-armv7h$', r'-armv6h$']
+        for pattern in arch_patterns:
+            version_string = re.sub(pattern, '', version_string)
+        
+        # Ensure epoch format: if no epoch, prepend "0:"
+        if ':' not in version_string:
+            # Check if there's already a dash in the version part
+            if '-' in version_string:
+                # Already in pkgver-pkgrel format, add epoch
+                version_string = f"0:{version_string}"
+            else:
+                # No dash, assume it's just pkgver, add default pkgrel
+                version_string = f"0:{version_string}-1"
+        
+        return version_string
+    
     def get_remote_version(self, pkg_name: str, remote_files: List[str]) -> Optional[str]:
         """Get the version of a package from remote server using SRCINFO-based extraction"""
         if not remote_files:
@@ -118,19 +149,34 @@ class VersionTracker:
                 base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
                 parts = base.split('-')
                 
-                # Find where the package name ends
-                for i in range(len(parts) - 2, 0, -1):
+                # Find where the package name ends and version begins
+                # Package name can have multiple hyphenated parts, so we need to find the split point
+                for i in range(1, len(parts)):
                     possible_name = '-'.join(parts[:i])
-                    if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
-                        if len(parts) >= i + 3:
-                            version_part = parts[i]
-                            release_part = parts[i+1]
-                            if i + 1 < len(parts) and parts[i].isdigit() and i + 2 < len(parts):
-                                epoch_part = parts[i]
-                                version_part = parts[i+1]
-                                release_part = parts[i+2]
-                                return f"{epoch_part}:{version_part}-{release_part}"
+                    if possible_name == pkg_name:
+                        # Found the package name boundary
+                        # The remaining parts are: [version, release, architecture] or [epoch, version, release, architecture]
+                        remaining = parts[i:]
+                        
+                        # Handle different cases
+                        if len(remaining) >= 3:
+                            # Check if first part is epoch (all digits)
+                            if remaining[0].isdigit() and len(remaining) >= 4:
+                                # Format: epoch-version-release-architecture
+                                epoch = remaining[0]
+                                version = remaining[1]
+                                release = remaining[2]
+                                # Architecture is remaining[3] but we strip it later
+                                raw_version = f"{epoch}:{version}-{release}"
                             else:
-                                return f"{version_part}-{release_part}"
+                                # Format: version-release-architecture
+                                version = remaining[0]
+                                release = remaining[1]
+                                raw_version = f"{version}-{release}"
+                            
+                            # Normalize to remove architecture and ensure epoch format
+                            normalized = self.normalize_version_string(raw_version)
+                            logger.debug(f"Extracted remote version for {pkg_name}: raw='{raw_version}', normalized='{normalized}'")
+                            return normalized
         
         return None
