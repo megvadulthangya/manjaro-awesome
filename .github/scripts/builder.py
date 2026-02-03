@@ -240,11 +240,11 @@ class PackageBuilderOrchestrator:
             logger.error(f"SSH key not found")
             return []
         
-        # Get signature files
+        # Get signature files - FIX: include both regular files and symlinks
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 -type f -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) -name "*.sig" -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
@@ -523,7 +523,7 @@ class PackageBuilderOrchestrator:
         # Get basenames of uploaded files
         expected_basenames = {f.name for f in uploaded_files}
         
-        # Fetch fresh VPS inventory (packages + signatures + repo DB/files)
+        # Fetch fresh VPS inventory (packages + signatures + repo DB/files) - FIX: include symlinks
         vps_packages = self.ssh_client.list_remote_packages()
         vps_signatures = self._get_vps_signatures()
         vps_db_files = self._get_vps_database_files()
@@ -545,17 +545,17 @@ class PackageBuilderOrchestrator:
             return False
     
     def _get_vps_database_files(self) -> List[str]:
-        """Get database files from VPS"""
+        """Get database files from VPS - FIX: include both regular files and symlinks"""
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
             logger.error(f"SSH key not found")
             return []
         
-        # Get database files
+        # Get database files - FIX: include both regular files and symlinks
         ssh_cmd = [
             "ssh",
             f"{self.vps_user}@{self.vps_host}",
-            f'find "{self.remote_dir}" -maxdepth 1 -type f \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+            f'find "{self.remote_dir}" -maxdepth 1 \( -type f -o -type l \) \( -name "{self.repo_name}.db*" -o -name "{self.repo_name}.files*" \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
         ]
         
         try:
