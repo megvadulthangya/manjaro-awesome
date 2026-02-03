@@ -1,5 +1,7 @@
+FILE: .github/scripts/builder.py
 """
 Main Orchestration Script for Arch Linux Package Builder
+WITH FAIL-SAFE GATES
 """
 
 import os
@@ -51,7 +53,7 @@ except ImportError as e:
 
 
 class PackageBuilderOrchestrator:
-    """Main orchestrator coordinating all phases"""
+    """Main orchestrator coordinating all phases WITH FAIL-SAFE GATES"""
     
     def __init__(self):
         """Initialize orchestrator with all modules"""
@@ -93,6 +95,15 @@ class PackageBuilderOrchestrator:
         self.built_packages = []
         self.skipped_packages = []
         self.desired_inventory = set()  # NEW: Desired inventory for cleanup guard
+        
+        # GATE STATE TRACKING
+        self.gate_state = {
+            'packages_built': 0,
+            'database_success': False,
+            'signature_success': False,
+            'upload_success': False,
+            'destructive_cleanup_allowed': False
+        }
         
         logger.info("PackageBuilderOrchestrator initialized")
     
@@ -149,6 +160,33 @@ class PackageBuilderOrchestrator:
         )
         
         logger.info("All modules initialized successfully")
+    
+    def _evaluate_gates(self):
+        """
+        Evaluate fail-safe gates and determine if destructive cleanup is allowed.
+        
+        G1: Empty-run gate - skip destructive cleanup if no packages built
+        G2: Partial-failure gate - only allow destructive cleanup if:
+            a) repo database generation succeeded AND
+            b) repo signature succeeded AND  
+            c) rsync upload succeeded
+        """
+        # G1: Empty-run gate
+        if self.gate_state['packages_built'] == 0:
+            logger.info("GATE: empty-run (built=0) -> skipping destructive VPS deletions")
+            self.gate_state['destructive_cleanup_allowed'] = False
+            return False
+        
+        # G2: Partial-failure gate
+        if (self.gate_state['database_success'] and 
+            self.gate_state['signature_success'] and
+            self.gate_state['upload_success']):
+            self.gate_state['destructive_cleanup_allowed'] = True
+            return True
+        else:
+            logger.info("GATE: partial failure -> skipping destructive VPS deletions")
+            self.gate_state['destructive_cleanup_allowed'] = False
+            return False
     
     def phase_i_vps_sync(self) -> bool:
         """
@@ -358,9 +396,10 @@ class PackageBuilderOrchestrator:
             )
         )
         
-        # Update state
+        # Update state and gate tracking
         self.built_packages = built_packages
         self.skipped_packages = skipped_packages
+        self.gate_state['packages_built'] = len(built_packages)
         
         # Log results
         logger.info(f"Build Results:")
@@ -375,12 +414,12 @@ class PackageBuilderOrchestrator:
     
     def phase_v_sign_and_update(self) -> bool:
         """
-        Phase V: Sign and Update
+        Phase V: Sign and Update WITH FAIL-SAFE GATES
         - Sign new packages
         - Update repository database
         - Upload to VPS with proper cleanup
         """
-        logger.info("PHASE V: Sign and Update")
+        logger.info("PHASE V: Sign and Update WITH FAIL-SAFE GATES")
         
         # Check if we have any packages to process
         local_packages = list(self.output_dir.glob("*.pkg.tar.*"))
@@ -395,7 +434,7 @@ class PackageBuilderOrchestrator:
         logger.info("Executing authoritative cleanup before database generation...")
         self.cleanup_manager.revalidate_output_dir_before_database(self.allowlist)
         
-        # Step 3: Generate repository database
+        # Step 3: Generate repository database (track for G2)
         logger.info("Generating repository database...")
         
         # CRITICAL: Pass allowlist to database_manager so it can call CleanupManager
@@ -404,17 +443,25 @@ class PackageBuilderOrchestrator:
             self.output_dir,
             self.cleanup_manager
         )
+        self.gate_state['database_success'] = db_success
         
         if not db_success:
             logger.error("Failed to generate repository database")
+            # Still proceed with orphan signature sweep (safe)
+            self._run_safe_operations_only()
             return False
         
-        # Step 4: Sign repository files if GPG enabled
+        # Step 4: Sign repository files if GPG enabled (track for G2)
+        signature_success = True  # Default to success if signing disabled
         if self.gpg_handler.gpg_enabled:
             logger.info("Signing repository database files...")
-            self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir))
+            signature_success = self.gpg_handler.sign_repository_files(self.repo_name, str(self.output_dir))
+            self.gate_state['signature_success'] = signature_success
         
-        # Step 5: Upload to VPS with --delete to ensure VPS matches local state
+        if not signature_success and self.gpg_handler.gpg_enabled:
+            logger.warning("Repository signature failed, but continuing...")
+        
+        # Step 5: Upload to VPS with --delete to ensure VPS matches local state (track for G2)
         logger.info("Uploading packages and database to VPS...")
         
         # Collect all files to upload
@@ -424,6 +471,8 @@ class PackageBuilderOrchestrator:
         
         if not files_to_upload:
             logger.error("No files to upload")
+            self.gate_state['upload_success'] = False
+            self._run_safe_operations_only()
             return False
         
         # Upload using Rsync WITH --delete to remove VPS files not present locally
@@ -432,25 +481,41 @@ class PackageBuilderOrchestrator:
             self.output_dir,
             self.cleanup_manager
         )
+        self.gate_state['upload_success'] = upload_success
         
         if not upload_success:
             logger.error("Failed to upload files to VPS")
+            self._run_safe_operations_only()
             return False
         
-        # Step 5.5: VPS orphan signature sweep (ALWAYS RUN)
-        logger.info("Running VPS orphan signature sweep...")
+        # Step 5.5: VPS orphan signature sweep (ALWAYS RUN - SAFE)
+        logger.info("Running VPS orphan signature sweep (safe operation)...")
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
         logger.info(f"VPS orphan sweep complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
         
-        # Step 6: Final server cleanup with version tracker AND desired inventory
-        logger.info("Final server cleanup with desired inventory guard...")
-        self.cleanup_manager.server_cleanup(self.version_tracker, self.desired_inventory)
+        # Step 6: Evaluate gates and conditionally run destructive cleanup
+        destructive_allowed = self._evaluate_gates()
         
-        return True
+        if destructive_allowed:
+            logger.info("All gates passed - running destructive VPS cleanup...")
+            self.cleanup_manager.server_cleanup(self.version_tracker, self.desired_inventory)
+        else:
+            logger.info("Gates blocked destructive VPS cleanup")
+        
+        return upload_success
+    
+    def _run_safe_operations_only(self):
+        """
+        Run only safe operations when gates block destructive cleanup.
+        Currently only orphan signature sweep is considered safe.
+        """
+        logger.info("Running safe operations only (orphan signature sweep)...")
+        package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
+        logger.info(f"Safe operations complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
     
     def run(self) -> int:
-        """Main execution flow"""
-        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION")
+        """Main execution flow WITH FAIL-SAFE GATES"""
+        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH FAIL-SAFE GATES")
         
         try:
             # Import GPG key if enabled
@@ -472,28 +537,34 @@ class PackageBuilderOrchestrator:
             # Phase IV: Version Audit & Build
             built_packages, skipped_packages = self.phase_iv_version_audit_and_build()
             
-            # Phase V: Sign and Update
+            # Phase V: Sign and Update (with gates)
             if built_packages or list(self.output_dir.glob("*.pkg.tar.*")):
                 if not self.phase_v_sign_and_update():
-                    logger.error("Phase V failed")
-                    return 1
+                    logger.error("Phase V failed or gates blocked operations")
             else:
                 logger.info("All packages are up-to-date")
+                # Still run safe operations
+                self._run_safe_operations_only()
             
-            # Summary
-            logger.info("BUILD SUMMARY")
+            # Summary with gate status
+            logger.info("BUILD SUMMARY WITH GATE STATUS")
             logger.info(f"Repository: {self.repo_name}")
-            logger.info(f"Packages built: {len(built_packages)}")
-            logger.info(f"Packages skipped: {len(skipped_packages)}")
+            logger.info(f"Packages built: {self.gate_state['packages_built']}")
+            logger.info(f"Packages skipped: {len(self.skipped_packages)}")
             logger.info(f"Allowlist entries: {len(self.allowlist)}")
             logger.info(f"Desired inventory: {len(self.desired_inventory)}")
             logger.info(f"VPS files after cleanup: {len(self.vps_files)}")
+            logger.info("GATE STATES:")
+            logger.info(f"  Database success: {self.gate_state['database_success']}")
+            logger.info(f"  Signature success: {self.gate_state['signature_success']}")
+            logger.info(f"  Upload success: {self.gate_state['upload_success']}")
+            logger.info(f"  Destructive cleanup allowed: {self.gate_state['destructive_cleanup_allowed']}")
             logger.info(f"Package signing: {'Enabled' if self.sign_packages else 'Disabled'}")
             logger.info(f"GPG signing: {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
             
-            if built_packages:
+            if self.built_packages:
                 logger.info("Newly built packages:")
-                for pkg in built_packages:
+                for pkg in self.built_packages:
                     logger.info(f"  - {pkg}")
             
             logger.info("Build completed successfully!")

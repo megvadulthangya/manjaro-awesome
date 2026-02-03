@@ -1,5 +1,7 @@
+FILE: .github/scripts/modules/repo/cleanup_manager.py
 """
 Cleanup Manager Module - Handles Zero-Residue policy and server cleanup ONLY
+WITH IMPROVED DELETION OBSERVABILITY
 
 CRITICAL: Version cleanup logic has been moved to SmartCleanup.
 This module now handles ONLY:
@@ -151,6 +153,7 @@ class CleanupManager:
     def cleanup_vps_orphaned_signatures(self) -> Tuple[int, int, int]:
         """
         🚨 VPS ORPHAN SIGNATURE SWEEP: Delete signature files without corresponding packages on VPS.
+        ALWAYS SAFE TO RUN - NO PACKAGES ARE DELETED
         
         Returns:
             Tuple of (package_count, signature_count, deleted_orphan_count)
@@ -237,6 +240,8 @@ class CleanupManager:
         Only keeps packages that match registered target versions.
         Adds safety guard: NEVER delete a package whose pkgname is in desired_inventory.
         
+        IMPROVED OBSERVABILITY: Logs first 20 basenames when deletions occur.
+        
         Args:
             version_tracker: VersionTracker instance with target versions
             desired_inventory: Set of package names that should exist in repository (optional)
@@ -321,12 +326,21 @@ class CleanupManager:
                     files_to_delete.append(vps_file)
                     logger.info(f"Marking for deletion: {filename} (not in target versions)")
         
-        # Execute deletion
+        # Execute deletion with improved observability
         if not files_to_delete:
             logger.info("No zombie packages found on VPS")
             return
         
         logger.info(f"Identified {len(files_to_delete)} zombie packages for deletion")
+        
+        # IMPROVED OBSERVABILITY: Log first 20 basenames
+        if files_to_delete:
+            logger.info(f"Deleting {len(files_to_delete)} remote files (showing first 20):")
+            for i, vps_file in enumerate(files_to_delete[:20]):
+                filename = Path(vps_file).name
+                logger.info(f"  [{i+1}] {filename}")
+            if len(files_to_delete) > 20:
+                logger.info(f"  ... and {len(files_to_delete) - 20} more")
         
         # Delete files in batches
         batch_size = 50
