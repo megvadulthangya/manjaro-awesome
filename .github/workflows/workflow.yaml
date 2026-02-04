@@ -555,49 +555,120 @@ jobs:
           echo "✅ GPG and pacman-key initialization complete"
 
       - name: Setup CachyOS Repository
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "=== Setting up CachyOS Repository ==="
-          
-          # Define BASE_URLs for tier repositories (using https)
-          BASE_URL_V3="https://mirror.cachyos.org/repo/x86_64_v3"
-          BASE_URL_V4="https://mirror.cachyos.org/repo/x86_64_v4"
-          BASE_URL_Z4="https://mirror.cachyos.org/repo/x86_64_v4"
-          
-          echo "Creating /etc/pacman.d/cachyos-repo.conf with correct Server URLs..."
-          
-          # Write repository configuration file with proper https URLs
-          cat > /etc/pacman.d/cachyos-repo.conf << 'EOF'
-          # CachyOS Repository Configuration
-          # Non-tier repo (main cachyos repo)
-          [cachyos]
-          SigLevel = Required
-          Server = https://mirror.cachyos.org/repo/x86_64/cachyos/
-          
-          # Tier repos
-          [cachyos-v3]
-          SigLevel = Required
-          Server = ${BASE_URL_V3}/$repo/
-          
-          [cachyos-v4]
-          SigLevel = Required
-          Server = ${BASE_URL_V4}/$repo/
-          
-          [cachyos-znver4]
-          SigLevel = Required
-          Server = ${BASE_URL_Z4}/$repo/
-          EOF
-          
-          # Replace the variable placeholders with actual URLs
-          sed -i "s|\${BASE_URL_V3}|$BASE_URL_V3|g" /etc/pacman.d/cachyos-repo.conf
-          sed -i "s|\${BASE_URL_V4}|$BASE_URL_V4|g" /etc/pacman.d/cachyos-repo.conf
-          sed -i "s|\${BASE_URL_Z4}|$BASE_URL_Z4|g" /etc/pacman.d/cachyos-repo.conf
-          
-          echo "Enabling CachyOS repository in pacman.conf..."
-          echo "" >> /etc/pacman.conf
-          echo "# CachyOS Repository" >> /etc/pacman.conf
-          echo "Include = /etc/pacman.d/cachyos-repo.conf" >> /etc/pacman.conf
-          
-          echo "✅ CachyOS repository setup complete with https URLs"
+
+          CACHYOS_KEYID="F3B607488DB35A47"
+          PACMAN_CONF="/etc/pacman.conf"
+
+          echo "CACHYOS: KEYRING_CHECK"
+
+          # Ensure keyring exists
+          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
+            echo "CACHYOS: KEYRING_INIT (missing keyring dir/files)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          # Ensure secret key exists for lsign
+          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
+            echo "CACHYOS: KEYRING_INIT (no secret keys found)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          echo "CACHYOS: IMPORT_KEY"
+          ok=0
+          for attempt in 1 2; do
+            echo "CACHYOS: recv-keys attempt=${attempt}"
+            if pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CACHYOS_KEYID}"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "CACHYOS: FAIL recv-keys"
+            exit 1
+          fi
+
+          echo "CACHYOS: LSIGN_KEY"
+          pacman-key --lsign-key "${CACHYOS_KEYID}"
+
+          # Tier detection (znver4/5 > v4 > v3)
+          tier="v3"
+          if command -v gcc >/dev/null 2>&1; then
+            march="$(gcc -march=native -Q --help=target 2>/dev/null | awk '/^\\s+-march=/{print $2; exit}' || true)"
+            if [ "${march:-}" = "znver4" ] || [ "${march:-}" = "znver5" ]; then
+              tier="znver4"
+            fi
+          fi
+          if [ "$tier" != "znver4" ]; then
+            if /lib/ld-linux-x86-64.so.2 --help 2>/dev/null | grep -q "x86-64-v4 (supported"; then
+              tier="v4"
+            else
+              tier="v3"
+            fi
+          fi
+          echo "CACHYOS: TIER_SELECTED=${tier}"
+
+          if [ "$tier" = "v3" ]; then
+            arch_dir="x86_64_v3"
+            repo_a="cachyos-v3"
+            repo_b="cachyos-core-v3"
+            repo_c="cachyos-extra-v3"
+          elif [ "$tier" = "v4" ]; then
+            arch_dir="x86_64_v4"
+            repo_a="cachyos-v4"
+            repo_b="cachyos-core-v4"
+            repo_c="cachyos-extra-v4"
+          else
+            arch_dir="x86_64_v4"
+            repo_a="cachyos-znver4"
+            repo_b="cachyos-core-znver4"
+            repo_c="cachyos-extra-znver4"
+          fi
+
+          echo "CACHYOS: CONFIG_APPEND_CHECK"
+          if grep -qE '^\\[(cachyos|cachyos-(v3|v4|znver4)|cachyos-core-(v3|v4|znver4)|cachyos-extra-(v3|v4|znver4))\\]$' "$PACMAN_CONF"; then
+            echo "CACHYOS: already present -> skipping"
+          else
+            cp -a "$PACMAN_CONF" "${PACMAN_CONF}.bak.cachyos"
+
+            echo "" >> "$PACMAN_CONF"
+            echo "# ==============================" >> "$PACMAN_CONF"
+            echo "# CachyOS repos (repo-only, key via keyserver, no extra installs)" >> "$PACMAN_CONF"
+            echo "# Auto-selected tier: ${tier}" >> "$PACMAN_CONF"
+            echo "# ==============================" >> "$PACMAN_CONF"
+            echo "" >> "$PACMAN_CONF"
+
+            echo "[${repo_a}]" >> "$PACMAN_CONF"
+            echo "SigLevel = Required" >> "$PACMAN_CONF"
+            echo "Server = https://mirror.cachyos.org/repo/${arch_dir}/${repo_a}/" >> "$PACMAN_CONF"
+            echo "" >> "$PACMAN_CONF"
+
+            echo "[${repo_b}]" >> "$PACMAN_CONF"
+            echo "SigLevel = Required" >> "$PACMAN_CONF"
+            echo "Server = https://mirror.cachyos.org/repo/${arch_dir}/${repo_b}/" >> "$PACMAN_CONF"
+            echo "" >> "$PACMAN_CONF"
+
+            echo "[${repo_c}]" >> "$PACMAN_CONF"
+            echo "SigLevel = Required" >> "$PACMAN_CONF"
+            echo "Server = https://mirror.cachyos.org/repo/${arch_dir}/${repo_c}/" >> "$PACMAN_CONF"
+            echo "" >> "$PACMAN_CONF"
+
+            echo "[cachyos]" >> "$PACMAN_CONF"
+            echo "SigLevel = Required" >> "$PACMAN_CONF"
+            echo "Server = https://mirror.cachyos.org/repo/x86_64/cachyos/" >> "$PACMAN_CONF"
+            echo "" >> "$PACMAN_CONF"
+          fi
+
+          echo "CACHYOS: SYNC_DB"
+          pacman -Sy --noconfirm
+          echo "CACHYOS: DONE"
 
       - name: Run Builder with Cache Optimization
         env:
