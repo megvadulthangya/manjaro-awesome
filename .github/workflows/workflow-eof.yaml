@@ -1,0 +1,873 @@
+name: Manjaro Package Builder EOF
+
+on:
+  workflow_dispatch:
+ # schedule:
+ #   - cron: '0 4 * * *'  # Daily at 4 AM UTC
+  push:
+    paths:
+      - 'packages.py'
+      - 'config.py'
+      - '.github/workflows/**'
+      - '**/PKGBUILD'
+
+jobs:
+#  cleanup:
+#    name: Cleanup Disk Space
+#    runs-on: ubuntu-latest
+#    
+#    steps:
+#      - name: Checkout Code
+#        uses: actions/checkout@v4
+#
+#      - name: Disk usage BEFORE cleanup
+#        run: |
+#          echo "=== DF -h BEFORE ==="
+#          df -h
+#          echo "=== FREE -h BEFORE ==="
+#          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
+#
+#      - name: Free Disk Space (Comprehensive Cleanup)
+#        uses: jlumbroso/free-disk-space@main
+#        with:
+#          tool-cache: true
+#          android: true
+#          dotnet: true
+#          haskell: true
+#          large-packages: true
+#          docker-images: true
+#          swap-storage: true
+#          remove-android: true
+#          remove-dotnet: true
+#          remove-haskell: true
+#          remove-docker: true
+#          force-remove-all-additional-packages: true
+#
+#      - name: Disk usage AFTER cleanup
+#        run: |
+#          echo "=== DF -h AFTER ==="
+#          df -h
+#          echo "=== FREE -h AFTER ==="
+#          free -h
+#          echo "=== LSBLK ==="
+#          lsblk
+
+  build-and-deploy:
+    name: Build and Deploy Packages
+#    needs: cleanup
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    env:
+      # REQUIRED SECRETS (GitHub Secrets)
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+      REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
+      
+      # PRIVACY-SECURE PACKAGER IDENTITY (GitHub Secret)
+      PACKAGER_ENV: ${{ secrets.PACKAGER_ENV }}
+      
+      # OPTIONAL SECRETS
+      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      
+      # GITHUB INTERNAL
+      CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPO: ${{ github.repository }}.git
+
+    steps:
+      - name: Checkout Code with Full History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ================== CACHE: Pacman Package Cache ==================
+      # Cache for system packages to avoid re-downloading pacman packages every run
+      - name: Restore Pacman Package Cache
+        uses: actions/cache@v4
+        with:
+          path: /mnt/pacman_cache
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-cache-
+
+      # ================== CACHE: Yay AUR Cache ==================
+      # Cache for AUR packages to avoid re-downloading AUR dependencies
+      - name: Restore Yay AUR Cache
+        uses: actions/cache@v4
+        with:
+          path: /mnt/yay_cache
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          restore-keys: |
+            ${{ runner.os }}-yay-cache-
+
+      # ================== CACHE: VPS Repository Mirror ==================
+      # Cache for remote VPS packages to avoid re-downloading from VPS every run
+      - name: Restore VPS Repository Mirror Cache
+        uses: actions/cache@v4
+        with:
+          path: /mnt/vps_cache
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
+          restore-keys: |
+            ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-
+            ${{ runner.os }}-vps-mirror-cache-
+
+      # ================== CACHE: Built Packages ==================
+      # Cache for previously built packages to avoid rebuilding unchanged packages
+      - name: Restore Built Packages Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /mnt/build_artifacts
+            build_aur
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
+            ${{ runner.os }}-built-packages-cache-
+
+      - name: Initialize Modular Cache with Symlinks
+        run: |
+          echo "=== Initializing Modular Cache with Symlinks ==="
+          
+          mkdir -p /mnt/pacman_cache
+          mkdir -p /mnt/yay_cache
+          mkdir -p /mnt/vps_cache
+          mkdir -p /mnt/build_artifacts
+
+          rm -rf /var/cache/pacman/pkg
+          ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
+
+          mkdir -p /root/.cache
+          ln -sf /mnt/yay_cache /root/.cache/yay
+
+          ln -sf /mnt/vps_cache /tmp/repo_mirror
+          # Use a neutral path for artifacts initially
+          ln -sf /mnt/build_artifacts /tmp/build_artifacts
+
+          chmod -R 777 /mnt
+
+      - name: Install Python and Dependencies
+        run: |
+          echo "=== Installing Python and Core Dependencies ==="
+          pacman -Sy --noconfirm python python-yaml python-setuptools
+          echo "✅ Python installed"
+
+      - name: Run Preflight Checker
+        run: |
+          python3 .github/scripts/syntax.py
+
+      - name: Fix PKGBUILD Epoch Issues
+        run: |
+          echo "=== Fixing PKGBUILD epoch issues ==="
+          
+          # Fix awesome-freedesktop-git PKGBUILD (remove epoch)
+          if [ -f "awesome-freedesktop-git/PKGBUILD" ]; then
+            echo "Fixing awesome-freedesktop-git/PKGBUILD..."
+            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD
+            # Increment pkgrel to ensure new version
+            current_pkgrel=$(grep -oP '^pkgrel=\K\d+' awesome-freedesktop-git/PKGBUILD)
+            if [ -n "$current_pkgrel" ]; then
+              new_pkgrel=$((current_pkgrel + 1))
+              sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" awesome-freedesktop-git/PKGBUILD
+              echo "Updated pkgrel from $current_pkgrel to $new_pkgrel"
+            fi
+          fi
+          
+          # Check for other packages with epoch
+          echo "Checking for other packages with epoch in PKGBUILD..."
+          find . -name "PKGBUILD" -type f -exec grep -l "^epoch=" {} \;
+          
+          echo "✅ PKGBUILD fixes complete"
+
+      - name: Prepare Environment
+        run: |
+          echo "=== Starting Environment Preparation ==="
+          
+          # Display cache status
+          echo "📊 Cache Status Report:"
+          echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Yay cache: $(du -sh /root/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
+          echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages: $(ls -1 /tmp/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          
+          # Skip key signing issues for system updates
+          echo "Setting up pacman without key signing for updates..."
+          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
+          
+          # UPDATE SYSTEM WITHOUT OUR REPOSITORY
+          echo "Updating system (ignoring our repository for now)..."
+          
+          # Save current pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          # Update system with minimal packages first
+          pacman -Syu --noconfirm --needed \
+            git base-devel sudo \
+            python python-pip \
+            python-requests python-gitpython python-yaml \
+            pacman-contrib \
+            curl wget ca-certificates \
+            openssh rsync \
+            netcat iproute2 \
+            jq \
+            gnupg
+            
+          # Install vercmp for proper version comparison
+          if ! command -v vercmp &> /dev/null; then
+            echo "Installing pacman-contrib for vercmp..."
+            pacman -S --noconfirm pacman-contrib
+          fi
+          
+          # Restore pacman.conf
+          mv /etc/pacman.conf.backup /etc/pacman.conf
+          
+          # Create builder user (container invariant)
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          
+          # Set ownership
+          chown -R builder:builder "$(pwd)"
+          
+          # Create build directories with correct permissions (if they don't exist from cache)
+          mkdir -p "$(pwd)/build_aur"
+          chown -R builder:builder "$(pwd)/build_aur"
+          mkdir -p "/tmp/repo_mirror"
+          chown -R builder:builder "/tmp/repo_mirror"
+          
+          # Link yay cache and build artifacts to builder's home
+          mkdir -p /home/builder/.cache
+          ln -sf /mnt/yay_cache /home/builder/.cache/yay
+          ln -sf /mnt/build_artifacts /home/builder/build_artifacts
+          
+          # Optimize makepkg for faster builds
+          echo "Optimizing makepkg configuration..."
+          sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
+          sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
+          sed -i "s/^BUILDENV=.*/BUILDENV=(!distcc color !ccache check !sign)/" /etc/makepkg.conf
+          
+          echo "✅ Environment preparation complete"
+
+      - name: Setup SSH for VPS
+        run: |
+          echo "=== Setting up SSH for VPS connection ==="
+          
+          # Create SSH directory for builder user (container invariant)
+          mkdir -p /home/builder/.ssh
+          chmod 700 /home/builder/.ssh
+          
+          # Write SSH key for VPS
+          echo "Writing SSH key for VPS..."
+          if echo "$VPS_SSH_KEY" | base64 -d >/dev/null 2>&1; then
+            echo "🔑 Key appears to be base64 encoded, decoding..."
+            echo "$VPS_SSH_KEY" | base64 -d > /home/builder/.ssh/id_ed25519
+          else
+            echo "🔑 Key is plain text, writing as-is..."
+            echo "$VPS_SSH_KEY" > /home/builder/.ssh/id_ed25519
+          fi
+          
+          chmod 600 /home/builder/.ssh/id_ed25519
+          
+          # Also add to known_hosts
+          ssh-keyscan -H "$VPS_HOST" >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+          
+          # Create SSH config for reliable connections
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host $VPS_HOST
+            HostName $VPS_HOST
+            User $VPS_USER
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+            ConnectTimeout 30
+            ServerAliveInterval 15
+            ServerAliveCountMax 3
+          EOF
+          
+          chmod 600 /home/builder/.ssh/config
+          chown -R builder:builder /home/builder/.ssh
+          
+          echo "✅ SSH setup for VPS complete"
+
+      - name: Configure Pacman Repository
+        run: |
+          echo "=== Configuring Pacman Repository ==="
+          echo "Repository: $REPO_NAME"
+          echo "Server URL: $REPO_SERVER_URL"
+          
+          if [ -z "$REPO_SERVER_URL" ]; then
+            echo "⚠️ REPO_SERVER_URL is empty - repository will not be configured in pacman.conf"
+            exit 0
+          fi
+          
+          # Check if repository already exists in pacman.conf
+          if grep -q "^\[$REPO_NAME\]" /etc/pacman.conf; then
+            echo "✅ Repository '$REPO_NAME' already exists in pacman.conf"
+            echo "Updating server URL if needed..."
+            
+            sed -i "/\[$REPO_NAME\]/,/^\[/ s|^Server = .*|Server = $REPO_SERVER_URL|" /etc/pacman.conf
+          else
+            echo "➕ Adding repository '$REPO_NAME' to pacman.conf"
+            
+            TEMP_FILE=$(mktemp)
+            cat > "$TEMP_FILE" <<'EOF'
+          
+          # Custom repository: __REPO_NAME__
+          # Repository will be dynamically enabled/disabled by builder.py
+          [__REPO_NAME__]
+          SigLevel = Optional TrustAll
+          Server = __REPO_SERVER_URL__
+          EOF
+          
+            esc_sed() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+            sed -i "s|__REPO_NAME__|$(esc_sed "$REPO_NAME")|g" "$TEMP_FILE"
+            sed -i "s|__REPO_SERVER_URL__|$(esc_sed "$REPO_SERVER_URL")|g" "$TEMP_FILE"
+            
+            cat "$TEMP_FILE" >> /etc/pacman.conf
+            rm -f "$TEMP_FILE"
+          fi
+          
+          echo "=== Pacman.conf repository section ==="
+          grep -A 2 "^\[$REPO_NAME\]" /etc/pacman.conf || echo "ℹ️ Repository not found in pacman.conf"
+          
+          echo ""
+          echo "✅ Pacman repository configuration complete"
+          echo "Note: Repository will be enabled/disabled dynamically by builder.py"
+
+      - name: Rsync Connection Test
+        run: |
+          echo "=== Rsync Connection Test ==="
+          
+          # Test basic connectivity
+          echo "1. Testing internet connectivity..."
+          if ping -c 2 8.8.8.8 >/dev/null 2>&1; then
+            echo "✅ Internet connectivity OK"
+          else
+            echo "⚠️ No internet connectivity via IP - may be a container issue"
+          fi
+          
+          # Test VPS connectivity
+          echo ""
+          echo "2. Testing VPS connectivity..."
+          if timeout 5 nc -z -w 2 "$VPS_HOST" 22; then
+            echo "✅ VPS port 22 is accessible"
+          else
+            echo "❌ Cannot reach VPS on port 22"
+          fi
+          
+          # Test SSH as builder user using the EXACT same options builder.py will use
+          echo ""
+          echo "3. Testing SSH connection as builder user..."
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          
+          if su builder -c "timeout 20 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo SSH_TEST_SUCCESS'" 2>/dev/null; then
+            echo "✅ SSH connection to VPS successful"
+          else
+            echo "❌ SSH connection to VPS failed"
+          fi
+          
+          echo "✅ Rsync tests complete"
+
+      - name: Install Build Dependencies
+        run: |
+          echo "=== Installing Build Dependencies ==="
+          
+          # Save current pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup
+          
+          # Temporarily comment out our repository to avoid 404 errors
+          echo "Temporarily commenting out $REPO_NAME repository for dependency installation..."
+          sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
+          
+          # Install remaining build tools
+          echo "Installing build tools..."
+          pacman -S --needed --noconfirm \
+            appstream appstream-glib \
+            meson ninja cmake \
+            gtk-doc docbook-xsl libxslt \
+            gobject-introspection \
+            autoconf automake libtool pkg-config \
+            patch make gcc binutils \
+            file which tar gzip bzip2 xz zstd \
+            unzip p7zip \
+            dbus polkit \
+            systemd systemd-sysvcompat \
+            arch-install-scripts \
+            ldc po4a dconf
+            
+          # Restore pacman.conf
+          mv /etc/pacman.conf.backup /etc/pacman.conf
+          
+          # Install yay for AUR dependencies (only if not cached)
+          echo "=== Checking yay installation ==="
+          if ! command -v yay &> /dev/null; then
+            echo "Installing yay..."
+            chmod 777 /tmp
+            cd /tmp
+            sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
+            cd yay-bin
+            sudo -u builder makepkg -si --noconfirm
+            cd /
+            rm -rf /tmp/yay-bin
+            
+            # Test yay installation
+            if sudo -u builder yay --version; then
+              echo "✅ yay installed successfully"
+            else
+              echo "❌ yay installation failed"
+            fi
+          else
+            echo "✅ yay already installed (from cache)"
+            sudo -u builder yay --version
+          fi
+          
+          echo "✅ Build dependencies installed"
+
+      - name: Network Diagnostics
+        run: |
+          echo "=== NETWORK DIAGNOSTICS ==="
+          
+          echo "1. Current IP addresses and info:"
+          echo "   - Public IP (for fail2ban):"
+          PUBLIC_IP1=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "Not available")
+          PUBLIC_IP2=$(curl -s --connect-timeout 5 https://checkip.amazonaws.com | tr -d '\n' || echo "Not available")
+          echo "     IP 1: $PUBLIC_IP1"
+          echo "     IP 2: $PUBLIC_IP2"
+          
+          echo ""
+          echo "   - Detailed IP information:"
+          curl -s --connect-timeout 5 https://ipinfo.io/json 2>/dev/null | jq -r '"     IP: " + .ip, "     City: " + .city, "     Region: " + .region, "     Country: " + .country, "     Provider: " + .org' 2>/dev/null || echo "     Could not fetch IP info"
+          
+          echo ""
+          echo "2. Outgoing interface info:"
+          ip route show default 2>/dev/null | head -1 || echo "     Default route not found"
+          echo ""
+          echo "   - Current IP addresses (all interfaces):"
+          ip addr show 2>/dev/null | grep 'inet ' | awk '{print "     " $2 " on " $NF}' 2>/dev/null || echo "     Could not fetch interfaces"
+          
+          echo ""
+          echo "3. DNS configuration:"
+          cat /etc/resolv.conf 2>/dev/null | grep -v '^#' | grep -v '^$' | while read line; do echo "   $line"; done 2>/dev/null || echo "   Could not fetch DNS configuration"
+          
+          echo ""
+          echo "4. GitHub Actions specific information:"
+          echo "     GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo "     GITHUB_RUN_ID: $GITHUB_RUN_ID"
+          echo "     RUNNER_OS: $RUNNER_OS"
+          
+          echo ""
+          echo "5. Download tools:"
+          command -v curl && curl --version | head -1 2>/dev/null || echo "     curl not found"
+          command -v wget && wget --version | head -1 2>/dev/null || echo "     wget not found"
+          command -v rsync && rsync --version | head -1 2>/dev/null || echo "     rsync not found"
+          
+          echo ""
+          echo "6. Availability tests:"
+          echo "   - GitHub:"
+          timeout 5 curl -s -I https://github.com 2>/dev/null | head -1 2>/dev/null || echo "     Not available"
+          echo "   - AUR:"
+          timeout 5 curl -s -I https://aur.archlinux.org 2>/dev/null | head -1 2>/dev/null || echo "     Not available"
+          echo "   - Target VPS ($VPS_HOST):"
+          timeout 5 ping -c 2 "$VPS_HOST" 2>/dev/null | grep "bytes from" 2>/dev/null || echo "     Ping not available"
+          
+          echo ""
+          echo "7. Network connections (current):"
+          ss -tunp 2>/dev/null | grep ESTAB | head -5 | while read line; do echo "   $line"; done 2>/dev/null || echo "   Could not fetch connections"
+          
+          echo ""
+          echo "8. IP address list for fail2ban:"
+          echo "   🔍 FAIL2BAN WHITELIST COMMANDS:"
+          if [ "$PUBLIC_IP1" != "Not available" ]; then
+            echo "   sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+            echo "   # Or for other jail names:"
+            echo "   sudo fail2ban-client set apache-auth addignoreip $PUBLIC_IP1"
+            echo "   # Or iptables:"
+            echo "   sudo iptables -A INPUT -s $PUBLIC_IP1 -j ACCEPT"
+          fi
+          
+          echo ""
+          echo "9. VPS test connection:"
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+          if su builder -c "timeout 15 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo VPS_CONNECTION_OK'" 2>/dev/null; then
+            echo "   ✅ VPS SSH connection working"
+          else
+            echo "   ❌ VPS SSH connection NOT working"
+            echo "   Check fail2ban logs:"
+            echo "   sudo tail -f /var/log/fail2ban.log"
+          fi
+          
+          echo ""
+          echo "10. Package check count (approximate):"
+          if [ -d "." ]; then
+            PKG_COUNT=$(find . -name "PKGBUILD" -type f 2>/dev/null | wc -l)
+            echo "    PKGBUILD file count: $PKG_COUNT"
+            echo "    ~ Check count: $((PKG_COUNT * 2)) (pre and post build checks)"
+          fi
+          
+          echo ""
+          echo "=== DIAGNOSTICS END ==="
+          echo ""
+          echo "⚠️  NOTE: If fail2ban blocks, try this on VPS:"
+          if [ "$PUBLIC_IP1" != "Not available" ]; then
+            echo "    sudo fail2ban-client unban $PUBLIC_IP1"
+            echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
+          fi
+
+      - name: Initialize GPG and Pacman Keyring
+        run: |
+          echo "=== Initializing GPG and Pacman Keyring ==="
+          
+          # Initialize pacman keyring FIRST
+          echo "Initializing pacman keyring..."
+          sudo pacman-key --init
+          
+          # Import GPG key if provided
+          if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_KEY_ID" ]; then
+            echo "Setting up GPG key for repository signing..."
+            
+            # Create temporary directory for GPG
+            TEMP_GNUPG=$(mktemp -d)
+            export GNUPGHOME="$TEMP_GNUPG"
+            
+            # Import private key
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            
+            # Get fingerprint
+            FINGERPRINT=$(gpg --list-keys --with-colons "$GPG_KEY_ID" | grep '^fpr:' | cut -d: -f10 | head -1)
+            
+            if [ -n "$FINGERPRINT" ]; then
+              echo "Setting ultimate trust for key: $FINGERPRINT"
+              echo "$FINGERPRINT:6:" | gpg --import-ownertrust
+              
+              # Export public key and add to pacman keyring
+              gpg --export --armor "$FINGERPRINT" | sudo pacman-key --add -
+              sudo pacman-key --lsign-key "$FINGERPRINT"
+              echo "✅ GPG key added to pacman-key"
+            fi
+            
+            # Clean up
+            unset GNUPGHOME
+            rm -rf "$TEMP_GNUPG"
+          else
+            echo "ℹ️ No GPG key provided, repository will not be signed"
+          fi
+          
+          echo "✅ GPG and pacman-key initialization complete"
+
+      - name: Setup CachyOS Repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Setting up CachyOS Repository ==="
+
+          CACHYOS_KEYID="F3B607488DB35A47"
+          PACMAN_CONF="/etc/pacman.conf"
+
+          echo "CACHYOS: KEYRING_CHECK"
+
+          # Ensure keyring exists
+          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
+            echo "CACHYOS: KEYRING_INIT (missing keyring dir/files)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          # Ensure secret key exists for lsign
+          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
+            echo "CACHYOS: KEYRING_INIT (no secret keys found)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          echo "CACHYOS: IMPORT_KEY"
+          ok=0
+          for attempt in 1 2; do
+            echo "CACHYOS: recv-keys attempt=${attempt}"
+            if pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CACHYOS_KEYID}"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "CACHYOS: FAIL recv-keys"
+            exit 1
+          fi
+
+          echo "CACHYOS: LSIGN_KEY"
+          pacman-key --lsign-key "${CACHYOS_KEYID}"
+
+          # Tier detection (znver4/5 > v4 > v3)
+          tier="v3"
+          if command -v gcc >/dev/null 2>&1; then
+            march="$(gcc -march=native -Q --help=target 2>/dev/null | awk '/^\\s+-march=/{print $2; exit}' || true)"
+            if [ "${march:-}" = "znver4" ] || [ "${march:-}" = "znver5" ]; then
+              tier="znver4"
+            fi
+          fi
+          if [ "$tier" != "znver4" ]; then
+            if /lib/ld-linux-x86-64.so.2 --help 2>/dev/null | grep -q "x86-64-v4 (supported"; then
+              tier="v4"
+            else
+              tier="v3"
+            fi
+          fi
+          echo "CACHYOS: TIER_SELECTED=${tier}"
+
+          if [ "$tier" = "v3" ]; then
+            arch_dir="x86_64_v3"
+            repo_a="cachyos-v3"
+            repo_b="cachyos-core-v3"
+            repo_c="cachyos-extra-v3"
+          elif [ "$tier" = "v4" ]; then
+            arch_dir="x86_64_v4"
+            repo_a="cachyos-v4"
+            repo_b="cachyos-core-v4"
+            repo_c="cachyos-extra-v4"
+          else
+            arch_dir="x86_64_v4"
+            repo_a="cachyos-znver4"
+            repo_b="cachyos-core-znver4"
+            repo_c="cachyos-extra-znver4"
+          fi
+
+          echo "CACHYOS: CONFIG_APPEND_CHECK"
+          # Safe non-regex check using exact section headers
+          if grep -qF -e '[cachyos]' \
+                      -e '[cachyos-v3]' \
+                      -e '[cachyos-core-v3]' \
+                      -e '[cachyos-extra-v3]' \
+                      -e '[cachyos-v4]' \
+                      -e '[cachyos-core-v4]' \
+                      -e '[cachyos-extra-v4]' \
+                      -e '[cachyos-znver4]' \
+                      -e '[cachyos-core-znver4]' \
+                      -e '[cachyos-extra-znver4]' "$PACMAN_CONF"; then
+            echo "CACHYOS: already present -> skipping"
+          else
+            cp -a "$PACMAN_CONF" "${PACMAN_CONF}.bak.cachyos"
+
+            TMP_CACHYOS=$(mktemp)
+            cat > "$TMP_CACHYOS" <<'EOF'
+          
+          # ==============================
+          # CachyOS repos (repo-only, key via keyserver, no extra installs)
+          # Auto-selected tier: __TIER__
+          # ==============================
+          
+          [__REPO_A__]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/__ARCH_DIR__/__REPO_A__/
+          
+          [__REPO_B__]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/__ARCH_DIR__/__REPO_B__/
+          
+          [__REPO_C__]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/__ARCH_DIR__/__REPO_C__/
+          
+          [cachyos]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/x86_64/cachyos/
+          
+          EOF
+          
+            esc_sed() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+            sed -i "s|__TIER__|$(esc_sed "$tier")|g" "$TMP_CACHYOS"
+            sed -i "s|__ARCH_DIR__|$(esc_sed "$arch_dir")|g" "$TMP_CACHYOS"
+            sed -i "s|__REPO_A__|$(esc_sed "$repo_a")|g" "$TMP_CACHYOS"
+            sed -i "s|__REPO_B__|$(esc_sed "$repo_b")|g" "$TMP_CACHYOS"
+            sed -i "s|__REPO_C__|$(esc_sed "$repo_c")|g" "$TMP_CACHYOS"
+
+            cat "$TMP_CACHYOS" >> "$PACMAN_CONF"
+            rm -f "$TMP_CACHYOS"
+          fi
+
+          echo "CACHYOS: SYNC_DB"
+          pacman -Sy --noconfirm
+          echo "CACHYOS: DONE"
+
+      - name: Run Builder with Cache Optimization
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+          PACKAGER_ENV: ${{ secrets.PACKAGER_ENV }}
+          CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GITHUB_REPO: ${{ github.repository }}.git
+          PYTHONPATH: ${{ github.workspace }}/.github/scripts
+          USE_CACHE: "true"  # Enable cache-aware building
+        run: |
+          echo "=== Starting Builder with Cache Optimization ==="
+          # Make builder script executable
+          chmod +x .github/scripts/builder.py
+          
+          echo "📊 Cache Status Before Build:"
+          echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - Built packages in cache: $(ls -1 /home/builder/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "  - VPS mirror cache: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "  - USE_CACHE environment variable: $USE_CACHE"
+          
+          echo "Current directory: $(pwd)"
+          echo "Repository: $GITHUB_REPO"
+          echo "PYTHONPATH: $PYTHONPATH"
+          echo "PACKAGER_ENV status: $([ -n "$PACKAGER_ENV" ] && echo "SET (privacy protected)" || echo "NOT SET - using default")"
+          
+          # Test SSH connection one more time with identical options to builder.py
+          echo "=== Final SSH Test ==="
+          SSH_OPTIONS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o BatchMode=yes -o LogLevel=ERROR"
+          
+          if su builder -c "timeout 25 ssh $SSH_OPTIONS -i /home/builder/.ssh/id_ed25519 $VPS_USER@$VPS_HOST 'echo READY'" 2>/dev/null; then
+            echo "✅ SSH connection confirmed"
+          else
+            echo "⚠️ SSH connection may have issues"
+          fi
+          
+          echo ""
+          echo "=== Repository Status ==="
+          # Check if repository exists but don't fail if it doesn't
+          if [ -n "$REPO_SERVER_URL" ]; then
+            if curl -s -I --connect-timeout 10 "$REPO_SERVER_URL" 2>/dev/null | head -n1 | grep -q "200\|404\|403"; then
+              echo "✅ Repository server is accessible"
+            else
+              echo "⚠️ Repository server is NOT accessible (may be empty or not exist)"
+            fi
+          else
+            echo "ℹ️ REPO_SERVER_URL not set, skipping repository check"
+          fi
+          
+          echo ""
+          echo "=== GPG Environment Check ==="
+          if [ -n "$GPG_KEY_ID" ] && [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "✅ GPG environment variables are set"
+            echo "Key ID present: YES"
+            echo "Private key present: YES"
+          else
+            echo "⚠️ GPG environment variables are NOT set"
+            echo "Key ID present: $([ -n "$GPG_KEY_ID" ] && echo "YES" || echo "NO")"
+            echo "Private key present: $([ -n "$GPG_PRIVATE_KEY" ] && echo "YES" || echo "NO")"
+          fi
+          
+          echo ""
+          echo "=== SRCINFO Versioning Check ==="
+          if command -v makepkg &> /dev/null; then
+            echo "✅ makepkg available for SRCINFO parsing"
+          else
+            echo "❌ makepkg not found - SRCINFO parsing will fail"
+          fi
+          
+          echo ""
+          echo "=== Running Builder Script with Cache Support ==="
+          
+          # Run as builder user with PYTHONPATH set for modular imports
+          su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
+          
+          BUILD_STATUS=$?
+          echo ""
+          echo "=== Build finished with exit code: $BUILD_STATUS ==="
+          
+          if [ -f "builder.log" ]; then
+            echo "=== Last 50 lines of builder.log ==="
+            tail -50 builder.log
+          fi
+          
+          # Check for specific error patterns
+          if grep -i "error\|failed\|exception" build_output.log | tail -20; then
+            echo "=== Errors detected in build output ==="
+          fi
+          
+          exit $BUILD_STATUS
+
+      # ================== SAVE CACHES ==================
+      # Save caches after successful build (or even on failure for debugging)
+      - name: Save Pacman Package Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /mnt/pacman_cache
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+
+      - name: Save Yay AUR Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /mnt/yay_cache
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+
+      - name: Save VPS Repository Mirror Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /mnt/vps_cache
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
+
+      - name: Save Built Packages Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            /mnt/build_artifacts
+            build_aur
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
+
+      - name: Upload Build Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-results-$(date +%Y%m%d-%H%M%S)
+          path: |
+            builder.log
+            build_output.log
+            /mnt/build_artifacts/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Cache Status Report
+        if: always()
+        run: |
+          echo "=== Cache Status Report After Build ==="
+          echo "Pacman cache saved: $(du -sh /mnt/pacman_cache 2>/dev/null | cut -f1 || echo '0')"
+          echo "Built packages in cache: $(ls -1 /mnt/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
+          echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "VPS mirror cache: $(du -sh /mnt/vps_cache 2>/dev/null | cut -f1 || echo '0')"
+          echo ""
+          echo "📊 Cache keys used:"
+          echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
+          echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
+          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}"
+          echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}"
+
+      - name: Cleanup Temporary Directories (Preserve Cache)
+        if: always()
+        run: |
+          echo "=== Cleaning temporary directories (preserving cache) ==="
+          
+          # Cleanup builder temporary directories (but not cache directories)
+          rm -rf /tmp/gpg_home_* 2>/dev/null || true
+          rm -rf /tmp/*.pkg.tar.* 2>/dev/null || true
+          
+          # Cleanup builder home directories (but keep yay cache)
+          rm -rf /home/builder/.cache/mozilla 2>/dev/null || true
+          rm -rf /home/builder/.cache/pip 2>/dev/null || true
+          rm -rf /home/builder/.cache/thumbnails 2>/dev/null || true
+          
+          # Cleanup workspace temporary files (but not built packages)
+          find . -name ".SRCINFO" -type f -delete 2>/dev/null || true
+          find /tmp -name "yay-*" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.log" -type f -not -name "builder.log" -not -name "build_output.log" -delete 2>/dev/null || true
+          
+          echo "✅ Temporary directories cleaned (caches preserved for next run)"
