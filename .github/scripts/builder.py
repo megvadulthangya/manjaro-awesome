@@ -107,6 +107,10 @@ class PackageBuilderOrchestrator:
             'destructive_cleanup_allowed': False
         }
         
+        # Post-repo-enable pacman -Sy tracking
+        self.post_repo_enable_sy_count = 0
+        self.post_repo_enable_sy_ran = False
+        
         logger.info("PackageBuilderOrchestrator initialized")
     
     def _init_modules(self):
@@ -163,6 +167,60 @@ class PackageBuilderOrchestrator:
         
         logger.info("All modules initialized successfully")
     
+    def _run_post_repo_enable_pacman_sy(self) -> bool:
+        """
+        Run post-repo-enable pacman -Sy with exactly-once proof logging.
+        
+        Returns:
+            True if executed or skipped appropriately, False if blocked due to already ran
+        """
+        # Block if already ran
+        if self.post_repo_enable_sy_ran:
+            logger.info("PACMAN_POST_REPO_ENABLE_SY: BLOCKED (already_ran=true)")
+            return False
+        
+        # Check if repository has packages to determine if sync is needed
+        has_packages = len(self.vps_packages) > 0
+        
+        if not has_packages:
+            logger.info("PACMAN_POST_REPO_ENABLE_SY: SKIP (reason=no_packages_in_repo)")
+            return True
+        
+        # Log start
+        logger.info(f"PACMAN_POST_REPO_ENABLE_SY: START (count_before={self.post_repo_enable_sy_count})")
+        
+        try:
+            # Run the command
+            cmd = "sudo pacman -Sy --noconfirm"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                self.post_repo_enable_sy_count += 1
+                self.post_repo_enable_sy_ran = True
+                logger.info(f"PACMAN_POST_REPO_ENABLE_SY: OK (count_after={self.post_repo_enable_sy_count})")
+                return True
+            else:
+                # Even on failure, mark as ran to prevent retries
+                self.post_repo_enable_sy_ran = True
+                logger.error(f"PACMAN_POST_REPO_ENABLE_SY: FAILED (error={result.stderr[:200]})")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.post_repo_enable_sy_ran = True
+            logger.error("PACMAN_POST_REPO_ENABLE_SY: TIMEOUT")
+            return False
+        except Exception as e:
+            self.post_repo_enable_sy_ran = True
+            logger.error(f"PACMAN_POST_REPO_ENABLE_SY: EXCEPTION (error={e})")
+            return False
+    
     def _evaluate_gates(self):
         """
         Evaluate fail-safe gates and determine if destructive cleanup is allowed.
@@ -216,6 +274,10 @@ class PackageBuilderOrchestrator:
         self.vps_files = self.vps_packages + remote_signatures
         
         logger.info(f"Found {len(self.vps_packages)} package files and {len(remote_signatures)} signatures on VPS")
+        
+        # Run post-repo-enable pacman -Sy if repository has packages
+        if not self._run_post_repo_enable_pacman_sy():
+            logger.warning("Post-repo-enable pacman -Sy was blocked or failed")
         
         # Set VPS files in package builder for completeness checks
         self.package_builder.set_vps_files(self.vps_files)
@@ -637,6 +699,9 @@ class PackageBuilderOrchestrator:
             logger.info(f"  Destructive cleanup allowed: {self.gate_state['destructive_cleanup_allowed']}")
             logger.info(f"Package signing: {'Enabled' if self.sign_packages else 'Disabled'}")
             logger.info(f"GPG signing: {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")
+            
+            # Print post-repo-enable pacman -Sy count
+            logger.info(f"PACMAN_POST_REPO_ENABLE_SY_COUNT={self.post_repo_enable_sy_count}")
             
             if self.built_packages:
                 logger.info("Newly built packages:")

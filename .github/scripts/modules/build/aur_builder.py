@@ -22,6 +22,9 @@ class AURBuilder:
         """
         REQUIRED PRECONDITION: Initialize pacman database before any dependency resolution.
         This must run ONCE per build session before any dependency installation.
+        
+        NOTE: This is for dependency resolution only, not the post-repo-enable sync.
+        The post-repo-enable pacman -Sy is handled by the orchestrator with proof logging.
         """
         if self._pacman_initialized:
             return True
@@ -260,4 +263,3 @@ class AURBuilder:
                 if check:
                     raise
                 return e
-
