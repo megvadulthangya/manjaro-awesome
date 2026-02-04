@@ -446,17 +446,15 @@ jobs:
           # Add CachyOS repos if not already present (idempotent)
           if ! grep -q "^\[cachyos\]" /etc/pacman.conf; then
             echo "Adding CachyOS repositories..."
-            cat >> /etc/pacman.conf << 'EOF'
-
-# CachyOS repositories
-[cachyos]
-SigLevel = Required
-Server = https://mirror.cachyos.org/repo/$arch/$repo
-
-[cachyos-v3]
-SigLevel = Required
-Server = https://mirror.cachyos.org/repo/$arch/$repo
-EOF
+            echo '' >> /etc/pacman.conf
+            echo '# CachyOS repositories' >> /etc/pacman.conf
+            echo '[cachyos]' >> /etc/pacman.conf
+            echo 'SigLevel = Required' >> /etc/pacman.conf
+            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
+            echo '' >> /etc/pacman.conf
+            echo '[cachyos-v3]' >> /etc/pacman.conf
+            echo 'SigLevel = Required' >> /etc/pacman.conf
+            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
             echo "CACHYOS_REPO: REPOS_ADDED"
           else
             echo "CachyOS repositories already present in pacman.conf"
