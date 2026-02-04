@@ -259,16 +259,32 @@ jobs:
         run: |
           echo "CACHYOS_REPO: START"
           
-          # Ensure pacman keyring is initialized
-          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.gpg ]; then
+          # Always initialize and populate keyring first
+          pacman-key --init
+          pacman-key --populate archlinux
+          
+          # Check for secret keys, re-initialize if none found
+          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
+            echo "No secret keys found, re-initializing..."
             pacman-key --init
             pacman-key --populate archlinux
+            # Check again
+            if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
+              echo "CACHYOS_REPO: FAIL_NO_SECRET_KEY"
+              exit 1
+            fi
           fi
           
-          # Import and sign CachyOS key (idempotent)
-          pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47
-          pacman-key --lsign-key F3B607488DB35A47
+          # Import CachyOS key (idempotent with retry)
+          if ! pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47; then
+            echo "First recv-keys attempt failed, retrying..."
+            pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47
+          fi
           echo "CACHYOS_REPO: KEY_IMPORTED"
+          
+          # Locally sign the key (idempotent - don't fail if already signed)
+          pacman-key --lsign-key F3B607488DB35A47 || true
+          echo "CACHYOS_REPO: KEY_LSIGNED"
           
           # Add CachyOS repositories if not already present
           if ! grep -q "^\[cachyos-v3\]" /etc/pacman.conf; then
