@@ -5,6 +5,9 @@ import sys
 import py_compile
 import yaml
 import warnings
+import ast
+import io
+import tokenize
 
 
 def find_files_by_extension(root_dir, extensions):
@@ -80,7 +83,7 @@ def check_python_warnings(file_path):
                     if lineno is not None:
                         line_info = f" (line {lineno})"
 
-                    # Optional: show the exact source line to speed up fixing
+                    # Show the exact source line to speed up fixing
                     src_line = ""
                     if isinstance(lineno, int) and lineno >= 1:
                         try:
@@ -105,6 +108,155 @@ def check_python_warnings(file_path):
         return False
     except Exception as e:
         print(f"[FAIL] Python warnings: {file_path} - Unexpected error: {e}")
+        return False
+
+
+def _collect_docstring_start_lines(source, file_path):
+    """
+    Collect line numbers where docstring string-literals begin (module, functions, classes),
+    to avoid flagging docstrings as "regex-like strings".
+    """
+    doc_lines = set()
+    try:
+        tree = ast.parse(source, filename=file_path)
+    except Exception:
+        return doc_lines
+
+    def mark_docstring_line(node):
+        body = getattr(node, "body", None)
+        if not body:
+            return
+        first = body[0]
+        if isinstance(first, ast.Expr):
+            v = getattr(first, "value", None)
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                if hasattr(first, "lineno"):
+                    doc_lines.add(first.lineno)
+
+    # Module docstring
+    mark_docstring_line(tree)
+
+    # Function/class docstrings
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            mark_docstring_line(n)
+
+    return doc_lines
+
+
+def _is_regex_like(text):
+    """
+    Heuristic: treat string as regex-like if it contains common regex metacharacters.
+    This intentionally flags patterns like '-x86_64$' even though they're "safe" strings.
+    """
+    regex_markers = ("\\", "^", "$", "[", "]", "(", ")", "{", "}", "*", "+", "?", "|")
+    return any(ch in text for ch in regex_markers)
+
+
+def _string_token_prefix_and_quote_index(token_text):
+    """
+    Return (prefix_lower, quote_index) for a Python string token like r"..." or '...'.
+    Works for normal, triple-quoted, and prefixed strings.
+    """
+    s = token_text
+    if not s:
+        return "", -1
+
+    # Find first quote character position (single or double quote)
+    qpos_single = s.find("'")
+    qpos_double = s.find('"')
+
+    if qpos_single == -1 and qpos_double == -1:
+        return "", -1
+
+    if qpos_single == -1:
+        qpos = qpos_double
+    elif qpos_double == -1:
+        qpos = qpos_single
+    else:
+        qpos = min(qpos_single, qpos_double)
+
+    prefix = s[:qpos].lower()
+    return prefix, qpos
+
+
+def check_regex_like_strings_require_raw(file_path):
+    """
+    Heuristic check:
+    - Tokenize source.
+    - For each string literal token that looks regex-like (contains regex metacharacters),
+      FAIL if it is not a raw string (no r/R in prefix).
+    - Skip docstrings to reduce false positives.
+    - Skip f-strings (dynamic content, often intentional).
+    """
+    try:
+        source = _read_text_file_with_fallback(file_path)
+        docstring_lines = _collect_docstring_start_lines(source, file_path)
+
+        issues = []
+
+        reader = io.StringIO(source).readline
+        for tok in tokenize.generate_tokens(reader):
+            if tok.type != tokenize.STRING:
+                continue
+
+            tok_text = tok.string
+            lineno = tok.start[0]
+
+            # Skip docstrings by start line
+            if lineno in docstring_lines:
+                continue
+
+            prefix, qidx = _string_token_prefix_and_quote_index(tok_text)
+            if qidx < 0:
+                continue
+
+            # Skip f-strings (unless they are also raw via rf/fr, but keeping it simple)
+            # If you WANT to enforce raw on f-strings too, remove this block.
+            if "f" in prefix and "r" not in prefix:
+                continue
+
+            is_raw = "r" in prefix
+
+            # Evaluate literal to get the actual string content (skip f-strings)
+            if "f" in prefix:
+                # dynamic f-string: only enforce if explicitly non-raw? (skipped above)
+                continue
+
+            try:
+                literal_value = ast.literal_eval(tok_text)
+            except Exception:
+                continue
+
+            if not isinstance(literal_value, str):
+                continue
+
+            if _is_regex_like(literal_value) and not is_raw:
+                # report a concise preview (avoid huge strings)
+                preview = literal_value.strip().replace("\n", "\\n")
+                if len(preview) > 120:
+                    preview = preview[:117] + "..."
+                issues.append((lineno, preview))
+
+        if issues:
+            for lineno, preview in issues:
+                print(
+                    f"[FAIL] Python regex raw-string: {file_path} (line {lineno}) - "
+                    f"Regex-like string literal should be raw (prefix with r'...'): {preview}"
+                )
+            return False
+
+        print(f"[PASS] Python regex raw-string: {file_path}")
+        return True
+
+    except FileNotFoundError:
+        print(f"[FAIL] Python regex raw-string: {file_path} - File not found")
+        return False
+    except tokenize.TokenError as e:
+        print(f"[FAIL] Python regex raw-string: {file_path} - Tokenization error: {e}")
+        return False
+    except Exception as e:
+        print(f"[FAIL] Python regex raw-string: {file_path} - Unexpected error: {e}")
         return False
 
 
@@ -153,9 +305,10 @@ def main():
             print(f"\nChecking {len(python_files)} Python file(s) in '{scripts_dir}' and subdirectories:")
             for py_file in python_files:
                 syntax_ok = check_python_file(py_file)
-                # Run warning check regardless, so you get full signal in one run
                 warnings_ok = check_python_warnings(py_file)
-                if not (syntax_ok and warnings_ok):
+                regex_raw_ok = check_regex_like_strings_require_raw(py_file)
+
+                if not (syntax_ok and warnings_ok and regex_raw_ok):
                     all_checks_passed = False
         else:
             print(f"[INFO] No Python files found in '{scripts_dir}'")
