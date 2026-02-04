@@ -255,63 +255,6 @@ jobs:
           
           echo "✅ Environment preparation complete"
 
-      - name: Setup CachyOS Repository
-        run: |
-          echo "CACHYOS_REPO: START"
-          
-          # Always initialize and populate keyring first
-          pacman-key --init
-          pacman-key --populate archlinux
-          
-          # Check for secret keys, re-initialize if none found
-          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
-            echo "No secret keys found, re-initializing..."
-            pacman-key --init
-            pacman-key --populate archlinux
-            # Check again
-            if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
-              echo "CACHYOS_REPO: FAIL_NO_SECRET_KEY"
-              exit 1
-            fi
-          fi
-          
-          # Import CachyOS key (idempotent with retry)
-          if ! pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47; then
-            echo "First recv-keys attempt failed, retrying..."
-            pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47
-          fi
-          echo "CACHYOS_REPO: KEY_IMPORTED"
-          
-          # Locally sign the key (idempotent - don't fail if already signed)
-          pacman-key --lsign-key F3B607488DB35A47 || true
-          echo "CACHYOS_REPO: KEY_LSIGNED"
-          
-          # Add CachyOS repositories if not already present
-          if ! grep -q "^\[cachyos-v3\]" /etc/pacman.conf; then
-            echo "" >> /etc/pacman.conf
-            echo "# CachyOS Repositories" >> /etc/pacman.conf
-            echo "[cachyos-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos-core-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos-extra-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
-          fi
-          echo "CACHYOS_REPO: REPOS_ADDED"
-          
-          # Refresh repository database
-          pacman -Sy --noconfirm
-          echo "CACHYOS_REPO: SYNC_DONE"
-
       - name: Setup SSH for VPS
         run: |
           echo "=== Setting up SSH for VPS connection ==="
@@ -424,6 +367,100 @@ jobs:
           fi
           
           echo "✅ Rsync tests complete"
+
+      - name: Initialize GPG and Pacman Keyring
+        run: |
+          echo "=== Initializing GPG and Pacman Keyring ==="
+          
+          # Initialize pacman keyring FIRST
+          echo "Initializing pacman keyring..."
+          sudo pacman-key --init
+          
+          # Import GPG key if provided
+          if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_KEY_ID" ]; then
+            echo "Setting up GPG key for repository signing..."
+            
+            # Create temporary directory for GPG
+            TEMP_GNUPG=$(mktemp -d)
+            export GNUPGHOME="$TEMP_GNUPG"
+            
+            # Import private key
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            
+            # Get fingerprint
+            FINGERPRINT=$(gpg --list-keys --with-colons "$GPG_KEY_ID" | grep '^fpr:' | cut -d: -f10 | head -1)
+            
+            if [ -n "$FINGERPRINT" ]; then
+              echo "Setting ultimate trust for key: $FINGERPRINT"
+              echo "$FINGERPRINT:6:" | gpg --import-ownertrust
+              
+              # Export public key and add to pacman keyring
+              gpg --export --armor "$FINGERPRINT" | sudo pacman-key --add -
+              sudo pacman-key --lsign-key "$FINGERPRINT"
+              echo "✅ GPG key added to pacman-key"
+            fi
+            
+            # Clean up
+            unset GNUPGHOME
+            rm -rf "$TEMP_GNUPG"
+          else
+            echo "ℹ️ No GPG key provided, repository will not be signed"
+          fi
+          
+          echo "✅ GPG and pacman-key initialization complete"
+
+      - name: Setup CACHYOS Repository
+        run: |
+          echo "CACHYOS_REPO: START"
+          
+          # Import CachyOS key with retry
+          for i in {1..2}; do
+            echo "Attempt $i to import CachyOS key..."
+            if pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com; then
+              echo "CACHYOS_REPO: KEY_IMPORTED"
+              break
+            fi
+            if [ $i -eq 2 ]; then
+              echo "CACHYOS_REPO: FAIL_NO_KEY_IMPORT"
+              exit 1
+            fi
+            echo "Import failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          # Locally sign the key with retry
+          for i in {1..2}; do
+            echo "Attempt $i to locally sign CachyOS key..."
+            if pacman-key --lsign-key F3B607488DB35A47; then
+              echo "CACHYOS_REPO: KEY_LSIGNED"
+              break
+            fi
+            if [ $i -eq 2 ]; then
+              echo "CACHYOS_REPO: FAIL_LSIGN"
+              exit 1
+            fi
+            echo "Local signing failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          # Add CachyOS repos if not already present (idempotent)
+          if ! grep -q "^\[cachyos\]" /etc/pacman.conf; then
+            echo "Adding CachyOS repositories..."
+            cat >> /etc/pacman.conf << 'EOF'
+
+# CachyOS repositories
+[cachyos]
+SigLevel = Required
+Server = https://mirror.cachyos.org/repo/$arch/$repo
+
+[cachyos-v3]
+SigLevel = Required
+Server = https://mirror.cachyos.org/repo/$arch/$repo
+EOF
+            echo "CACHYOS_REPO: REPOS_ADDED"
+          else
+            echo "CachyOS repositories already present in pacman.conf"
+          fi
 
       - name: Install Build Dependencies
         run: |
@@ -569,47 +606,6 @@ jobs:
             echo "    sudo fail2ban-client unban $PUBLIC_IP1"
             echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
           fi
-
-      - name: Initialize GPG and Pacman Keyring
-        run: |
-          echo "=== Initializing GPG and Pacman Keyring ==="
-          
-          # Initialize pacman keyring FIRST
-          echo "Initializing pacman keyring..."
-          sudo pacman-key --init
-          
-          # Import GPG key if provided
-          if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_KEY_ID" ]; then
-            echo "Setting up GPG key for repository signing..."
-            
-            # Create temporary directory for GPG
-            TEMP_GNUPG=$(mktemp -d)
-            export GNUPGHOME="$TEMP_GNUPG"
-            
-            # Import private key
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-            
-            # Get fingerprint
-            FINGERPRINT=$(gpg --list-keys --with-colons "$GPG_KEY_ID" | grep '^fpr:' | cut -d: -f10 | head -1)
-            
-            if [ -n "$FINGERPRINT" ]; then
-              echo "Setting ultimate trust for key: $FINGERPRINT"
-              echo "$FINGERPRINT:6:" | gpg --import-ownertrust
-              
-              # Export public key and add to pacman keyring
-              gpg --export --armor "$FINGERPRINT" | sudo pacman-key --add -
-              sudo pacman-key --lsign-key "$FINGERPRINT"
-              echo "✅ GPG key added to pacman-key"
-            fi
-            
-            # Clean up
-            unset GNUPGHOME
-            rm -rf "$TEMP_GNUPG"
-          else
-            echo "ℹ️ No GPG key provided, repository will not be signed"
-          fi
-          
-          echo "✅ GPG and pacman-key initialization complete"
 
       - name: Run Builder with Cache Optimization
         env:
