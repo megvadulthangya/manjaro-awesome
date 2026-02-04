@@ -56,6 +56,9 @@ class PackageBuilderOrchestrator:
     
     def __init__(self):
         """Initialize orchestrator with all modules"""
+        # CRITICAL: Single pipeline owner declaration
+        logger.info("PIPELINE_OWNER=builder.py")
+        
         # Pre-flight validation
         EnvironmentValidator.validate_env()
         
