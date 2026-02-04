@@ -633,7 +633,17 @@ jobs:
           fi
 
           echo "CACHYOS: CONFIG_APPEND_CHECK"
-          if grep -qE '^\\[(cachyos|cachyos-(v3|v4|znver4)|cachyos-core-(v3|v4|znver4)|cachyos-extra-(v3|v4|znver4))\\]$' "$PACMAN_CONF"; then
+          # Safe non-regex check using exact section headers
+          if grep -qF -e '[cachyos]' \
+                      -e '[cachyos-v3]' \
+                      -e '[cachyos-core-v3]' \
+                      -e '[cachyos-extra-v3]' \
+                      -e '[cachyos-v4]' \
+                      -e '[cachyos-core-v4]' \
+                      -e '[cachyos-extra-v4]' \
+                      -e '[cachyos-znver4]' \
+                      -e '[cachyos-core-znver4]' \
+                      -e '[cachyos-extra-znver4]' "$PACMAN_CONF"; then
             echo "CACHYOS: already present -> skipping"
           else
             cp -a "$PACMAN_CONF" "${PACMAN_CONF}.bak.cachyos"
