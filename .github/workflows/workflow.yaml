@@ -571,7 +571,7 @@ jobs:
           USE_CACHE: "true"  # Enable cache-aware building
         run: |
           echo "=== Starting Builder with Cache Optimization ==="
-          pacman -Sy
+          # pacman -Sy
           # Make builder script executable
           chmod +x .github/scripts/builder.py
           
