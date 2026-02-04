@@ -107,14 +107,6 @@ def check_python_warnings_invalid_escape(file_path):
 
 # ---- Advisory regex checks (WARN by default, FAIL only if STRICT_REGEX=1) ----
 
-_REGEX_META_CHARS = set("^$[](){}*+?|")
-
-
-def _looks_regexy(s: str) -> bool:
-    """Heuristic: contains typical regex metacharacters (no backslash required)."""
-    return any(ch in _REGEX_META_CHARS for ch in s)
-
-
 def _is_patternish_name(name: str) -> bool:
     n = name.lower()
     return (
@@ -128,23 +120,30 @@ def _is_patternish_name(name: str) -> bool:
     )
 
 
+def _has_backslash(s: str) -> bool:
+    """Only flag regex literals that contain backslash, because those are riskier."""
+    return "\\" in s
+
+
 def _collect_regex_recommendations(file_path):
     """
-    Return list of (lineno, message) recommendations where a string literal looks like a regex
-    and is likely used as a regex pattern (re.* calls or pattern-ish variable assignment).
-    These are recommendations only (WARN), NOT correctness issues.
+    Return list of (lineno, message) recommendations where a string literal is likely a regex
+    AND contains backslashes (\\). This targets future "invalid escape" risk.
+
+    We only warn when:
+      - a string literal is passed as the pattern argument to re.<fn>(...), or
+      - a string literal is assigned into a pattern-ish variable (e.g. *_pattern, *_patterns, regex)
+    AND the literal contains a backslash.
     """
     source = _read_text_file_with_fallback(file_path)
 
     try:
         tree = ast.parse(source, filename=file_path)
     except Exception:
-        # If parsing fails, py_compile already covers syntax errors; skip recommendations.
         return []
 
     recs = []
 
-    # 1) Detect string literals passed into re.<fn>(pattern, ...)
     re_fns = {
         "compile", "search", "match", "fullmatch",
         "sub", "subn", "split", "findall", "finditer",
@@ -152,27 +151,22 @@ def _collect_regex_recommendations(file_path):
 
     class Visitor(ast.NodeVisitor):
         def visit_Call(self, node: ast.Call):
-            # match re.<fn>(...)
             fn = node.func
             if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
                 if fn.value.id == "re" and fn.attr in re_fns and node.args:
                     first = node.args[0]
                     if isinstance(first, ast.Constant) and isinstance(first.value, str):
                         s = first.value
-                        if _looks_regexy(s):
+                        if _has_backslash(s):
                             lineno = getattr(first, "lineno", getattr(node, "lineno", None))
                             if lineno is not None:
                                 preview = s.replace("\n", "\\n")
                                 if len(preview) > 120:
                                     preview = preview[:117] + "..."
-                                recs.append(
-                                    (lineno, f"Consider using a raw string for regex literal: {preview}")
-                                )
+                                recs.append((lineno, f"Regex literal contains backslash; consider raw string: {preview}"))
             self.generic_visit(node)
 
         def visit_Assign(self, node: ast.Assign):
-            # Detect assignments like arch_patterns = ["-x86_64$", ...] or suffix_pattern = "-any$"
-            # ONLY if target name looks pattern-ish.
             target_names = []
             for t in node.targets:
                 if isinstance(t, ast.Name):
@@ -185,13 +179,13 @@ def _collect_regex_recommendations(file_path):
             v = node.value
 
             def handle_string_constant(sc: ast.Constant):
-                if isinstance(sc.value, str) and _looks_regexy(sc.value):
+                if isinstance(sc.value, str) and _has_backslash(sc.value):
                     lineno = getattr(sc, "lineno", getattr(node, "lineno", None))
                     if lineno is not None:
                         preview = sc.value.replace("\n", "\\n")
                         if len(preview) > 120:
                             preview = preview[:117] + "..."
-                        recs.append((lineno, f"Regex-like pattern literal could be raw string: {preview}"))
+                        recs.append((lineno, f"Pattern literal contains backslash; consider raw string: {preview}"))
 
             if isinstance(v, ast.Constant):
                 handle_string_constant(v)
@@ -204,7 +198,6 @@ def _collect_regex_recommendations(file_path):
 
     Visitor().visit(tree)
 
-    # De-dup by (lineno, msg)
     seen = set()
     uniq = []
     for ln, msg in recs:
@@ -218,10 +211,10 @@ def _collect_regex_recommendations(file_path):
 def check_regex_recommendations(file_path):
     """
     Advisory-only:
-    - Print [WARN] lines for regex-like literals used in regex contexts.
+    - Print [WARN] lines ONLY for regex-like literals that contain backslashes.
     - Do NOT fail unless STRICT_REGEX=1.
     """
-    strict = os.getenv("STRICT_REGEX", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+    strict = os.getenv("STRICT_REGEX", "").strip().lower() in {"1", "true", "yes"}
     try:
         recs = _collect_regex_recommendations(file_path)
         if not recs:
