@@ -255,6 +255,47 @@ jobs:
           
           echo "✅ Environment preparation complete"
 
+      - name: Setup CachyOS Repository
+        run: |
+          echo "CACHYOS_REPO: START"
+          
+          # Ensure pacman keyring is initialized
+          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.gpg ]; then
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+          
+          # Import and sign CachyOS key (idempotent)
+          pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47
+          pacman-key --lsign-key F3B607488DB35A47
+          echo "CACHYOS_REPO: KEY_IMPORTED"
+          
+          # Add CachyOS repositories if not already present
+          if ! grep -q "^\[cachyos-v3\]" /etc/pacman.conf; then
+            echo "" >> /etc/pacman.conf
+            echo "# CachyOS Repositories" >> /etc/pacman.conf
+            echo "[cachyos-v3]" >> /etc/pacman.conf
+            echo "SigLevel = Required" >> /etc/pacman.conf
+            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
+            echo "" >> /etc/pacman.conf
+            echo "[cachyos-core-v3]" >> /etc/pacman.conf
+            echo "SigLevel = Required" >> /etc/pacman.conf
+            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
+            echo "" >> /etc/pacman.conf
+            echo "[cachyos-extra-v3]" >> /etc/pacman.conf
+            echo "SigLevel = Required" >> /etc/pacman.conf
+            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
+            echo "" >> /etc/pacman.conf
+            echo "[cachyos]" >> /etc/pacman.conf
+            echo "SigLevel = Required" >> /etc/pacman.conf
+            echo "Server = https://mirror.cachyos.org/repo/\$arch/\$repo" >> /etc/pacman.conf
+          fi
+          echo "CACHYOS_REPO: REPOS_ADDED"
+          
+          # Refresh repository database
+          pacman -Sy --noconfirm
+          echo "CACHYOS_REPO: SYNC_DONE"
+
       - name: Setup SSH for VPS
         run: |
           echo "=== Setting up SSH for VPS connection ==="
@@ -571,7 +612,6 @@ jobs:
           USE_CACHE: "true"  # Enable cache-aware building
         run: |
           echo "=== Starting Builder with Cache Optimization ==="
-          # pacman -Sy
           # Make builder script executable
           chmod +x .github/scripts/builder.py
           
