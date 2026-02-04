@@ -255,6 +255,139 @@ jobs:
           
           echo "✅ Environment preparation complete"
 
+      - name: Setup CachyOS Repository
+        run: |
+          echo "=== Setting up CachyOS Repository ==="
+          
+          # Diagnostic: Show CPU information
+          echo "CACHYOS_REPO: CPU_DIAGNOSTIC_START"
+          lscpu | head -50 2>/dev/null || echo "lscpu not available"
+          echo "CACHYOS_REPO: CPU_DIAGNOSTIC_END"
+          
+          # Initialize keyring
+          echo "CACHYOS_REPO: INITIALIZING_KEYRING"
+          sudo pacman-key --init
+          sudo pacman-key --populate archlinux
+          
+          # Import CachyOS key with retry
+          echo "CACHYOS_REPO: IMPORTING_CACHYOS_KEY"
+          MAX_RETRIES=2
+          RETRY_COUNT=0
+          KEY_ID="F3B607488DB35A47"
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if sudo pacman-key --recv-keys "$KEY_ID" --keyserver keyserver.ubuntu.com; then
+              echo "CACHYOS_REPO: KEY_IMPORT_SUCCESS"
+              break
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "CACHYOS_REPO: KEY_IMPORT_RETRY_$RETRY_COUNT"
+            sleep 2
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "CACHYOS_REPO: KEY_IMPORT_FAILED_AFTER_RETRIES"
+            exit 1
+          fi
+          
+          # Locally sign the CachyOS key
+          sudo pacman-key --lsign-key "$KEY_ID"
+          echo "CACHYOS_REPO: KEY_SIGNED_LOCALLY"
+          
+          # Tier detection
+          echo "CACHYOS_REPO: DETECTING_TIER"
+          TIER="v3"
+          
+          # Check for x86-64-v4 support
+          if /lib/ld-linux-x86-64.so.2 --help 2>&1 | grep -q "x86-64-v4 (supported"; then
+            TIER="v4"
+            echo "CACHYOS_REPO: DETECTED_X86_64_V4"
+          fi
+          
+          # Check for znver4/znver5 (only if v4 was detected)
+          if [ "$TIER" = "v4" ] && command -v gcc &> /dev/null; then
+            if gcc -march=native -Q --help=target 2>&1 | grep -q "znver4\|znver5"; then
+              TIER="znver4"
+              echo "CACHYOS_REPO: DETECTED_ZEN4_ZEN5"
+            fi
+          fi
+          
+          echo "CACHYOS_REPO: TIER_SELECTED=$TIER"
+          
+          # Determine base directory based on tier
+          case "$TIER" in
+            "v3")
+              BASE_DIR="/repo/x86_64_v3"
+              ;;
+            "v4")
+              BASE_DIR="/repo/x86_64_v4"
+              ;;
+            "znver4")
+              BASE_DIR="/repo/x86_64_v4"
+              ;;
+            *)
+              BASE_DIR="/repo/x86_64_v3"
+              ;;
+          esac
+          
+          # Append CachyOS repositories to pacman.conf if not already present
+          echo "CACHYOS_REPO: CONFIGURING_REPOSITORIES"
+          
+          # Non-tier specific cachyos repo
+          if ! grep -q "^\[cachyos\]" /etc/pacman.conf; then
+            echo -e "\n[cachyos]\nSigLevel = Required\nServer = https://mirror.cachyos.org/repo/x86_64/cachyos/" >> /etc/pacman.conf
+            echo "CACHYOS_REPO: ADDED_NON_TIER_REPO"
+          fi
+          
+          # Tier-specific repos
+          case "$TIER" in
+            "v3")
+              if ! grep -q "^\[cachyos-v3\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-v3]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-v3/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-core-v3\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-core-v3]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-core-v3/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-extra-v3\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-extra-v3]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-extra-v3/" >> /etc/pacman.conf
+              fi
+              ;;
+            "v4")
+              if ! grep -q "^\[cachyos-v4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-v4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-v4/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-core-v4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-core-v4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-core-v4/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-extra-v4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-extra-v4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-extra-v4/" >> /etc/pacman.conf
+              fi
+              ;;
+            "znver4")
+              if ! grep -q "^\[cachyos-znver4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-znver4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-znver4/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-core-znver4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-core-znver4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-core-znver4/" >> /etc/pacman.conf
+              fi
+              if ! grep -q "^\[cachyos-extra-znver4\]" /etc/pacman.conf; then
+                echo -e "\n[cachyos-extra-znver4]\nSigLevel = Required\nServer = $BASE_DIR/cachyos-extra-znver4/" >> /etc/pacman.conf
+              fi
+              ;;
+          esac
+          
+          # Sync pacman database
+          echo "CACHYOS_REPO: SYNC_START"
+          if sudo pacman -Sy --noconfirm; then
+            echo "CACHYOS_REPO: SYNC_DONE"
+          else
+            SYNC_RC=$?
+            echo "CACHYOS_REPO: SYNC_FAILED_RC=$SYNC_RC"
+            exit 1
+          fi
+          
+          echo "✅ CachyOS repository setup complete"
+
       - name: Setup SSH for VPS
         run: |
           echo "=== Setting up SSH for VPS connection ==="
@@ -294,73 +427,6 @@ jobs:
           chown -R builder:builder /home/builder/.ssh
           
           echo "✅ SSH setup for VPS complete"
-
-      - name: Add CachyOS Repository with Robust Sync
-        run: |
-          echo "=== Adding CachyOS Repository ==="
-          echo "CACHYOS_REPO: STEP_START"
-          
-          # Enable strict shell for reliable error handling
-          set -euo pipefail
-          
-          # Ensure timeout command is available
-          if ! command -v timeout &> /dev/null; then
-            echo "Installing timeout utility..."
-            pacman -Sy --noconfirm coreutils
-          fi
-          
-          # Add CachyOS repository configuration
-          echo "Adding CachyOS repository to pacman.conf..."
-          cat >> /etc/pacman.conf << 'EOF'
-
-          # CachyOS repository for optimized packages
-          [cachyos-v3]
-          SigLevel = Optional TrustAll
-          Server = https://mirror.cachyos.org/repo/$arch/$repo
-          EOF
-          
-          echo "CACHYOS_REPO: CONFIG_ADDED"
-          
-          # Import CachyOS key with idempotent check
-          echo "Importing CachyOS repository key..."
-          KEY_ID="F3B607488DB35A47"  # CachyOS key ID
-          
-          if pacman-key --list-keys "$KEY_ID" &>/dev/null; then
-            echo "CACHYOS_REPO: KEY_ALREADY_PRESENT"
-          else
-            # Import the key (CachyOS provides it in a keyring package, but we can fetch directly)
-            curl -s https://mirror.cachyos.org/cachyos-repo.rsa.pub | pacman-key --add - || true
-            echo "CACHYOS_REPO: KEY_IMPORTED"
-          fi
-          
-          # Locally sign the key (idempotent)
-          if pacman-key --list-sigs "$KEY_ID" | grep -q "Local signature"; then
-            echo "CACHYOS_REPO: KEY_ALREADY_SIGNED"
-          else
-            pacman-key --lsign-key "$KEY_ID" || echo "CACHYOS_REPO: KEY_SIGN_ATTEMPTED"
-            echo "CACHYOS_REPO: KEY_LSIGNED"
-          fi
-          
-          # Synchronize repository with timeout to prevent hangs
-          echo "CACHYOS_REPO: SYNC_START"
-          if timeout 300 sudo pacman -Sy --noconfirm; then
-            echo "CACHYOS_REPO: SYNC_OK"
-          else
-            SYNC_RC=$?
-            echo "CACHYOS_REPO: SYNC_FAIL rc=$SYNC_RC"
-            exit $SYNC_RC
-          fi
-          
-          # Post-sync validation (does not install anything)
-          echo "CACHYOS_REPO: VALIDATE_START"
-          if sudo pacman -Sl cachyos-v3 >/dev/null 2>&1; then
-            echo "CACHYOS_REPO: VALIDATE_OK"
-          else
-            echo "CACHYOS_REPO: VALIDATE_WARN"
-          fi
-          
-          echo "CACHYOS_REPO: STEP_COMPLETE"
-          echo "✅ CachyOS repository added successfully"
 
       - name: Configure Pacman Repository
         run: |
