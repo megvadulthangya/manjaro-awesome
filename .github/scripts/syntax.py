@@ -6,8 +6,6 @@ import py_compile
 import yaml
 import warnings
 import ast
-import io
-import tokenize
 
 
 def find_files_by_extension(root_dir, extensions):
@@ -47,12 +45,11 @@ def _read_text_file_with_fallback(file_path):
             return f.read()
 
 
-def check_python_warnings(file_path):
-    """Check Python file for invalid escape sequence warnings"""
+def check_python_warnings_invalid_escape(file_path):
+    """Fail only on invalid escape sequence warnings (Python 3.12+ safe)."""
     try:
         source = _read_text_file_with_fallback(file_path)
 
-        # Capture warnings during compilation (compile only, no execution)
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
 
@@ -65,7 +62,6 @@ def check_python_warnings(file_path):
                 print(f"[FAIL] Python warnings: {file_path} - Unexpected error during compilation: {e}")
                 return False
 
-            # Only fail on the specific target: "invalid escape sequence"
             for w in captured:
                 try:
                     category = w.category
@@ -77,13 +73,11 @@ def check_python_warnings(file_path):
                 is_syntax = isinstance(category, type) and issubclass(category, SyntaxWarning)
                 is_depr = isinstance(category, type) and issubclass(category, DeprecationWarning)
 
+                # Fail ONLY on invalid escape sequences
                 if (is_syntax or is_depr) and ("invalid escape sequence" in msg_l):
-                    line_info = ""
                     lineno = getattr(w, "lineno", None)
-                    if lineno is not None:
-                        line_info = f" (line {lineno})"
+                    line_info = f" (line {lineno})" if lineno is not None else ""
 
-                    # Show the exact source line to speed up fixing
                     src_line = ""
                     if isinstance(lineno, int) and lineno >= 1:
                         try:
@@ -111,152 +105,143 @@ def check_python_warnings(file_path):
         return False
 
 
-def _collect_docstring_start_lines(source, file_path):
+# ---- Advisory regex checks (WARN by default, FAIL only if STRICT_REGEX=1) ----
+
+_REGEX_META_CHARS = set("^$[](){}*+?|")
+
+
+def _looks_regexy(s: str) -> bool:
+    """Heuristic: contains typical regex metacharacters (no backslash required)."""
+    return any(ch in _REGEX_META_CHARS for ch in s)
+
+
+def _is_patternish_name(name: str) -> bool:
+    n = name.lower()
+    return (
+        "regex" in n
+        or "pattern" in n
+        or n.endswith("_pat")
+        or n.endswith("_pattern")
+        or n.endswith("_patterns")
+        or n.endswith("patterns")
+        or n.endswith("pattern")
+    )
+
+
+def _collect_regex_recommendations(file_path):
     """
-    Collect line numbers where docstring string-literals begin (module, functions, classes),
-    to avoid flagging docstrings as "regex-like strings".
+    Return list of (lineno, message) recommendations where a string literal looks like a regex
+    and is likely used as a regex pattern (re.* calls or pattern-ish variable assignment).
+    These are recommendations only (WARN), NOT correctness issues.
     """
-    doc_lines = set()
+    source = _read_text_file_with_fallback(file_path)
+
     try:
         tree = ast.parse(source, filename=file_path)
     except Exception:
-        return doc_lines
+        # If parsing fails, py_compile already covers syntax errors; skip recommendations.
+        return []
 
-    def mark_docstring_line(node):
-        body = getattr(node, "body", None)
-        if not body:
-            return
-        first = body[0]
-        if isinstance(first, ast.Expr):
-            v = getattr(first, "value", None)
-            if isinstance(v, ast.Constant) and isinstance(v.value, str):
-                if hasattr(first, "lineno"):
-                    doc_lines.add(first.lineno)
+    recs = []
 
-    # Module docstring
-    mark_docstring_line(tree)
+    # 1) Detect string literals passed into re.<fn>(pattern, ...)
+    re_fns = {
+        "compile", "search", "match", "fullmatch",
+        "sub", "subn", "split", "findall", "finditer",
+    }
 
-    # Function/class docstrings
-    for n in ast.walk(tree):
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            mark_docstring_line(n)
+    class Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call):
+            # match re.<fn>(...)
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+                if fn.value.id == "re" and fn.attr in re_fns and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        s = first.value
+                        if _looks_regexy(s):
+                            lineno = getattr(first, "lineno", getattr(node, "lineno", None))
+                            if lineno is not None:
+                                preview = s.replace("\n", "\\n")
+                                if len(preview) > 120:
+                                    preview = preview[:117] + "..."
+                                recs.append(
+                                    (lineno, f"Consider using a raw string for regex literal: {preview}")
+                                )
+            self.generic_visit(node)
 
-    return doc_lines
+        def visit_Assign(self, node: ast.Assign):
+            # Detect assignments like arch_patterns = ["-x86_64$", ...] or suffix_pattern = "-any$"
+            # ONLY if target name looks pattern-ish.
+            target_names = []
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    target_names.append(t.id)
+
+            if not any(_is_patternish_name(n) for n in target_names):
+                self.generic_visit(node)
+                return
+
+            v = node.value
+
+            def handle_string_constant(sc: ast.Constant):
+                if isinstance(sc.value, str) and _looks_regexy(sc.value):
+                    lineno = getattr(sc, "lineno", getattr(node, "lineno", None))
+                    if lineno is not None:
+                        preview = sc.value.replace("\n", "\\n")
+                        if len(preview) > 120:
+                            preview = preview[:117] + "..."
+                        recs.append((lineno, f"Regex-like pattern literal could be raw string: {preview}"))
+
+            if isinstance(v, ast.Constant):
+                handle_string_constant(v)
+            elif isinstance(v, (ast.List, ast.Tuple, ast.Set)):
+                for elt in v.elts:
+                    if isinstance(elt, ast.Constant):
+                        handle_string_constant(elt)
+
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+
+    # De-dup by (lineno, msg)
+    seen = set()
+    uniq = []
+    for ln, msg in recs:
+        key = (ln, msg)
+        if key not in seen:
+            seen.add(key)
+            uniq.append((ln, msg))
+    return uniq
 
 
-def _is_regex_like(text):
+def check_regex_recommendations(file_path):
     """
-    Heuristic: treat string as regex-like if it contains common regex metacharacters.
-    This intentionally flags patterns like '-x86_64$' even though they're "safe" strings.
+    Advisory-only:
+    - Print [WARN] lines for regex-like literals used in regex contexts.
+    - Do NOT fail unless STRICT_REGEX=1.
     """
-    regex_markers = ("\\", "^", "$", "[", "]", "(", ")", "{", "}", "*", "+", "?", "|")
-    return any(ch in text for ch in regex_markers)
-
-
-def _string_token_prefix_and_quote_index(token_text):
-    """
-    Return (prefix_lower, quote_index) for a Python string token like r"..." or '...'.
-    Works for normal, triple-quoted, and prefixed strings.
-    """
-    s = token_text
-    if not s:
-        return "", -1
-
-    # Find first quote character position (single or double quote)
-    qpos_single = s.find("'")
-    qpos_double = s.find('"')
-
-    if qpos_single == -1 and qpos_double == -1:
-        return "", -1
-
-    if qpos_single == -1:
-        qpos = qpos_double
-    elif qpos_double == -1:
-        qpos = qpos_single
-    else:
-        qpos = min(qpos_single, qpos_double)
-
-    prefix = s[:qpos].lower()
-    return prefix, qpos
-
-
-def check_regex_like_strings_require_raw(file_path):
-    """
-    Heuristic check:
-    - Tokenize source.
-    - For each string literal token that looks regex-like (contains regex metacharacters),
-      FAIL if it is not a raw string (no r/R in prefix).
-    - Skip docstrings to reduce false positives.
-    - Skip f-strings (dynamic content, often intentional).
-    """
+    strict = os.getenv("STRICT_REGEX", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
     try:
-        source = _read_text_file_with_fallback(file_path)
-        docstring_lines = _collect_docstring_start_lines(source, file_path)
+        recs = _collect_regex_recommendations(file_path)
+        if not recs:
+            print(f"[PASS] Python regex advisory: {file_path}")
+            return True
 
-        issues = []
+        for ln, msg in recs:
+            print(f"[WARN] Python regex advisory: {file_path} (line {ln}) - {msg}")
 
-        reader = io.StringIO(source).readline
-        for tok in tokenize.generate_tokens(reader):
-            if tok.type != tokenize.STRING:
-                continue
-
-            tok_text = tok.string
-            lineno = tok.start[0]
-
-            # Skip docstrings by start line
-            if lineno in docstring_lines:
-                continue
-
-            prefix, qidx = _string_token_prefix_and_quote_index(tok_text)
-            if qidx < 0:
-                continue
-
-            # Skip f-strings (unless they are also raw via rf/fr, but keeping it simple)
-            # If you WANT to enforce raw on f-strings too, remove this block.
-            if "f" in prefix and "r" not in prefix:
-                continue
-
-            is_raw = "r" in prefix
-
-            # Evaluate literal to get the actual string content (skip f-strings)
-            if "f" in prefix:
-                # dynamic f-string: only enforce if explicitly non-raw? (skipped above)
-                continue
-
-            try:
-                literal_value = ast.literal_eval(tok_text)
-            except Exception:
-                continue
-
-            if not isinstance(literal_value, str):
-                continue
-
-            if _is_regex_like(literal_value) and not is_raw:
-                # report a concise preview (avoid huge strings)
-                preview = literal_value.strip().replace("\n", "\\n")
-                if len(preview) > 120:
-                    preview = preview[:117] + "..."
-                issues.append((lineno, preview))
-
-        if issues:
-            for lineno, preview in issues:
-                print(
-                    f"[FAIL] Python regex raw-string: {file_path} (line {lineno}) - "
-                    f"Regex-like string literal should be raw (prefix with r'...'): {preview}"
-                )
+        if strict:
+            print(f"[FAIL] Python regex advisory: {file_path} - STRICT_REGEX enabled")
             return False
 
-        print(f"[PASS] Python regex raw-string: {file_path}")
         return True
 
     except FileNotFoundError:
-        print(f"[FAIL] Python regex raw-string: {file_path} - File not found")
-        return False
-    except tokenize.TokenError as e:
-        print(f"[FAIL] Python regex raw-string: {file_path} - Tokenization error: {e}")
+        print(f"[FAIL] Python regex advisory: {file_path} - File not found")
         return False
     except Exception as e:
-        print(f"[FAIL] Python regex raw-string: {file_path} - Unexpected error: {e}")
+        print(f"[FAIL] Python regex advisory: {file_path} - Unexpected error: {e}")
         return False
 
 
@@ -296,7 +281,6 @@ def main():
 
     all_checks_passed = True
 
-    # Check Python files in .github/scripts/ and subdirectories
     scripts_dir = ".github/scripts"
     if os.path.exists(scripts_dir):
         python_files = find_files_by_extension(scripts_dir, [".py"])
@@ -305,17 +289,16 @@ def main():
             print(f"\nChecking {len(python_files)} Python file(s) in '{scripts_dir}' and subdirectories:")
             for py_file in python_files:
                 syntax_ok = check_python_file(py_file)
-                warnings_ok = check_python_warnings(py_file)
-                regex_raw_ok = check_regex_like_strings_require_raw(py_file)
+                warnings_ok = check_python_warnings_invalid_escape(py_file)
+                regex_adv_ok = check_regex_recommendations(py_file)
 
-                if not (syntax_ok and warnings_ok and regex_raw_ok):
+                if not (syntax_ok and warnings_ok and regex_adv_ok):
                     all_checks_passed = False
         else:
             print(f"[INFO] No Python files found in '{scripts_dir}'")
     else:
         print(f"[WARNING] Directory '{scripts_dir}' does not exist")
 
-    # Check YAML files in .github/workflows/
     workflows_dir = ".github/workflows"
     if os.path.exists(workflows_dir):
         yaml_files = find_files_by_extension(workflows_dir, [".yaml", ".yml", ".bckp"])
@@ -330,7 +313,6 @@ def main():
     else:
         print(f"[WARNING] Directory '{workflows_dir}' does not exist")
 
-    # Check required environment variables
     print("\nChecking environment variables:")
     required_vars = ["VPS_USER", "VPS_HOST", "VPS_SSH_KEY", "REPO_SERVER_URL"]
     if not check_env_vars(required_vars):
