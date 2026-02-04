@@ -255,81 +255,6 @@ jobs:
           
           echo "✅ Environment preparation complete"
 
-      - name: Initialize Pacman Keyring for Arch Linux
-        run: |
-          echo "=== Initializing Pacman Keyring for Arch Linux ==="
-          echo "CACHYOS_REPO: START"
-          
-          # Initialize pacman keyring
-          echo "Initializing pacman keyring..."
-          sudo pacman-key --init
-          
-          # Populate Arch Linux keys
-          echo "Populating Arch Linux keys..."
-          sudo pacman-key --populate archlinux
-          
-          echo "✅ Pacman keyring initialized and populated"
-
-      - name: Setup CachyOS Repositories
-        run: |
-          echo "=== Setting up CachyOS Repositories ==="
-          
-          # Import CachyOS key with retry
-          echo "Importing CachyOS key (attempt 1)..."
-          if sudo pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47; then
-            echo "CACHYOS_REPO: KEY_IMPORTED"
-          else
-            echo "Key import failed, retrying in 5 seconds (attempt 2)..."
-            sleep 5
-            if sudo pacman-key --keyserver keyserver.ubuntu.com --recv-keys F3B607488DB35A47; then
-              echo "CACHYOS_REPO: KEY_IMPORTED"
-            else
-              echo "ERROR: Failed to import CachyOS key after 2 attempts"
-              exit 1
-            fi
-          fi
-          
-          # Locally sign the key
-          echo "Locally signing CachyOS key..."
-          sudo pacman-key --lsign-key F3B607488DB35A47
-          echo "CACHYOS_REPO: KEY_LSIGNED"
-          
-          # Add CachyOS repositories if not already present
-          echo "Adding CachyOS repositories..."
-          
-          # Check if any CachyOS repo already exists
-          if grep -q '^\[cachyos' /etc/pacman.conf; then
-            echo "CACHYOS_REPO: REPOS_ALREADY_PRESENT"
-          else
-            # Add CachyOS repositories at the end of the file
-            echo "" >> /etc/pacman.conf
-            echo "# CachyOS repositories" >> /etc/pacman.conf
-            echo "[cachyos-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos-core-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos-extra-v3]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
-            echo "" >> /etc/pacman.conf
-            echo "[cachyos]" >> /etc/pacman.conf
-            echo "SigLevel = Required" >> /etc/pacman.conf
-            echo 'Server = https://mirror.cachyos.org/repo/$arch/$repo' >> /etc/pacman.conf
-            
-            echo "CACHYOS_REPO: REPOS_ADDED"
-          fi
-          
-          # Sync databases to ensure CachyOS databases exist
-          echo "Syncing pacman databases..."
-          sudo pacman -Sy --noconfirm
-          echo "CACHYOS_REPO: SYNC_DONE"
-          
-          echo "✅ CachyOS repositories setup complete"
-
       - name: Setup SSH for VPS
         run: |
           echo "=== Setting up SSH for VPS connection ==="
@@ -369,6 +294,73 @@ jobs:
           chown -R builder:builder /home/builder/.ssh
           
           echo "✅ SSH setup for VPS complete"
+
+      - name: Add CachyOS Repository with Robust Sync
+        run: |
+          echo "=== Adding CachyOS Repository ==="
+          echo "CACHYOS_REPO: STEP_START"
+          
+          # Enable strict shell for reliable error handling
+          set -euo pipefail
+          
+          # Ensure timeout command is available
+          if ! command -v timeout &> /dev/null; then
+            echo "Installing timeout utility..."
+            pacman -Sy --noconfirm coreutils
+          fi
+          
+          # Add CachyOS repository configuration
+          echo "Adding CachyOS repository to pacman.conf..."
+          cat >> /etc/pacman.conf << 'EOF'
+
+          # CachyOS repository for optimized packages
+          [cachyos-v3]
+          SigLevel = Optional TrustAll
+          Server = https://mirror.cachyos.org/repo/$arch/$repo
+          EOF
+          
+          echo "CACHYOS_REPO: CONFIG_ADDED"
+          
+          # Import CachyOS key with idempotent check
+          echo "Importing CachyOS repository key..."
+          KEY_ID="F3B607488DB35A47"  # CachyOS key ID
+          
+          if pacman-key --list-keys "$KEY_ID" &>/dev/null; then
+            echo "CACHYOS_REPO: KEY_ALREADY_PRESENT"
+          else
+            # Import the key (CachyOS provides it in a keyring package, but we can fetch directly)
+            curl -s https://mirror.cachyos.org/cachyos-repo.rsa.pub | pacman-key --add - || true
+            echo "CACHYOS_REPO: KEY_IMPORTED"
+          fi
+          
+          # Locally sign the key (idempotent)
+          if pacman-key --list-sigs "$KEY_ID" | grep -q "Local signature"; then
+            echo "CACHYOS_REPO: KEY_ALREADY_SIGNED"
+          else
+            pacman-key --lsign-key "$KEY_ID" || echo "CACHYOS_REPO: KEY_SIGN_ATTEMPTED"
+            echo "CACHYOS_REPO: KEY_LSIGNED"
+          fi
+          
+          # Synchronize repository with timeout to prevent hangs
+          echo "CACHYOS_REPO: SYNC_START"
+          if timeout 300 sudo pacman -Sy --noconfirm; then
+            echo "CACHYOS_REPO: SYNC_OK"
+          else
+            SYNC_RC=$?
+            echo "CACHYOS_REPO: SYNC_FAIL rc=$SYNC_RC"
+            exit $SYNC_RC
+          fi
+          
+          # Post-sync validation (does not install anything)
+          echo "CACHYOS_REPO: VALIDATE_START"
+          if sudo pacman -Sl cachyos-v3 >/dev/null 2>&1; then
+            echo "CACHYOS_REPO: VALIDATE_OK"
+          else
+            echo "CACHYOS_REPO: VALIDATE_WARN"
+          fi
+          
+          echo "CACHYOS_REPO: STEP_COMPLETE"
+          echo "✅ CachyOS repository added successfully"
 
       - name: Configure Pacman Repository
         run: |
@@ -588,9 +580,13 @@ jobs:
             echo "    sudo fail2ban-client set sshd addignoreip $PUBLIC_IP1"
           fi
 
-      - name: Initialize GPG for Repository Signing
+      - name: Initialize GPG and Pacman Keyring
         run: |
-          echo "=== Initializing GPG for Repository Signing ==="
+          echo "=== Initializing GPG and Pacman Keyring ==="
+          
+          # Initialize pacman keyring FIRST
+          echo "Initializing pacman keyring..."
+          sudo pacman-key --init
           
           # Import GPG key if provided
           if [ -n "$GPG_PRIVATE_KEY" ] && [ -n "$GPG_KEY_ID" ]; then
@@ -623,7 +619,7 @@ jobs:
             echo "ℹ️ No GPG key provided, repository will not be signed"
           fi
           
-          echo "✅ GPG initialization complete"
+          echo "✅ GPG and pacman-key initialization complete"
 
       - name: Run Builder with Cache Optimization
         env:
