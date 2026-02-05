@@ -162,29 +162,29 @@ jobs:
       - name: Run Preflight Checker
         run: |
           python3 .github/scripts/syntax.py
-
-      - name: Fix PKGBUILD Epoch Issues
-        run: |
-          echo "=== Fixing PKGBUILD epoch issues ==="
-          
-          # Fix awesome-freedesktop-git PKGBUILD (remove epoch)
-          if [ -f "awesome-freedesktop-git/PKGBUILD" ]; then
-            echo "Fixing awesome-freedesktop-git/PKGBUILD..."
-            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD
-            # Increment pkgrel to ensure new version
-            current_pkgrel=$(grep -oP '^pkgrel=\K\d+' awesome-freedesktop-git/PKGBUILD)
-            if [ -n "$current_pkgrel" ]; then
-              new_pkgrel=$((current_pkgrel + 1))
-              sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" awesome-freedesktop-git/PKGBUILD
-              echo "Updated pkgrel from $current_pkgrel to $new_pkgrel"
-            fi
-          fi
-          
-          # Check for other packages with epoch
-          echo "Checking for other packages with epoch in PKGBUILD..."
-          find . -name "PKGBUILD" -type f -exec grep -l "^epoch=" {} \;
-          
-          echo "✅ PKGBUILD fixes complete"
+#
+#      - name: Fix PKGBUILD Epoch Issues
+#        run: |
+#          echo "=== Fixing PKGBUILD epoch issues ==="
+#          
+#          # Fix awesome-freedesktop-git PKGBUILD (remove epoch)
+#          if [ -f "awesome-freedesktop-git/PKGBUILD" ]; then
+#            echo "Fixing awesome-freedesktop-git/PKGBUILD..."
+#            sed -i '/^epoch=/d' awesome-freedesktop-git/PKGBUILD
+#            # Increment pkgrel to ensure new version
+#            current_pkgrel=$(grep -oP '^pkgrel=\K\d+' awesome-freedesktop-git/PKGBUILD)
+#            if [ -n "$current_pkgrel" ]; then
+#              new_pkgrel=$((current_pkgrel + 1))
+#              sed -i "s/^pkgrel=.*/pkgrel=$new_pkgrel/" awesome-freedesktop-git/PKGBUILD
+#              echo "Updated pkgrel from $current_pkgrel to $new_pkgrel"
+#            fi
+#          fi
+#          
+#          # Check for other packages with epoch
+#          echo "Checking for other packages with epoch in PKGBUILD..."
+#          find . -name "PKGBUILD" -type f -exec grep -l "^epoch=" {} \;
+#          
+#          echo "✅ PKGBUILD fixes complete"
 
       - name: Prepare Environment
         run: |
