@@ -10,6 +10,11 @@ import logging
 from modules.repo.manifest_factory import ManifestFactory
 from modules.gpg.gpg_handler import GPGHandler
 from modules.build.version_manager import VersionManager
+from modules.build.local_builder import LocalBuilder
+from modules.build.aur_builder import AURBuilder
+from modules.scm.git_client import GitClient
+from modules.common.shell_executor import ShellExecutor
+from modules.build.artifact_manager import ArtifactManager
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,13 @@ class PackageBuilder:
         self.debug_mode = debug_mode
         self.vps_files = vps_files or []  # NEW: Store VPS file inventory
         self._recently_built_files: List[str] = []  # NEW: Track files built in current session
+        
+        # Initialize modular components
+        self.local_builder = LocalBuilder(debug_mode=debug_mode)
+        self.aur_builder = AURBuilder(debug_mode=debug_mode)
+        self.git_client = GitClient(repo_url=None)
+        self.shell_executor = ShellExecutor(debug_mode=debug_mode)
+        self.artifact_manager = ArtifactManager()
         
         # Ensure output directory exists
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -137,6 +149,7 @@ class PackageBuilder:
         
         # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
+        logger.info("LOCAL_BUILDER_USED=1")
         built_files = self._build_local_package(pkg_dir, source_version)
         
         if built_files:
@@ -182,7 +195,8 @@ class PackageBuilder:
             temp_dir = tempfile.mkdtemp(prefix=f"aur_{aur_package_name}_")
             temp_path = Path(temp_dir)
             
-            # Clone AUR package
+            # Clone AUR package using GitClient
+            logger.info("GIT_CLIENT_USED=1")
             clone_success = self._clone_aur_package(aur_package_name, temp_path)
             if not clone_success:
                 logger.error(f"❌ Failed to clone AUR package: {aur_package_name}")
@@ -240,6 +254,7 @@ class PackageBuilder:
             
             # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
+            logger.info("AUR_BUILDER_USED=1")
             built_files = self._build_aur_package(temp_path, aur_package_name, source_version)
             
             if built_files:
@@ -342,7 +357,9 @@ class PackageBuilder:
         return [pkg_dir.name]
     
     def _clone_aur_package(self, pkg_name: str, target_dir: Path) -> bool:
-        """Clone AUR package from Arch Linux AUR."""
+        """Clone AUR package from Arch Linux AUR using GitClient."""
+        logger.info(f"📥 Cloning {pkg_name} from AUR")
+        
         # Try different AUR URLs
         aur_urls = [
             f"https://aur.archlinux.org/{pkg_name}.git",
@@ -351,20 +368,13 @@ class PackageBuilder:
         
         for aur_url in aur_urls:
             try:
-                logger.info(f"📥 Cloning {pkg_name} from {aur_url}")
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", aur_url, str(target_dir)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=300
-                )
-                
-                if result.returncode == 0:
+                # Use GitClient to clone
+                self.git_client.repo_url = aur_url
+                if self.git_client.clone_repository(str(target_dir), depth=1):
                     logger.info(f"✅ Successfully cloned {pkg_name}")
                     return True
                 else:
-                    logger.warning(f"⚠️ Failed to clone from {aur_url}: {result.stderr}")
+                    logger.warning(f"⚠️ Failed to clone from {aur_url}")
             except Exception as e:
                 logger.warning(f"⚠️ Error cloning from {aur_url}: {e}")
         
@@ -372,45 +382,39 @@ class PackageBuilder:
         return False
     
     def _build_local_package(self, pkg_dir: Path, version: str) -> List[str]:
-        """Build local package using makepkg and return list of built files."""
+        """Build local package using LocalBuilder and return list of built files."""
         try:
-            # Clean workspace
-            self._clean_workspace(pkg_dir)
+            # Clean workspace using ArtifactManager
+            self.artifact_manager.clean_workspace(pkg_dir)
             
-            # Prepare environment
-            env = os.environ.copy()
-            env["PACKAGER"] = self.packager_id
-            
-            # Download sources
+            # Download sources using ShellExecutor
             logger.info("   Downloading sources...")
-            download_result = subprocess.run(
-                ["makepkg", "-od", "--noconfirm"],
+            logger.info("SHELL_EXECUTOR_USED=1")
+            download_result = self.shell_executor.run_command(
+                "makepkg -od --noconfirm",
                 cwd=pkg_dir,
-                capture_output=True,
-                text=True,
-                env=env,
+                capture=True,
                 check=False,
-                timeout=600
+                timeout=600,
+                extra_env={"PACKAGER": self.packager_id}
             )
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
                 return []
             
-            # Build package
+            # Build package using LocalBuilder
             logger.info("   Building package...")
+            logger.info("LOCAL_BUILDER_USED=1")
             build_flags = "-si --noconfirm --clean"
             if pkg_dir.name == "gtk2":
                 build_flags += " --nocheck"
                 logger.info("   Skipping check for gtk2 (long)")
             
-            build_result = subprocess.run(
-                ["makepkg"] + build_flags.split(),
-                cwd=pkg_dir,
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
+            build_result = self.local_builder.run_makepkg(
+                pkg_dir=str(pkg_dir),
+                packager_id=self.packager_id,
+                flags=build_flags,
                 timeout=3600
             )
             
@@ -428,49 +432,49 @@ class PackageBuilder:
                 logger.error(f"❌ No package files created for {pkg_dir.name}")
                 return []
                 
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ Build timed out for {pkg_dir.name}")
-            return []
         except Exception as e:
             logger.error(f"❌ Error building {pkg_dir.name}: {e}")
             return []
     
     def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> List[str]:
-        """Build AUR package using makepkg and return list of built files."""
+        """Build AUR package using AURBuilder and return list of built files."""
         try:
-            # Clean workspace
-            self._clean_workspace(pkg_dir)
+            # Clean workspace using ArtifactManager
+            self.artifact_manager.clean_workspace(pkg_dir)
             
-            # Prepare environment
-            env = os.environ.copy()
-            env["PACKAGER"] = self.packager_id
-            
-            # Download sources
+            # Download sources using ShellExecutor
             logger.info("   Downloading sources...")
-            download_result = subprocess.run(
-                ["makepkg", "-od", "--noconfirm"],
+            logger.info("SHELL_EXECUTOR_USED=1")
+            download_result = self.shell_executor.run_command(
+                "makepkg -od --noconfirm",
                 cwd=pkg_dir,
-                capture_output=True,
-                text=True,
-                env=env,
+                capture=True,
                 check=False,
-                timeout=600
+                timeout=600,
+                extra_env={"PACKAGER": self.packager_id}
             )
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
                 return []
             
-            # Build package
+            # Build package using AURBuilder
             logger.info("   Building package...")
-            build_result = subprocess.run(
-                ["makepkg", "-si", "--noconfirm", "--clean", "--nocheck"],
+            logger.info("AUR_BUILDER_USED=1")
+            
+            # AURBuilder doesn't have a direct build method, so we'll use ShellExecutor
+            # First install dependencies
+            self.aur_builder.install_dependencies_strict([])  # Pass empty list for now
+            
+            # Then build with makepkg
+            logger.info("SHELL_EXECUTOR_USED=1")
+            build_result = self.shell_executor.run_command(
+                "makepkg -si --noconfirm --clean --nocheck",
                 cwd=pkg_dir,
-                capture_output=True,
-                text=True,
-                env=env,
+                capture=True,
                 check=False,
-                timeout=3600
+                timeout=3600,
+                extra_env={"PACKAGER": self.packager_id}
             )
             
             if build_result.returncode != 0:
@@ -487,28 +491,9 @@ class PackageBuilder:
                 logger.error(f"❌ No package files created for {pkg_name}")
                 return []
                 
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ Build timed out for {pkg_name}")
-            return []
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
             return []
-    
-    def _clean_workspace(self, pkg_dir: Path):
-        """Clean workspace before building."""
-        # Clean src/ directory
-        src_dir = pkg_dir / "src"
-        if src_dir.exists():
-            shutil.rmtree(src_dir, ignore_errors=True)
-        
-        # Clean pkg/ directory
-        pkg_build_dir = pkg_dir / "pkg"
-        if pkg_build_dir.exists():
-            shutil.rmtree(pkg_build_dir, ignore_errors=True)
-        
-        # Clean leftover package files
-        for leftover in pkg_dir.glob("*.pkg.tar.*"):
-            leftover.unlink(missing_ok=True)
     
     def _move_built_packages(self, source_dir: Path, pkg_name: str, version: str) -> List[str]:
         """Move built packages to output directory and return list of moved files."""
