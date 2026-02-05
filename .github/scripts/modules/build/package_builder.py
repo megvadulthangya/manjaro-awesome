@@ -37,7 +37,8 @@ class PackageBuilder:
         output_dir: Path,
         version_tracker,  # Added: VersionTracker for skipped package registration
         debug_mode: bool = False,
-        vps_files: Optional[List[str]] = None  # NEW: VPS file inventory for completeness check
+        vps_files: Optional[List[str]] = None,  # NEW: VPS file inventory for completeness check
+        build_tracker=None  # NEW: BuildTracker for hokibot data
     ):
         """
         Initialize PackageBuilder with dependencies.
@@ -50,6 +51,7 @@ class PackageBuilder:
             version_tracker: VersionTracker instance for tracking skipped packages
             debug_mode: Enable debug logging
             vps_files: List of files on VPS for completeness check
+            build_tracker: BuildTracker instance for hokibot data
         """
         self.version_manager = version_manager
         self.gpg_handler = gpg_handler
@@ -58,6 +60,7 @@ class PackageBuilder:
         self.version_tracker = version_tracker  # Store version tracker
         self.debug_mode = debug_mode
         self.vps_files = vps_files or []  # NEW: Store VPS file inventory
+        self.build_tracker = build_tracker  # NEW: Store build tracker
         self._recently_built_files: List[str] = []  # NEW: Track files built in current session
         
         # Initialize modular components
@@ -158,6 +161,17 @@ class PackageBuilder:
             
             # NEW: Register target version for ALL pkgname entries
             self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+            
+            # NEW: Record hokibot data for local package
+            if self.build_tracker:
+                self.build_tracker.add_hokibot_data(
+                    pkg_name=pkg_dir.name,
+                    pkgver=pkgver,
+                    pkgrel=pkgrel,
+                    epoch=epoch,
+                    old_version=remote_version,
+                    new_version=source_version
+                )
             
             return True, source_version, {
                 "pkgver": pkgver,
@@ -263,6 +277,8 @@ class PackageBuilder:
                 
                 # NEW: Register target version for ALL pkgname entries
                 self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+                
+                # Note: AUR packages do NOT record hokibot data per requirements
                 
                 return True, source_version, {
                     "pkgver": pkgver,
@@ -701,7 +717,8 @@ def create_package_builder(
     sign_packages: bool = True,
     debug_mode: bool = False,
     version_tracker = None,  # Added: VersionTracker for skipped package registration
-    vps_files: Optional[List[str]] = None  # NEW: VPS file inventory for completeness check
+    vps_files: Optional[List[str]] = None,  # NEW: VPS file inventory for completeness check
+    build_tracker = None  # NEW: BuildTracker for hokibot data
 ) -> PackageBuilder:
     """
     Create a PackageBuilder instance with all dependencies.
@@ -715,6 +732,7 @@ def create_package_builder(
         debug_mode: Enable debug logging
         version_tracker: VersionTracker instance for tracking skipped packages
         vps_files: VPS file inventory for completeness check
+        build_tracker: BuildTracker instance for hokibot data
         
     Returns:
         PackageBuilder instance
@@ -737,5 +755,6 @@ def create_package_builder(
         output_dir=output_dir,
         version_tracker=version_tracker,  # Pass version tracker
         debug_mode=debug_mode,
-        vps_files=vps_files  # NEW: Pass VPS file inventory
+        vps_files=vps_files,  # NEW: Pass VPS file inventory
+        build_tracker=build_tracker  # NEW: Pass build tracker
     )

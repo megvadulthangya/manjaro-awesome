@@ -162,7 +162,8 @@ class PackageBuilderOrchestrator:
             gpg_private_key=self.gpg_private_key,
             sign_packages=self.sign_packages,
             debug_mode=self.debug_mode,
-            version_tracker=self.version_tracker  # Pass version tracker
+            version_tracker=self.version_tracker,  # Pass version tracker
+            build_tracker=self.build_tracker  # NEW: Pass build tracker for hokibot data
         )
         
         logger.info("All modules initialized successfully")
@@ -464,6 +465,10 @@ class PackageBuilderOrchestrator:
         self.built_packages = built_packages
         self.skipped_packages = skipped_packages
         self.gate_state['packages_built'] = len(built_packages)
+        
+        # NEW: Log hokibot data count summary
+        hokibot_count = len(self.build_tracker.hokibot_data)
+        logger.info(f"HOKIBOT_DATA_COUNT={hokibot_count}")
         
         # Log results
         logger.info(f"Build Results:")

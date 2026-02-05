@@ -3,7 +3,10 @@ Build Tracker Module - Tracks build progress and statistics
 """
 
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BuildTracker:
@@ -27,15 +30,31 @@ class BuildTracker:
         # Start time
         self.start_time = time.time()
     
-    def add_hokibot_data(self, pkg_name: str, pkgver: str, pkgrel: str, epoch: str = None):
+    def add_hokibot_data(self, pkg_name: str, pkgver: str, pkgrel: str, epoch: str = None, old_version: str = None, new_version: str = None):
         """Add package metadata for hokibot tracking"""
-        self.hokibot_data.append({
+        # Create hokibot entry
+        entry = {
             'name': pkg_name,
             'built_version': f"{epoch or '0'}:{pkgver}-{pkgrel}" if epoch and epoch != '0' else f"{pkgver}-{pkgrel}",
             'pkgver': pkgver,
             'pkgrel': pkgrel,
             'epoch': epoch
-        })
+        }
+        
+        # Add version comparison if available
+        if old_version and new_version:
+            entry['old_version'] = old_version
+            entry['new_version'] = new_version
+        elif new_version:
+            entry['new_version'] = new_version
+        
+        self.hokibot_data.append(entry)
+        
+        # Log the single-line grep-friendly message
+        if old_version and new_version:
+            logger.info(f"HOKIBOT_DATA_ADDED=1 pkg={pkg_name} old={old_version} new={new_version}")
+        else:
+            logger.info(f"HOKIBOT_DATA_ADDED=1 pkg={pkg_name} ver={entry['built_version']}")
     
     def record_built_package(self, pkg_name: str, version: str, is_aur: bool = False):
         """Record a successfully built package"""
