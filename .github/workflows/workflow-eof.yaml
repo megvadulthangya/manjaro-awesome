@@ -693,6 +693,7 @@ jobs:
 
           echo "CACHYOS: SYNC_DB"
           pacman -Sy --noconfirm
+          pacman -Ss gcc14
           echo "CACHYOS: DONE"
 
       - name: Run Builder with Cache Optimization
