@@ -6,7 +6,7 @@ import re
 import subprocess
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from modules.common.shell_executor import ShellExecutor
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,73 @@ class AURBuilder:
             # Continue anyway - some repositories might fail but main ones should work
             self._pacman_initialized = True
             return True
+    
+    def _extract_dependencies_from_srcinfo(self, pkg_dir: Path) -> List[str]:
+        """
+        Extract dependencies from .SRCINFO or PKGBUILD.
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            List of dependency strings
+        """
+        deps = []
+        
+        # First try to read existing .SRCINFO
+        srcinfo_path = pkg_dir / ".SRCINFO"
+        srcinfo_content = None
+        
+        if srcinfo_path.exists():
+            try:
+                with open(srcinfo_path, 'r') as f:
+                    srcinfo_content = f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read existing .SRCINFO: {e}")
+        
+        # Generate .SRCINFO if not available
+        if not srcinfo_content:
+            try:
+                logger.info("SHELL_EXECUTOR_USED=1")
+                result = subprocess.run(
+                    ['makepkg', '--printsrcinfo'],
+                    cwd=pkg_dir,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    srcinfo_content = result.stdout
+                    # Also write to .SRCINFO for future use
+                    with open(srcinfo_path, 'w') as f:
+                        f.write(srcinfo_content)
+                else:
+                    logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
+                    return []
+            except Exception as e:
+                logger.warning(f"Error running makepkg --printsrcinfo: {e}")
+                return []
+        
+        # Parse dependencies from SRCINFO content
+        lines = srcinfo_content.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Look for dependency fields
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Extract all types of dependencies
+                if key in ['depends', 'makedepends', 'checkdepends']:
+                    deps.append(value)
+        
+        return deps
     
     def install_dependencies_strict(self, deps: List[str]) -> bool:
         """STRICT dependency resolution: pacman first, then yay"""
@@ -124,3 +191,99 @@ class AURBuilder:
         
         logger.error(f"❌ Both pacman and yay failed for dependencies")
         return False
+    
+    def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str, 
+                          build_flags: str = "-si --noconfirm --clean --nocheck", 
+                          timeout: int = 3600) -> List[str]:
+        """
+        Build AUR package including dependency installation.
+        
+        Args:
+            pkg_name: AUR package name
+            target_dir: Directory containing cloned AUR package
+            packager_id: Packager identity string
+            build_flags: makepkg flags
+            timeout: Build timeout in seconds
+            
+        Returns:
+            List of built package filenames
+        """
+        logger.info(f"🔨 Building AUR package {pkg_name}...")
+        
+        # Extract dependencies from PKGBUILD/.SRCINFO
+        logger.info(f"📦 Extracting dependencies for {pkg_name}...")
+        deps = self._extract_dependencies_from_srcinfo(target_dir)
+        
+        if deps:
+            logger.info(f"📦 Found {len(deps)} dependencies for {pkg_name}")
+            # Install dependencies
+            if not self.install_dependencies_strict(deps):
+                logger.error(f"❌ Failed to install dependencies for {pkg_name}")
+                return []
+        else:
+            logger.info(f"📦 No dependencies found for {pkg_name}")
+        
+        # Download sources
+        logger.info("   Downloading sources...")
+        logger.info("SHELL_EXECUTOR_USED=1")
+        download_result = self.shell_executor.run_command(
+            "makepkg -od --noconfirm",
+            cwd=target_dir,
+            capture=True,
+            check=False,
+            timeout=600,
+            extra_env={"PACKAGER": packager_id}
+        )
+        
+        if download_result.returncode != 0:
+            logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
+            return []
+        
+        # Build package
+        logger.info(f"   Building with flags: {build_flags}")
+        logger.info("SHELL_EXECUTOR_USED=1")
+        cmd = f"makepkg {build_flags}"
+        
+        if self.debug_mode:
+            print(f"🔧 [DEBUG] Running makepkg in {target_dir}: {cmd}", flush=True)
+        
+        try:
+            build_result = self.shell_executor.run_command(
+                cmd,
+                cwd=target_dir,
+                capture=True,
+                check=False,
+                timeout=timeout,
+                extra_env={"PACKAGER": packager_id},
+                log_cmd=self.debug_mode
+            )
+            
+            if self.debug_mode:
+                if build_result.stdout:
+                    print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
+                if build_result.stderr:
+                    print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
+                print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
+            
+            if build_result.returncode != 0:
+                logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
+                return []
+            
+            # Collect built packages
+            built_files = []
+            for pkg_file in target_dir.glob("*.pkg.tar.*"):
+                # Skip signature files
+                if pkg_file.suffix == '.sig':
+                    continue
+                built_files.append(pkg_file.name)
+            
+            if built_files:
+                logger.info(f"✅ Successfully built {pkg_name}: {len(built_files)} package(s)")
+                return built_files
+            else:
+                logger.error(f"❌ No package files created for {pkg_name}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"❌ Error building {pkg_name}: {e}")
+            return []
