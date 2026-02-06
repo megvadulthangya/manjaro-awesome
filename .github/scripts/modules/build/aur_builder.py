@@ -3,7 +3,6 @@ AUR Builder Module - Handles AUR package building logic
 """
 
 import re
-import subprocess
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -75,12 +74,12 @@ class AURBuilder:
         if not srcinfo_content:
             try:
                 logger.info("SHELL_EXECUTOR_USED=1")
-                result = subprocess.run(
-                    ['makepkg', '--printsrcinfo'],
+                result = self.shell_executor.run_command(
+                    'makepkg --printsrcinfo',
                     cwd=pkg_dir,
-                    capture_output=True,
-                    text=True,
-                    check=False
+                    capture=True,
+                    check=False,
+                    timeout=60
                 )
                 
                 if result.returncode == 0 and result.stdout:
@@ -167,9 +166,9 @@ class AURBuilder:
         if phantom_packages:
             logger.info(f"Phantom packages removed: {', '.join(phantom_packages)}")
         
-        # REQUIRED POLICY: First try pacman with Syy (force refresh)
+        # REQUIRED POLICY: First try pacman with Sy (not Syy to avoid double refresh)
         deps_str = ' '.join(clean_deps)
-        cmd = f"sudo LC_ALL=C pacman -Syy --needed --noconfirm {deps_str}"
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
         logger.info("SHELL_EXECUTOR_USED=1")
         result = self.shell_executor.run_command(cmd, log_cmd=True, check=False, timeout=1200)
         
@@ -269,11 +268,11 @@ class AURBuilder:
                 logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
                 return []
             
-            # Collect built packages
+            # Collect built packages (skip .sig files)
             built_files = []
             for pkg_file in target_dir.glob("*.pkg.tar.*"):
                 # Skip signature files
-                if pkg_file.suffix == '.sig':
+                if pkg_file.name.endswith(".sig"):
                     continue
                 built_files.append(pkg_file.name)
             
