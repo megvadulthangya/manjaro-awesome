@@ -44,6 +44,8 @@ try:
     
     from modules.gpg.gpg_handler import GPGHandler
     
+    from modules.hokibot.hokibot import HokibotRunner  # NEW: Import HokibotRunner
+    
     MODULES_LOADED = True
 except ImportError as e:
     logger.error(f"Failed to import modules: {e}")
@@ -165,6 +167,9 @@ class PackageBuilderOrchestrator:
             version_tracker=self.version_tracker,  # Pass version tracker
             build_tracker=self.build_tracker  # NEW: Pass build tracker for hokibot data
         )
+        
+        # NEW: Initialize HokibotRunner
+        self.hokibot_runner = HokibotRunner(debug_mode=self.debug_mode)
         
         logger.info("All modules initialized successfully")
     
@@ -575,6 +580,18 @@ class PackageBuilderOrchestrator:
             self.cleanup_manager.server_cleanup(self.version_tracker, self.desired_inventory)
         else:
             logger.info("Gates blocked destructive VPS cleanup")
+        
+        # NEW: Step 7 - Run Hokibot action if we have hokibot data
+        if self.build_tracker.hokibot_data:
+            logger.info("Running Hokibot action phase...")
+            try:
+                hokibot_result = self.hokibot_runner.run(self.build_tracker.hokibot_data)
+                logger.info(f"Hokibot result: {hokibot_result}")
+            except Exception as e:
+                logger.error(f"Hokibot action failed (non-blocking): {e}")
+                # Non-blocking: failure should not fail the pipeline
+        else:
+            logger.info("No hokibot data to process")
         
         return upload_success
     
