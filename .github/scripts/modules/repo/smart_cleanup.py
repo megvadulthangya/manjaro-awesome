@@ -1,4 +1,3 @@
-# FILE: .github/scripts/modules/repo/smart_cleanup.py
 """
 Smart Cleanup Module - Authoritative version-based cleanup system
 
