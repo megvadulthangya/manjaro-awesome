@@ -1,6 +1,6 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com> 
 pkgname=ttf-font-awesome-5
-pkgver=5.15.4
+pkgver=5.15.1
 pkgrel=1
 pkgdesc="Iconic font designed for Bootstrap (version 5)"
 arch=('any')
