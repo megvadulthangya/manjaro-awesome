@@ -1,6 +1,6 @@
 """
 Hokibot Module - Handles automatic version bumping for local packages
-WITH ROBUST SSH KEY HANDLING AND SELF-DIAGNOSIS
+WITH NON-BLOCKING FAIL-SAFE SEMANTICS
 """
 
 import os
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class HokibotRunner:
-    """Handles automatic version bumping for local packages with robust SSH key handling"""
+    """Handles automatic version bumping for local packages with non-blocking fail-safe"""
     
     def __init__(self, debug_mode: bool = False):
         """
@@ -42,20 +42,12 @@ class HokibotRunner:
         # Get CI_PUSH_SSH_KEY from environment
         self.ci_push_ssh_key = os.getenv('CI_PUSH_SSH_KEY')
         
-        # Initialize GitClient (will be configured later)
-        self.git_client = GitClient(repo_url=self.ssh_repo_url, debug_mode=debug_mode)
-        
         # Track temporary SSH key file for cleanup
         self._ssh_key_file = None
         self._clone_dir = None
         
         # Register cleanup
         atexit.register(self._cleanup)
-        
-        if not self.ssh_repo_url:
-            logger.error("SSH_REPO_URL not configured in config.py or environment")
-        if not self.ci_push_ssh_key:
-            logger.error("CI_PUSH_SSH_KEY not configured in environment")
     
     def _analyze_ssh_key_format(self, key_content: str) -> Dict[str, Any]:
         """
@@ -128,14 +120,13 @@ class HokibotRunner:
             Normalized key content or None if invalid
         """
         if not key_content or not isinstance(key_content, str):
-            logger.error("Empty or non-string SSH key")
+            logger.warning("Empty or non-string SSH key")
             return None
         
         # Step 1: Handle escaped newlines (common in GitHub secrets)
         if '\\n' in key_content:
             # Replace literal \n sequences with actual newlines
             normalized = key_content.replace('\\n', '\n')
-            logger.debug("Converted escaped \\n to actual newlines")
         else:
             normalized = key_content
         
@@ -158,19 +149,16 @@ class HokibotRunner:
                         'begin private key'
                     ]):
                         normalized = decoded_str
-                        logger.debug("Successfully decoded base64 SSH key")
-            except Exception as e:
-                logger.debug(f"Base64 decode attempt failed: {e}")
+            except Exception:
+                pass
         
         # Step 3: Normalize line endings (CRLF -> LF)
         if '\r\n' in normalized:
             normalized = normalized.replace('\r\n', '\n')
-            logger.debug("Normalized CRLF to LF")
         
         # Step 4: Ensure trailing newline
         if not normalized.endswith('\n'):
             normalized += '\n'
-            logger.debug("Added trailing newline")
         
         # Step 5: Final validation - must contain proper SSH key headers
         if not any(header in normalized.lower() for header in [
@@ -178,7 +166,6 @@ class HokibotRunner:
             'begin rsa private key',
             'begin private key'
         ]):
-            logger.error("SSH key missing BEGIN header after normalization")
             return None
         
         if not any(footer in normalized.lower() for footer in [
@@ -186,7 +173,6 @@ class HokibotRunner:
             'end rsa private key',
             'end private key'
         ]):
-            logger.error("SSH key missing END footer after normalization")
             return None
         
         return normalized
@@ -212,17 +198,13 @@ class HokibotRunner:
             )
             
             if result.returncode == 0:
-                logger.info(f"SSH key validation passed: {result.stdout[:50]}...")
                 return True
             else:
-                logger.error(f"SSH key validation failed: {result.stderr[:200]}")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.error("SSH key validation timeout")
             return False
-        except Exception as e:
-            logger.error(f"SSH key validation error: {e}")
+        except Exception:
             return False
     
     def _write_ssh_key_file(self) -> Optional[Path]:
@@ -233,8 +215,6 @@ class HokibotRunner:
             Path to SSH key file or None on failure
         """
         if not self.ci_push_ssh_key:
-            logger.error("No CI_PUSH_SSH_KEY available")
-            logger.info("HOKIBOT_SSH_KEY_INVALID=1 reason=empty_key")
             return None
         
         try:
@@ -251,7 +231,6 @@ class HokibotRunner:
             # Normalize key content
             normalized_key = self._normalize_ssh_key_content(self.ci_push_ssh_key)
             if not normalized_key:
-                logger.error("Failed to normalize SSH key")
                 logger.info("HOKIBOT_SSH_KEY_INVALID=1 reason=normalization_failed")
                 return None
             
@@ -268,9 +247,7 @@ class HokibotRunner:
             ssh_key_path.chmod(0o600)
             
             # Validate key with ssh-keygen BEFORE using it
-            logger.info("Validating SSH key with ssh-keygen...")
             if not self._validate_ssh_key_with_ssh_keygen(ssh_key_path):
-                logger.error("SSH key failed validation")
                 # Clean up invalid key file
                 try:
                     ssh_key_path.unlink(missing_ok=True)
@@ -283,9 +260,7 @@ class HokibotRunner:
             logger.info(f"HOKIBOT_SSH_KEY_WRITTEN=1 path={ssh_key_path} validated=1")
             return ssh_key_path
             
-        except Exception as e:
-            logger.error(f"Failed to write SSH key file: {e}")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=ssh_key_write")
+        except Exception:
             return None
     
     def _setup_git_ssh_command(self, ssh_key_path: Path) -> str:
@@ -313,14 +288,10 @@ class HokibotRunner:
             True if successful, False otherwise
         """
         if not self.ssh_repo_url:
-            logger.error("No SSH_REPO_URL configured")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=no_repo_url")
             return False
         
         ssh_key_path = self._write_ssh_key_file()
         if not ssh_key_path:
-            # Key validation already failed in _write_ssh_key_file
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=invalid_ssh_key")
             return False
         
         try:
@@ -352,17 +323,11 @@ class HokibotRunner:
                 self._clone_dir = clone_dir
                 return True
             else:
-                logger.error(f"Clone failed: {result.stderr[:200]}")
-                logger.info(f"HOKIBOT_FAILSAFE=1 error=clone_failed")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.error("Clone timeout")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=clone_timeout")
             return False
-        except Exception as e:
-            logger.error(f"Clone error: {e}")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=clone_exception")
+        except Exception:
             return False
     
     def _git_commit_with_skip_token(self, clone_dir: Path, message: str) -> bool:
@@ -395,7 +360,6 @@ class HokibotRunner:
             )
             
             if result.returncode != 0:
-                logger.error(f"Add failed: {result.stderr[:200]}")
                 return False
             
             # Commit
@@ -415,11 +379,9 @@ class HokibotRunner:
                 logger.info("HOKIBOT_COMMIT_SKIP=1 (nothing to commit)")
                 return False
             else:
-                logger.error(f"Commit failed: {result.stderr[:200]}")
                 return False
                 
-        except Exception as e:
-            logger.error(f"Commit error: {e}")
+        except Exception:
             return False
     
     def _git_push_with_ssh(self, clone_dir: Path) -> bool:
@@ -434,8 +396,6 @@ class HokibotRunner:
         """
         ssh_key_path = self._write_ssh_key_file()
         if not ssh_key_path:
-            # Key validation already failed in _write_ssh_key_file
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=invalid_ssh_key")
             return False
         
         try:
@@ -466,26 +426,20 @@ class HokibotRunner:
                 logger.info("HOKIBOT_PUSH=1")
                 return True
             else:
-                logger.error(f"Push failed: {result.stderr[:200]}")
-                logger.info(f"HOKIBOT_FAILSAFE=1 error=push_failed")
                 logger.info("HOKIBOT_PUSH=0")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.error("Push timeout")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=push_timeout")
             logger.info("HOKIBOT_PUSH=0")
             return False
-        except Exception as e:
-            logger.error(f"Push error: {e}")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=push_exception")
+        except Exception:
             logger.info("HOKIBOT_PUSH=0")
             return False
     
     def run(self, hokibot_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Run hokibot action: update PKGBUILD versions and push changes
-        WITH FAIL-SAFE SEMANTICS
+        WITH NON-BLOCKING FAIL-SAFE SEMANTICS
         
         Args:
             hokibot_data: List of package metadata from BuildTracker
@@ -499,7 +453,26 @@ class HokibotRunner:
         
         if data_count == 0:
             logger.info("HOKIBOT_ACTION=SKIP")
+            logger.info("HOKIBOT_FAILSAFE=0")
+            logger.info("HOKIBOT_PHASE_RAN=0")
             logger.info("No hokibot data to process")
+            return {"changed": 0, "committed": False, "pushed": False}
+        
+        logger.info("HOKIBOT_PHASE_RAN=1")
+        
+        # Check for required configuration
+        if not self.ssh_repo_url:
+            logger.info("HOKIBOT_ACTION=SKIP")
+            logger.info("HOKIBOT_FAILSAFE=1")
+            logger.info("HOKIBOT_SKIP_REASON=missing_repo_url")
+            logger.warning("SSH_REPO_URL not configured - hokibot skipping")
+            return {"changed": 0, "committed": False, "pushed": False}
+        
+        if not self.ci_push_ssh_key:
+            logger.info("HOKIBOT_ACTION=SKIP")
+            logger.info("HOKIBOT_FAILSAFE=1")
+            logger.info("HOKIBOT_SKIP_REASON=missing_key")
+            logger.warning("CI_PUSH_SSH_KEY not configured - hokibot skipping")
             return {"changed": 0, "committed": False, "pushed": False}
         
         logger.info("HOKIBOT_ACTION=PROCESS")
@@ -512,10 +485,11 @@ class HokibotRunner:
         
         try:
             # Step 1: Clone repository with SSH key (includes key validation)
-            logger.info(f"Cloning repository to {clone_dir}")
-            
             if not self._clone_with_ssh(clone_dir):
-                logger.error("Failed to clone repository")
+                logger.info("HOKIBOT_ACTION=SKIP")
+                logger.info("HOKIBOT_FAILSAFE=1")
+                logger.info("HOKIBOT_SKIP_REASON=clone_failed")
+                logger.warning("Failed to clone repository - hokibot skipping")
                 return {"changed": 0, "committed": False, "pushed": False}
             
             # Step 2: Update PKGBUILD files for each package
@@ -527,20 +501,16 @@ class HokibotRunner:
                 epoch = entry.get('epoch')
                 
                 if not pkg_name or not pkgver or not pkgrel:
-                    logger.warning(f"Skipping invalid entry: {entry}")
                     continue
                 
                 # Find PKGBUILD
                 pkgbuild_path = clone_dir / pkg_name / "PKGBUILD"
                 if not pkgbuild_path.exists():
-                    logger.warning(f"PKGBUILD not found for {pkg_name}")
                     continue
                 
                 # Update PKGBUILD
                 if self._update_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch):
                     changed_packages.append(pkg_name)
-                    logger.info(f"Updated {pkg_name}: pkgver={pkgver}, pkgrel={pkgrel}" + 
-                               (f", epoch={epoch}" if epoch and epoch != '0' else ""))
             
             if not changed_packages:
                 logger.info("No packages updated")
@@ -550,34 +520,31 @@ class HokibotRunner:
             commit_message = f"hokibot: bump pkgver for {len(changed_packages)} packages\n\n"
             commit_message += "\n".join([f"- {pkg}" for pkg in changed_packages])
             
-            logger.info(f"Committing changes: {len(changed_packages)} packages")
-            
             if not self._git_commit_with_skip_token(clone_dir, commit_message):
-                logger.error("Failed to commit changes")
-                # Fail-safe: Don't fail the build
-                logger.info("HOKIBOT_FAILSAFE=1 error=commit_failed")
+                logger.info("HOKIBOT_FAILSAFE=1")
+                logger.info("HOKIBOT_SKIP_REASON=commit_failed")
+                logger.warning("Failed to commit changes - hokibot skipping")
                 return {"changed": len(changed_packages), "committed": False, "pushed": False}
             
             # Step 4: Push changes (includes key re-validation)
-            logger.info("Pushing changes to repository")
             push_success = self._git_push_with_ssh(clone_dir)
             
             if push_success:
-                logger.info("Hokibot push successful")
+                logger.info("HOKIBOT_FAILSAFE=0")
                 logger.info(f"HOKIBOT_SUMMARY changed={len(changed_packages)} committed=yes pushed=yes")
                 return {"changed": len(changed_packages), "committed": True, "pushed": True}
             else:
-                # Fail-safe: Push failed but don't fail the build
-                logger.error("Hokibot push failed (fail-safe)")
+                logger.info("HOKIBOT_FAILSAFE=1")
+                logger.info("HOKIBOT_SKIP_REASON=push_failed")
+                logger.warning("Push failed - hokibot skipping")
                 logger.info(f"HOKIBOT_SUMMARY changed={len(changed_packages)} committed=yes pushed=no")
                 return {"changed": len(changed_packages), "committed": True, "pushed": False}
             
-        except Exception as e:
-            logger.error(f"Hokibot phase failed: {e}")
-            logger.info(f"HOKIBOT_FAILSAFE=1 error=exception")
-            logger.info(f"HOKIBOT_SUMMARY changed={len(changed_packages) if 'changed_packages' in locals() else 0} committed=no pushed=no")
-            return {"changed": len(changed_packages) if 'changed_packages' in locals() else 0, 
-                    "committed": False, "pushed": False}
+        except Exception:
+            logger.info("HOKIBOT_FAILSAFE=1")
+            logger.info("HOKIBOT_SKIP_REASON=exception")
+            logger.warning("Hokibot phase exception - skipping")
+            return {"changed": 0, "committed": False, "pushed": False}
         finally:
             # Step 5: Cleanup
             self._cleanup_clone_dir(clone_dir)
@@ -641,8 +608,7 @@ class HokibotRunner:
             
             return True
             
-        except Exception as e:
-            logger.error(f"Failed to update PKGBUILD {pkgbuild_path}: {e}")
+        except Exception:
             return False
     
     def _cleanup_clone_dir(self, clone_dir: Path):
@@ -651,9 +617,8 @@ class HokibotRunner:
             if clone_dir.exists():
                 import shutil
                 shutil.rmtree(clone_dir, ignore_errors=True)
-                logger.debug(f"Cleaned up temporary directory: {clone_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temporary directory: {e}")
+        except Exception:
+            pass
     
     def _cleanup(self):
         """Cleanup SSH key file on exit"""

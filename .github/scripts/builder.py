@@ -1,6 +1,6 @@
 """
 Main Orchestration Script for Arch Linux Package Builder
-WITH FAIL-SAFE GATES
+WITH NON-BLOCKING HOKIBOT
 """
 
 import os
@@ -54,7 +54,7 @@ except ImportError as e:
 
 
 class PackageBuilderOrchestrator:
-    """Main orchestrator coordinating all phases WITH FAIL-SAFE GATES"""
+    """Main orchestrator coordinating all phases WITH NON-BLOCKING HOKIBOT"""
     
     def __init__(self):
         """Initialize orchestrator with all modules"""
@@ -216,16 +216,16 @@ class PackageBuilderOrchestrator:
             else:
                 # Even on failure, mark as ran to prevent retries
                 self.post_repo_enable_sy_ran = True
-                logger.error(f"PACMAN_POST_REPO_ENABLE_SY: FAILED (error={result.stderr[:200]})")
+                logger.warning(f"PACMAN_POST_REPO_ENABLE_SY: FAILED (error={result.stderr[:200]})")
                 return False
                 
         except subprocess.TimeoutExpired:
             self.post_repo_enable_sy_ran = True
-            logger.error("PACMAN_POST_REPO_ENABLE_SY: TIMEOUT")
+            logger.warning("PACMAN_POST_REPO_ENABLE_SY: TIMEOUT")
             return False
         except Exception as e:
             self.post_repo_enable_sy_ran = True
-            logger.error(f"PACMAN_POST_REPO_ENABLE_SY: EXCEPTION (error={e})")
+            logger.warning(f"PACMAN_POST_REPO_ENABLE_SY: EXCEPTION (error={e})")
             return False
     
     def _evaluate_gates(self):
@@ -330,7 +330,7 @@ class PackageBuilderOrchestrator:
         
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
-            logger.error(f"SSH key not found")
+            logger.warning(f"SSH key not found")
             return []
         
         # Get signature files - FIX: include both regular files and symlinks
@@ -357,7 +357,7 @@ class PackageBuilderOrchestrator:
                 return []
                 
         except Exception as e:
-            logger.error(f"SSH command for signatures failed: {e}")
+            logger.warning(f"SSH command for signatures failed: {e}")
             return []
     
     def get_package_lists(self) -> Tuple[List[str], List[str]]:
@@ -613,14 +613,15 @@ class PackageBuilderOrchestrator:
         else:
             logger.info("Gates blocked VPS version prune")
         
-        # NEW: Step 7 - Run Hokibot action if we have hokibot data
+        # NEW: Step 7 - Run Hokibot action if we have hokibot data (NON-BLOCKING)
         if self.build_tracker.hokibot_data:
-            logger.info("Running Hokibot action phase...")
+            logger.info("Running Hokibot action phase (non-blocking)...")
             try:
                 hokibot_result = self.hokibot_runner.run(self.build_tracker.hokibot_data)
                 logger.info(f"Hokibot result: {hokibot_result}")
+                # Hokibot result is informational only - does not affect build success
             except Exception as e:
-                logger.error(f"Hokibot action failed (non-blocking): {e}")
+                logger.warning(f"Hokibot action failed (non-blocking): {e}")
                 # Non-blocking: failure should not fail the pipeline
         else:
             logger.info("No hokibot data to process")
@@ -667,7 +668,7 @@ class PackageBuilderOrchestrator:
         """Get database files from VPS - FIX: include both regular files and symlinks"""
         ssh_key_path = "/home/builder/.ssh/id_ed25519"
         if not os.path.exists(ssh_key_path):
-            logger.error(f"SSH key not found")
+            logger.warning(f"SSH key not found")
             return []
         
         # Get database files - FIX: include both regular files and symlinks
@@ -693,7 +694,7 @@ class PackageBuilderOrchestrator:
                 return []
                 
         except Exception as e:
-            logger.error(f"SSH command for database files failed: {e}")
+            logger.warning(f"SSH command for database files failed: {e}")
             return []
     
     def _run_safe_operations_only(self):
@@ -706,8 +707,8 @@ class PackageBuilderOrchestrator:
         logger.info(f"Safe operations complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
     
     def run(self) -> int:
-        """Main execution flow WITH FAIL-SAFE GATES"""
-        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH FAIL-SAFE GATES")
+        """Main execution flow WITH NON-BLOCKING HOKIBOT"""
+        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH NON-BLOCKING HOKIBOT")
         
         try:
             # Import GPG key if enabled
