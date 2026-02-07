@@ -1,6 +1,6 @@
 """
 Hokibot Module - Handles automatic version bumping for local packages
-WITH RELIABLE SSH KEY HANDLING AND FAIL-SAFE SEMANTICS
+WITH ROBUST SSH KEY HANDLING AND SELF-DIAGNOSIS
 """
 
 import os
@@ -8,6 +8,7 @@ import re
 import tempfile
 import logging
 import subprocess
+import base64
 import atexit
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class HokibotRunner:
-    """Handles automatic version bumping for local packages with reliable SSH"""
+    """Handles automatic version bumping for local packages with robust SSH key handling"""
     
     def __init__(self, debug_mode: bool = False):
         """
@@ -56,45 +57,230 @@ class HokibotRunner:
         if not self.ci_push_ssh_key:
             logger.error("CI_PUSH_SSH_KEY not configured in environment")
     
+    def _analyze_ssh_key_format(self, key_content: str) -> Dict[str, Any]:
+        """
+        Analyze SSH key format and extract metadata without exposing key content.
+        
+        Args:
+            key_content: Raw key content (may be encoded)
+            
+        Returns:
+            Dictionary with analysis metadata
+        """
+        meta = {
+            'length': len(key_content),
+            'has_begin': 0,
+            'has_end': 0,
+            'newline_count': key_content.count('\n'),
+            'contains_backslash_n': 1 if '\\n' in key_content else 0,
+            'contains_crlf': 1 if '\r\n' in key_content else 0,
+            'is_base64_candidate': 0,
+            'validated': 0
+        }
+        
+        # Check for SSH key headers (case-insensitive)
+        key_lower = key_content.lower()
+        has_begin = any(header in key_lower for header in [
+            'begin openssh private key',
+            'begin rsa private key', 
+            'begin private key',
+            '-----begin '
+        ])
+        has_end = any(footer in key_lower for footer in [
+            'end openssh private key',
+            'end rsa private key',
+            'end private key',
+            '-----end '
+        ])
+        
+        meta['has_begin'] = 1 if has_begin else 0
+        meta['has_end'] = 1 if has_end else 0
+        
+        # Check if it looks like base64 (alphanumeric, +, /, = padding, no spaces)
+        # Simple heuristic: if no header and looks like base64
+        if not has_begin and not has_end:
+            clean_content = key_content.strip().replace('\n', '').replace('\r', '')
+            if len(clean_content) >= 40 and all(c.isalnum() or c in '+/=' for c in clean_content):
+                # Check if it's valid base64 by attempting decode
+                try:
+                    decoded = base64.b64decode(clean_content, validate=True)
+                    # Check if decoded contains SSH key headers
+                    decoded_str = decoded.decode('utf-8', errors='ignore').lower()
+                    if any(header in decoded_str for header in [
+                        'begin openssh private key',
+                        'begin rsa private key',
+                        'begin private key'
+                    ]):
+                        meta['is_base64_candidate'] = 1
+                except Exception:
+                    pass
+        
+        return meta
+    
+    def _normalize_ssh_key_content(self, key_content: str) -> Optional[str]:
+        """
+        Normalize SSH key content, handling multiple formats.
+        
+        Args:
+            key_content: Raw key content
+            
+        Returns:
+            Normalized key content or None if invalid
+        """
+        if not key_content or not isinstance(key_content, str):
+            logger.error("Empty or non-string SSH key")
+            return None
+        
+        # Step 1: Handle escaped newlines (common in GitHub secrets)
+        if '\\n' in key_content:
+            # Replace literal \n sequences with actual newlines
+            normalized = key_content.replace('\\n', '\n')
+            logger.debug("Converted escaped \\n to actual newlines")
+        else:
+            normalized = key_content
+        
+        # Step 2: Handle base64 encoded keys
+        if not any(header in normalized.lower() for header in [
+            'begin openssh private key',
+            'begin rsa private key',
+            'begin private key'
+        ]):
+            # Might be base64 encoded, try to decode
+            try:
+                # Remove whitespace for base64 decode
+                clean = normalized.strip().replace('\n', '').replace('\r', '')
+                if len(clean) >= 40 and all(c.isalnum() or c in '+/=' for c in clean):
+                    decoded = base64.b64decode(clean, validate=True)
+                    decoded_str = decoded.decode('utf-8')
+                    if any(header in decoded_str.lower() for header in [
+                        'begin openssh private key',
+                        'begin rsa private key',
+                        'begin private key'
+                    ]):
+                        normalized = decoded_str
+                        logger.debug("Successfully decoded base64 SSH key")
+            except Exception as e:
+                logger.debug(f"Base64 decode attempt failed: {e}")
+        
+        # Step 3: Normalize line endings (CRLF -> LF)
+        if '\r\n' in normalized:
+            normalized = normalized.replace('\r\n', '\n')
+            logger.debug("Normalized CRLF to LF")
+        
+        # Step 4: Ensure trailing newline
+        if not normalized.endswith('\n'):
+            normalized += '\n'
+            logger.debug("Added trailing newline")
+        
+        # Step 5: Final validation - must contain proper SSH key headers
+        if not any(header in normalized.lower() for header in [
+            'begin openssh private key',
+            'begin rsa private key',
+            'begin private key'
+        ]):
+            logger.error("SSH key missing BEGIN header after normalization")
+            return None
+        
+        if not any(footer in normalized.lower() for footer in [
+            'end openssh private key',
+            'end rsa private key',
+            'end private key'
+        ]):
+            logger.error("SSH key missing END footer after normalization")
+            return None
+        
+        return normalized
+    
+    def _validate_ssh_key_with_ssh_keygen(self, key_path: Path) -> bool:
+        """
+        Validate SSH key using ssh-keygen -y command.
+        
+        Args:
+            key_path: Path to SSH key file
+            
+        Returns:
+            True if key is valid, False otherwise
+        """
+        try:
+            cmd = ['ssh-keygen', '-y', '-f', str(key_path)]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"SSH key validation passed: {result.stdout[:50]}...")
+                return True
+            else:
+                logger.error(f"SSH key validation failed: {result.stderr[:200]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("SSH key validation timeout")
+            return False
+        except Exception as e:
+            logger.error(f"SSH key validation error: {e}")
+            return False
+    
     def _write_ssh_key_file(self) -> Optional[Path]:
         """
-        Write SSH key to temporary file with proper formatting.
+        Write SSH key to temporary file with robust format detection and validation.
         
         Returns:
             Path to SSH key file or None on failure
         """
         if not self.ci_push_ssh_key:
             logger.error("No CI_PUSH_SSH_KEY available")
+            logger.info("HOKIBOT_SSH_KEY_INVALID=1 reason=empty_key")
             return None
         
         try:
+            # Analyze key format
+            meta = self._analyze_ssh_key_format(self.ci_push_ssh_key)
+            
+            # Log metadata (safe - no key content)
+            logger.info(f"HOKIBOT_SSH_KEY_META=length={meta['length']} "
+                       f"has_begin={meta['has_begin']} has_end={meta['has_end']} "
+                       f"newline_count={meta['newline_count']} "
+                       f"contains_backslash_n={meta['contains_backslash_n']} "
+                       f"is_base64_candidate={meta['is_base64_candidate']}")
+            
+            # Normalize key content
+            normalized_key = self._normalize_ssh_key_content(self.ci_push_ssh_key)
+            if not normalized_key:
+                logger.error("Failed to normalize SSH key")
+                logger.info("HOKIBOT_SSH_KEY_INVALID=1 reason=normalization_failed")
+                return None
+            
             # Create temporary directory for SSH key
             ssh_dir = Path("/tmp/hokibot_ssh")
             ssh_dir.mkdir(exist_ok=True, mode=0o700)
             ssh_key_path = ssh_dir / "id_ed25519"
             
-            # Process key content
-            key_content = self.ci_push_ssh_key
-            
-            # Handle escaped newlines (\\n -> \n)
-            key_content = key_content.replace('\\n', '\n')
-            
-            # Normalize CRLF to LF
-            key_content = key_content.replace('\r\n', '\n')
-            
-            # Ensure trailing newline
-            if not key_content.endswith('\n'):
-                key_content += '\n'
-            
             # Write key file
             with open(ssh_key_path, 'w', encoding='utf-8') as f:
-                f.write(key_content)
+                f.write(normalized_key)
             
             # Set strict permissions
             ssh_key_path.chmod(0o600)
             
+            # Validate key with ssh-keygen BEFORE using it
+            logger.info("Validating SSH key with ssh-keygen...")
+            if not self._validate_ssh_key_with_ssh_keygen(ssh_key_path):
+                logger.error("SSH key failed validation")
+                # Clean up invalid key file
+                try:
+                    ssh_key_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                logger.info("HOKIBOT_SSH_KEY_INVALID=1 reason=ssh_keygen_validation_failed")
+                return None
+            
             self._ssh_key_file = ssh_key_path
-            logger.info(f"HOKIBOT_SSH_KEY_WRITTEN=1 path={ssh_key_path}")
+            logger.info(f"HOKIBOT_SSH_KEY_WRITTEN=1 path={ssh_key_path} validated=1")
             return ssh_key_path
             
         except Exception as e:
@@ -118,7 +304,7 @@ class HokibotRunner:
     
     def _clone_with_ssh(self, clone_dir: Path) -> bool:
         """
-        Clone repository using SSH key with reliable configuration.
+        Clone repository using SSH key with robust validation.
         
         Args:
             clone_dir: Directory to clone into
@@ -133,6 +319,8 @@ class HokibotRunner:
         
         ssh_key_path = self._write_ssh_key_file()
         if not ssh_key_path:
+            # Key validation already failed in _write_ssh_key_file
+            logger.info(f"HOKIBOT_FAILSAFE=1 error=invalid_ssh_key")
             return False
         
         try:
@@ -246,6 +434,8 @@ class HokibotRunner:
         """
         ssh_key_path = self._write_ssh_key_file()
         if not ssh_key_path:
+            # Key validation already failed in _write_ssh_key_file
+            logger.info(f"HOKIBOT_FAILSAFE=1 error=invalid_ssh_key")
             return False
         
         try:
@@ -321,7 +511,7 @@ class HokibotRunner:
         logger.info(f"HOKIBOT_CLONE_DIR={clone_dir}")
         
         try:
-            # Step 1: Clone repository with SSH key
+            # Step 1: Clone repository with SSH key (includes key validation)
             logger.info(f"Cloning repository to {clone_dir}")
             
             if not self._clone_with_ssh(clone_dir):
@@ -368,7 +558,7 @@ class HokibotRunner:
                 logger.info("HOKIBOT_FAILSAFE=1 error=commit_failed")
                 return {"changed": len(changed_packages), "committed": False, "pushed": False}
             
-            # Step 4: Push changes
+            # Step 4: Push changes (includes key re-validation)
             logger.info("Pushing changes to repository")
             push_success = self._git_push_with_ssh(clone_dir)
             
