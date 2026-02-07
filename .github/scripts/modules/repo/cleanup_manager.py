@@ -1,6 +1,6 @@
 """
 Cleanup Manager Module - Handles Zero-Residue policy and server cleanup ONLY
-WITH IMPROVED DELETION OBSERVABILITY
+WITH IMPROVED DELETION OBSERVABILITY AND VERSION NORMALIZATION
 
 CRITICAL: Version cleanup logic has been moved to SmartCleanup.
 This module now handles ONLY:
@@ -82,15 +82,44 @@ class CleanupManager:
         
         logger.info("✅ PRE-DATABASE VALIDATION: Output directory revalidated successfully.")
     
+    def _normalize_version_for_comparison(self, version_str: str) -> str:
+        """
+        Normalize version string for comparison by ensuring epoch is present.
+        
+        Rules:
+        - If version already contains ':', keep it as is (e.g., "1:r1797.88f5a8a-1")
+        - If version doesn't contain ':', prepend "0:" (e.g., "5.15.4-1" -> "0:5.15.4-1")
+        - Trim whitespace
+        
+        Args:
+            version_str: Raw version string (may or may not have epoch)
+            
+        Returns:
+            Normalized version string with guaranteed epoch
+        """
+        if not version_str:
+            return version_str
+        
+        # Trim whitespace
+        version_str = version_str.strip()
+        
+        # If already contains ':', return as is (already has epoch)
+        if ':' in version_str:
+            return version_str
+        
+        # No epoch found, prepend "0:"
+        return f"0:{version_str}"
+    
     def version_prune_vps(self, version_tracker, desired_inventory: Optional[Set[str]] = None):
         """
         🚨 STRICT VPS ZERO-RESIDUE VERSION PRUNE:
         When a package has a newer target/latest version, any older versions MUST be deleted from VPS.
         
-        FIXED: Do NOT delete desired inventory packages when target version is missing.
+        FIXED: Compare NORMALIZED versions (epoch-less target versions treated as epoch 0).
         
-        NEW: Improved decision logging with grep-safe lines:
-        VPS_PRUNE_DECISION: pkg=<pkg> file=<basename> vps_ver=<ver> target_ver=<target_or_NONE> desired=<0/1> action=KEEP/DELETE reason=<...>
+        NEW: Improved decision logging with normalized versions:
+        VPS_PRUNE_DECISION: pkg=<pkg> file=<basename> vps_ver=<ver> target_ver=<target_or_NONE> 
+                          vps_norm=<norm> target_norm=<norm_or_NONE> desired=<0/1> action=KEEP/DELETE reason=<...>
         
         Args:
             version_tracker: VersionTracker instance with target versions
@@ -148,21 +177,28 @@ class CleanupManager:
         
         for pkg_name, packages in packages_by_name.items():
             target_version = version_tracker.get_target_version(pkg_name)
+            target_norm = self._normalize_version_for_comparison(target_version) if target_version else None
             is_desired = desired_inventory and pkg_name in desired_inventory
             
             if target_version:
-                # Package has a target version - keep only target version, delete others
+                # Package has a target version - keep only matching normalized versions
                 for vps_file, filename, file_version in packages:
-                    if file_version == target_version:
-                        # This is the target version - keep it
-                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
-                                  f"target_ver={target_version} desired={1 if is_desired else 0} "
-                                  f"action=KEEP reason=target_version_match")
+                    file_norm = self._normalize_version_for_comparison(file_version)
+                    
+                    if file_norm == target_norm:
+                        # This matches the target version - keep it
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
+                                  f"vps_ver={file_version} target_ver={target_version} "
+                                  f"vps_norm={file_norm} target_norm={target_norm} "
+                                  f"desired={1 if is_desired else 0} "
+                                  f"action=KEEP reason=target_version_match_normalized")
                     else:
-                        # Old version - mark for deletion
-                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
-                                  f"target_ver={target_version} desired={1 if is_desired else 0} "
-                                  f"action=DELETE reason=old_version_not_target")
+                        # Different version - mark for deletion
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
+                                  f"vps_ver={file_version} target_ver={target_version} "
+                                  f"vps_norm={file_norm} target_norm={target_norm} "
+                                  f"desired={1 if is_desired else 0} "
+                                  f"action=DELETE reason=old_version_not_target_normalized")
                         files_to_delete.append(vps_file)
                         deleted_count += 1
                         
@@ -172,16 +208,21 @@ class CleanupManager:
                             logger.info(f"  Also deleting signature for: {filename}")
             else:
                 # No target version registered for this package
-                if is_desired:
-                    # Package is in desired inventory but no target version - KEEP ALL VERSIONS
-                    for vps_file, filename, file_version in packages:
-                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
-                                  f"target_ver=NONE desired=1 action=KEEP reason=desired_guard_no_target")
-                else:
-                    # Package not in desired inventory - delete all versions
-                    for vps_file, filename, file_version in packages:
-                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
-                                  f"target_ver=NONE desired=0 action=DELETE reason=out_of_policy")
+                for vps_file, filename, file_version in packages:
+                    file_norm = self._normalize_version_for_comparison(file_version)
+                    
+                    if is_desired:
+                        # Package is in desired inventory but no target version - KEEP
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
+                                  f"vps_ver={file_version} target_ver=NONE "
+                                  f"vps_norm={file_norm} target_norm=NONE "
+                                  f"desired=1 action=KEEP reason=desired_guard_no_target")
+                    else:
+                        # Package not in desired inventory - DELETE
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
+                                  f"vps_ver={file_version} target_ver=NONE "
+                                  f"vps_norm={file_norm} target_norm=NONE "
+                                  f"desired=0 action=DELETE reason=out_of_policy")
                         files_to_delete.append(vps_file)
                         deleted_count += 1
                         
@@ -204,7 +245,7 @@ class CleanupManager:
                 else:
                     # Keep database files
                     logger.info(f"VPS_PRUNE_DECISION: pkg={self.repo_name} file={filename} vps_ver=db "
-                              f"target_ver=db desired=1 action=KEEP reason=db")
+                              f"target_ver=db vps_norm=db target_norm=db desired=1 action=KEEP reason=db")
         
         # Execute deletion in batches
         if not files_to_delete:
