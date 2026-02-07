@@ -106,6 +106,7 @@ class PackageBuilderOrchestrator:
             'database_success': False,
             'signature_success': False,
             'upload_success': False,
+            'up3_success': False,  # NEW: Track UP3 success
             'destructive_cleanup_allowed': False
         }
         
@@ -236,23 +237,40 @@ class PackageBuilderOrchestrator:
             a) repo database generation succeeded AND
             b) repo signature succeeded AND  
             c) rsync upload succeeded
+        
+        NEW: VERSION PRUNE ALLOWANCE:
+            Version prune is allowed when:
+            upload_success == True AND db_success == True AND 
+            (signature_success == True OR signing disabled) AND up3_success == True
         """
-        # G1: Empty-run gate
+        # G1: Empty-run gate for destructive cleanup
         if self.gate_state['packages_built'] == 0:
             logger.info("GATE: empty-run (built=0) -> skipping destructive VPS deletions")
             self.gate_state['destructive_cleanup_allowed'] = False
-            return False
-        
-        # G2: Partial-failure gate
-        if (self.gate_state['database_success'] and 
-            self.gate_state['signature_success'] and
-            self.gate_state['upload_success']):
-            self.gate_state['destructive_cleanup_allowed'] = True
-            return True
         else:
-            logger.info("GATE: partial failure -> skipping destructive VPS deletions")
-            self.gate_state['destructive_cleanup_allowed'] = False
-            return False
+            # G2: Partial-failure gate for destructive cleanup
+            if (self.gate_state['database_success'] and 
+                self.gate_state['signature_success'] and
+                self.gate_state['upload_success']):
+                self.gate_state['destructive_cleanup_allowed'] = True
+            else:
+                logger.info("GATE: partial failure -> skipping destructive VPS deletions")
+                self.gate_state['destructive_cleanup_allowed'] = False
+        
+        # NEW: Evaluate version prune allowance
+        version_prune_allowed = (
+            self.gate_state['upload_success'] and
+            self.gate_state['database_success'] and
+            (self.gate_state['signature_success'] or not self.gpg_handler.gpg_enabled) and
+            self.gate_state['up3_success']
+        )
+        
+        if version_prune_allowed:
+            logger.info("GATE: version prune allowed (upload+db+signature+UP3 success)")
+        else:
+            logger.info("GATE: version prune blocked (one or more checks failed)")
+        
+        return version_prune_allowed
     
     def phase_i_vps_sync(self) -> bool:
         """
@@ -569,10 +587,12 @@ class PackageBuilderOrchestrator:
         )
         
         # NEW: UP3 POST-UPLOAD VERIFICATION
+        up3_success = False
         if upload_success:
-            upload_success = self._up3_verify_upload_completeness(files_to_upload)
+            up3_success = self._up3_verify_upload_completeness(files_to_upload)
         
         self.gate_state['upload_success'] = upload_success
+        self.gate_state['up3_success'] = up3_success
         
         if not upload_success:
             logger.error("Failed to upload files to VPS")
@@ -584,14 +604,14 @@ class PackageBuilderOrchestrator:
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
         logger.info(f"VPS orphan sweep complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
         
-        # Step 6: Evaluate gates and conditionally run destructive cleanup
-        destructive_allowed = self._evaluate_gates()
+        # Step 6: Evaluate gates and conditionally run VPS version prune
+        version_prune_allowed = self._evaluate_gates()
         
-        if destructive_allowed:
-            logger.info("All gates passed - running destructive VPS cleanup...")
-            self.cleanup_manager.server_cleanup(self.version_tracker, self.desired_inventory)
+        if version_prune_allowed:
+            logger.info("All gates passed - running STRICT VPS version prune...")
+            self.cleanup_manager.version_prune_vps(self.version_tracker, self.desired_inventory)
         else:
-            logger.info("Gates blocked destructive VPS cleanup")
+            logger.info("Gates blocked VPS version prune")
         
         # NEW: Step 7 - Run Hokibot action if we have hokibot data
         if self.build_tracker.hokibot_data:
@@ -730,6 +750,7 @@ class PackageBuilderOrchestrator:
             logger.info(f"  Database success: {self.gate_state['database_success']}")
             logger.info(f"  Signature success: {self.gate_state['signature_success']}")
             logger.info(f"  Upload success: {self.gate_state['upload_success']}")
+            logger.info(f"  UP3 success: {self.gate_state['up3_success']}")
             logger.info(f"  Destructive cleanup allowed: {self.gate_state['destructive_cleanup_allowed']}")
             logger.info(f"Package signing: {'Enabled' if self.sign_packages else 'Disabled'}")
             logger.info(f"GPG signing: {'Enabled' if self.gpg_handler.gpg_enabled else 'Disabled'}")

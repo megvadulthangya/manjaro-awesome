@@ -4,8 +4,8 @@ WITH IMPROVED DELETION OBSERVABILITY
 
 CRITICAL: Version cleanup logic has been moved to SmartCleanup.
 This module now handles ONLY:
-- Server cleanup (VPS zombie package removal)
-- Database file cleanup
+1. Server cleanup (VPS zombie package removal)
+2. Database file maintenance
 """
 
 import os
@@ -14,7 +14,7 @@ import shutil
 import hashlib
 import logging
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,173 @@ class CleanupManager:
         self._remove_orphaned_signatures()
         
         logger.info("✅ PRE-DATABASE VALIDATION: Output directory revalidated successfully.")
+    
+    def version_prune_vps(self, version_tracker, desired_inventory: Optional[Set[str]] = None):
+        """
+        🚨 STRICT VPS ZERO-RESIDUE VERSION PRUNE:
+        When a package has a newer target/latest version, any older versions MUST be deleted from VPS.
+        
+        NEW: Implementation of strict version pruning:
+        1. Use VersionTracker registered target versions as the ONLY allowed versions for each pkgname.
+        2. For each VPS package file:
+           - Parse pkgname + full version.
+           - If pkgname has a registered target version:
+               - KEEP only the file whose version == target version.
+               - DELETE all other versions for the same pkgname (old versions), and delete their corresponding .sig if present.
+           - If pkgname has NO target version registered:
+               - If pkgname is in desired_inventory -> KEEP (do not delete unknown pkgname presence).
+               - Else delete (out-of-policy), but still pkg+sig together.
+        3. Logging includes grep-safe proof lines.
+        
+        Args:
+            version_tracker: VersionTracker instance with target versions
+            desired_inventory: Set of package names that should exist in repository
+        """
+        logger.info("STRICT VPS VERSION PRUNE: Removing old package versions from VPS...")
+        
+        # Get ALL files from VPS (including signatures)
+        vps_files = self._get_vps_file_inventory()
+        if vps_files is None:
+            logger.error("Failed to get VPS file inventory")
+            return
+        
+        if not vps_files:
+            logger.info("No files found on VPS - nothing to prune")
+            return
+        
+        # Separate package files and signature files
+        package_files = []
+        signature_files = []
+        signature_map = {}  # package_filename -> signature_file_path
+        
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            if filename.endswith('.sig'):
+                signature_files.append(vps_file)
+                # Map signature to package file
+                pkg_filename = filename[:-4]  # Remove .sig extension
+                signature_map[pkg_filename] = vps_file
+            elif filename.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                package_files.append(vps_file)
+        
+        logger.info(f"Found {len(package_files)} package files and {len(signature_files)} signatures on VPS")
+        
+        # Parse package files and group by pkgname
+        packages_by_name: Dict[str, List[Tuple[str, str, str]]] = {}  # pkgname -> [(file_path, filename, version)]
+        
+        for vps_file in package_files:
+            filename = Path(vps_file).name
+            pkg_name, file_version = version_tracker.parse_package_filename(filename)
+            
+            if not pkg_name or not file_version:
+                # Cannot parse, skip to be safe
+                logger.warning(f"Cannot parse package filename: {filename}, skipping")
+                continue
+            
+            if pkg_name not in packages_by_name:
+                packages_by_name[pkg_name] = []
+            
+            packages_by_name[pkg_name].append((vps_file, filename, file_version))
+        
+        # Determine files to delete based on strict version pruning rules
+        files_to_delete = []
+        deleted_count = 0
+        
+        for pkg_name, packages in packages_by_name.items():
+            target_version = version_tracker.get_target_version(pkg_name)
+            
+            if target_version:
+                # Package has a target version - keep only target version, delete others
+                for vps_file, filename, file_version in packages:
+                    if file_version == target_version:
+                        # This is the target version - keep it
+                        logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={pkg_name} ver={file_version} reason=target")
+                    else:
+                        # Old version - mark for deletion
+                        logger.info(f"VPS_PRUNE_DELETE: file={filename} pkg={pkg_name} ver={file_version} reason=old_version_not_target")
+                        files_to_delete.append(vps_file)
+                        deleted_count += 1
+                        
+                        # Also delete corresponding signature if exists
+                        if filename in signature_map:
+                            files_to_delete.append(signature_map[filename])
+                            logger.info(f"  Also deleting signature for: {filename}")
+            else:
+                # No target version registered for this package
+                if desired_inventory and pkg_name in desired_inventory:
+                    # Package is in desired inventory but no target version (should not happen)
+                    # Keep all versions for safety
+                    for vps_file, filename, file_version in packages:
+                        logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={pkg_name} ver={file_version} reason=desired_guard")
+                else:
+                    # Package not in desired inventory - delete all versions
+                    for vps_file, filename, file_version in packages:
+                        logger.info(f"VPS_PRUNE_DELETE: file={filename} pkg={pkg_name} ver={file_version} reason=out_of_policy")
+                        files_to_delete.append(vps_file)
+                        deleted_count += 1
+                        
+                        # Also delete corresponding signature if exists
+                        if filename in signature_map:
+                            files_to_delete.append(signature_map[filename])
+                            logger.info(f"  Also deleting signature for: {filename}")
+        
+        # Also handle database/signature files - always keep them
+        for vps_file in vps_files:
+            filename = Path(vps_file).name
+            # Database and signature files are handled by signature_map and package deletions
+            # But keep any database files that weren't already processed
+            if (filename.startswith(f"{self.repo_name}.db") or 
+                filename.startswith(f"{self.repo_name}.files")):
+                # Check if it's a .sig file for a database
+                if filename.endswith('.sig'):
+                    # Keep database signature files
+                    continue
+                else:
+                    # Keep database files
+                    logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={self.repo_name} ver=db reason=db")
+        
+        # Execute deletion in batches
+        if not files_to_delete:
+            logger.info("No files to delete in version prune")
+            logger.info(f"VPS_PRUNE_DELETED_COUNT=0")
+            return
+        
+        logger.info(f"STRICT VERSION PRUNE: Deleting {len(files_to_delete)} files ({deleted_count} packages + signatures)")
+        
+        # IMPROVED OBSERVABILITY: Log first 20 basenames
+        logger.info(f"Deleting files (showing first 20):")
+        for i, vps_file in enumerate(files_to_delete[:20]):
+            filename = Path(vps_file).name
+            logger.info(f"  [{i+1}] {filename}")
+        if len(files_to_delete) > 20:
+            logger.info(f"  ... and {len(files_to_delete) - 20} more")
+        
+        # Delete files in batches
+        batch_size = 50
+        actual_deleted = 0
+        
+        for i in range(0, len(files_to_delete), batch_size):
+            batch = files_to_delete[i:i + batch_size]
+            if self._delete_files_remote(batch):
+                actual_deleted += len(batch)
+        
+        logger.info(f"STRICT VERSION PRUNE: Deleted {actual_deleted} files")
+        logger.info(f"VPS_PRUNE_DELETED_COUNT={actual_deleted}")
+        
+        # After deleting packages, clean up any orphaned signatures
+        self._cleanup_orphaned_signatures_vps()
+    
+    def server_cleanup(self, version_tracker, desired_inventory: Optional[Set[str]] = None):
+        """
+        DEPRECATED: Use version_prune_vps instead.
+        This function is kept for backward compatibility but now calls version_prune_vps.
+        
+        Args:
+            version_tracker: VersionTracker instance with target versions
+            desired_inventory: Set of package names that should exist in repository
+        """
+        logger.warning("server_cleanup is deprecated, using version_prune_vps instead")
+        self.version_prune_vps(version_tracker, desired_inventory)
     
     def get_vps_files_to_delete(self, version_tracker) -> Tuple[List[str], List[str]]:
         """
@@ -230,154 +397,6 @@ class CleanupManager:
             logger.error("❌ VPS orphan signature sweep had failures")
         
         return len(package_files), len(signature_files), deleted_count
-    
-    def server_cleanup(self, version_tracker, desired_inventory: Optional[Set[str]] = None):
-        """
-        🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
-        using TARGET VERSIONS as SOURCE OF TRUTH with desired inventory guard.
-        
-        IMPLEMENTATION OF FIXED DESIRED INVENTORY GUARD:
-        1. For VPS packages NOT in desired inventory: mark for deletion
-        2. For VPS packages IN desired inventory: keep ONLY target version
-        3. Add grep-proof log lines for each decision
-        4. Track counters for summary
-        
-        Args:
-            version_tracker: VersionTracker instance with target versions
-            desired_inventory: Set of package names that should exist in repository
-        """
-        logger.info("Server cleanup: Removing zombie packages from VPS with fixed desired inventory guard...")
-        
-        # Check if destructive cleanup is allowed by gates
-        if not hasattr(version_tracker, '_upload_successful') or not version_tracker._upload_successful:
-            logger.info("Gate blocked: destructive cleanup not allowed (upload not successful)")
-            return
-        
-        # Get ALL files from VPS (including signatures)
-        vps_files = self._get_vps_file_inventory()
-        if vps_files is None:
-            logger.error("Failed to get VPS file inventory")
-            return
-        
-        if not vps_files:
-            logger.info("No files found on VPS - nothing to clean up")
-            return
-        
-        # Track counters for summary
-        guard_keep_count = 0
-        guard_delete_count = 0
-        
-        # Process package files for cleanup decisions
-        files_to_delete = []
-        processed_packages = set()
-        
-        for vps_file in vps_files:
-            filename = Path(vps_file).name
-            
-            # Skip database and signature files from deletion logic (handled separately)
-            is_db_or_sig = any(filename.endswith(ext) for ext in ['.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'])
-            if is_db_or_sig:
-                continue
-            
-            # Only process package files
-            if not (filename.endswith('.pkg.tar.zst') or filename.endswith('.pkg.tar.xz')):
-                continue
-            
-            # Parse pkgname and version from filename using VersionTracker
-            pkg_name, file_version = version_tracker.parse_package_filename(filename)
-            
-            if not pkg_name or not file_version:
-                # Cannot parse, skip to be safe
-                continue
-            
-            # Determine if this file should be kept or deleted
-            keep_file, reason = self._evaluate_vps_file_for_cleanup(
-                pkg_name, file_version, filename, desired_inventory, version_tracker
-            )
-            
-            if keep_file:
-                guard_keep_count += 1
-                logger.info(f"GUARD_KEEP: {filename} pkg={pkg_name} file_ver={file_version} target_ver={version_tracker.get_target_version(pkg_name)} reason={reason}")
-            else:
-                guard_delete_count += 1
-                logger.info(f"GUARD_DELETE: {filename} pkg={pkg_name} file_ver={file_version} target_ver={version_tracker.get_target_version(pkg_name)} reason={reason}")
-                
-                # Mark package for deletion
-                files_to_delete.append(vps_file)
-                
-                # Also mark corresponding signature file for deletion
-                sig_file = vps_file + '.sig'
-                if sig_file in vps_files:
-                    files_to_delete.append(sig_file)
-                    logger.info(f"Also deleting signature: {Path(sig_file).name}")
-        
-        # Execute deletion with improved observability
-        if not files_to_delete:
-            logger.info("No zombie packages found on VPS")
-        else:
-            logger.info(f"Identified {len(files_to_delete)} files for deletion")
-            
-            # IMPROVED OBSERVABILITY: Log first 20 basenames
-            logger.info(f"Deleting {len(files_to_delete)} remote files (showing first 20):")
-            for i, vps_file in enumerate(files_to_delete[:20]):
-                filename = Path(vps_file).name
-                logger.info(f"  [{i+1}] {filename}")
-            if len(files_to_delete) > 20:
-                logger.info(f"  ... and {len(files_to_delete) - 20} more")
-            
-            # Delete files in batches
-            batch_size = 50
-            deleted_count = 0
-            
-            for i in range(0, len(files_to_delete), batch_size):
-                batch = files_to_delete[i:i + batch_size]
-                if self._delete_files_remote(batch):
-                    deleted_count += len(batch)
-            
-            logger.info(f"Server cleanup: Deleted {deleted_count} files")
-        
-        # Log summary counters
-        logger.info(f"REMOTE_GUARD_KEEP_COUNT={guard_keep_count}")
-        logger.info(f"REMOTE_GUARD_DELETE_COUNT={guard_delete_count}")
-        
-        # After deleting packages, clean up any signatures for deleted packages
-        self._cleanup_orphaned_signatures_vps()
-    
-    def _evaluate_vps_file_for_cleanup(self, pkg_name: str, file_version: str, filename: str, 
-                                      desired_inventory: Optional[Set[str]], version_tracker) -> Tuple[bool, str]:
-        """
-        Evaluate whether a VPS file should be kept or deleted based on desired inventory and target versions.
-        
-        Args:
-            pkg_name: Package name
-            file_version: Normalized version from filename
-            filename: Original filename for logging
-            desired_inventory: Set of desired package names
-            version_tracker: VersionTracker instance
-            
-        Returns:
-            Tuple of (should_keep: bool, reason: str)
-        """
-        # Check if package is in desired inventory
-        if desired_inventory and pkg_name not in desired_inventory:
-            return False, "not_in_desired_inventory"
-        
-        # Package is in desired inventory, check target version
-        target_version = version_tracker.get_target_version(pkg_name)
-        
-        if not target_version:
-            # No target version registered for this package (should not happen for desired inventory)
-            # Keep to be safe
-            return True, "no_target_version_fallback"
-        
-        # Normalize target version for comparison
-        normalized_target = version_tracker.normalize_version_string(target_version)
-        
-        # Compare versions
-        if file_version == normalized_target:
-            return True, "target_match"
-        else:
-            return False, "old_version_not_target"
     
     def _cleanup_orphaned_signatures_vps(self, vps_files: Optional[List[str]] = None) -> int:
         """
