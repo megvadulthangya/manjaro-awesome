@@ -92,6 +92,73 @@ class VersionTracker:
                 self._package_target_versions[pkg_name] = version
                 logger.info(f"📝 Registered split skipped package: {pkg_name} ({version})")
     
+    def get_target_version(self, pkg_name: str) -> Optional[str]:
+        """
+        Get the target version for a package from the internal registry.
+        
+        Args:
+            pkg_name: Package name
+            
+        Returns:
+            Target version string or None if not registered
+        """
+        return self._package_target_versions.get(pkg_name)
+    
+    def parse_package_filename(self, filename: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse package name and version from package filename.
+        
+        Args:
+            filename: Package filename (e.g., 'package-1.0-1-x86_64.pkg.tar.zst')
+            
+        Returns:
+            Tuple of (pkg_name, normalized_version) or (None, None) if cannot parse
+        """
+        # Remove extensions
+        if filename.endswith('.pkg.tar.zst'):
+            base = filename[:-12]
+        elif filename.endswith('.pkg.tar.xz'):
+            base = filename[:-11]
+        else:
+            # Not a package file
+            return None, None
+        
+        parts = base.split('-')
+        
+        if len(parts) < 3:
+            return None, None
+        
+        # Handle both standard and epoch formats
+        # Try to find the split point between package name and version
+        for i in range(len(parts) - 2, 0, -1):
+            # Check if remaining parts look like version-release-architecture
+            remaining = parts[i:]
+            
+            # Standard format: version-release-architecture
+            if len(remaining) >= 2:
+                # Check if the first remaining part looks like a version (contains digit)
+                if any(c.isdigit() for c in remaining[0]):
+                    # Extract package name
+                    pkg_name = '-'.join(parts[:i])
+                    
+                    # Reconstruct version without architecture
+                    if len(remaining) >= 2:
+                        # Handle epoch format: epoch-version-release or version-release
+                        if remaining[0].isdigit() and len(remaining) >= 3:
+                            # epoch-version-release format
+                            epoch, version, release = remaining[0], remaining[1], remaining[2]
+                            file_version = f"{epoch}:{version}-{release}"
+                        else:
+                            # version-release format
+                            version, release = remaining[0], remaining[1]
+                            file_version = f"{version}-{release}"
+                        
+                        # Normalize the version
+                        normalized = self.normalize_version_string(file_version)
+                        return pkg_name, normalized
+        
+        return None, None
+    
     def package_exists(self, pkg_name: str, remote_files: List[str]) -> bool:
         """Check if package exists on server"""
         if not remote_files:
@@ -146,37 +213,8 @@ class VersionTracker:
         for filename in remote_files:
             if filename.startswith(f"{pkg_name}-"):
                 # Extract version from filename
-                base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-                parts = base.split('-')
-                
-                # Find where the package name ends and version begins
-                # Package name can have multiple hyphenated parts, so we need to find the split point
-                for i in range(1, len(parts)):
-                    possible_name = '-'.join(parts[:i])
-                    if possible_name == pkg_name:
-                        # Found the package name boundary
-                        # The remaining parts are: [version, release, architecture] or [epoch, version, release, architecture]
-                        remaining = parts[i:]
-                        
-                        # Handle different cases
-                        if len(remaining) >= 3:
-                            # Check if first part is epoch (all digits)
-                            if remaining[0].isdigit() and len(remaining) >= 4:
-                                # Format: epoch-version-release-architecture
-                                epoch = remaining[0]
-                                version = remaining[1]
-                                release = remaining[2]
-                                # Architecture is remaining[3] but we strip it later
-                                raw_version = f"{epoch}:{version}-{release}"
-                            else:
-                                # Format: version-release-architecture
-                                version = remaining[0]
-                                release = remaining[1]
-                                raw_version = f"{version}-{release}"
-                            
-                            # Normalize to remove architecture and ensure epoch format
-                            normalized = self.normalize_version_string(raw_version)
-                            logger.debug(f"Extracted remote version for {pkg_name}: raw='{raw_version}', normalized='{normalized}'")
-                            return normalized
+                pkg_name_from_file, version = self.parse_package_filename(filename)
+                if pkg_name_from_file == pkg_name and version:
+                    return version
         
         return None

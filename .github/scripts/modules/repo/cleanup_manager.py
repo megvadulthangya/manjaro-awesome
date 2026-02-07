@@ -236,25 +236,22 @@ class CleanupManager:
         🚨 ZERO-RESIDUE SERVER CLEANUP: Remove zombie packages from VPS 
         using TARGET VERSIONS as SOURCE OF TRUTH with desired inventory guard.
         
-        Only keeps packages that match registered target versions.
-        Adds safety guard: NEVER delete a package whose pkgname is in desired_inventory.
-        
-        IMPROVED OBSERVABILITY: Logs first 20 basenames when deletions occur.
+        IMPLEMENTATION OF FIXED DESIRED INVENTORY GUARD:
+        1. For VPS packages NOT in desired inventory: mark for deletion
+        2. For VPS packages IN desired inventory: keep ONLY target version
+        3. Add grep-proof log lines for each decision
+        4. Track counters for summary
         
         Args:
             version_tracker: VersionTracker instance with target versions
-            desired_inventory: Set of package names that should exist in repository (optional)
+            desired_inventory: Set of package names that should exist in repository
         """
-        logger.info("Server cleanup: Removing zombie packages from VPS with desired inventory guard...")
+        logger.info("Server cleanup: Removing zombie packages from VPS with fixed desired inventory guard...")
         
-        # Check if we have any target versions registered
-        if not version_tracker._package_target_versions:
-            logger.warning("No target versions registered - skipping server cleanup")
+        # Check if destructive cleanup is allowed by gates
+        if not hasattr(version_tracker, '_upload_successful') or not version_tracker._upload_successful:
+            logger.info("Gate blocked: destructive cleanup not allowed (upload not successful)")
             return
-        
-        logger.info(f"Zero-Residue cleanup initiated with {len(version_tracker._package_target_versions)} target versions")
-        if desired_inventory:
-            logger.info(f"Desired inventory guard enabled with {len(desired_inventory)} package names")
         
         # Get ALL files from VPS (including signatures)
         vps_files = self._get_vps_file_inventory()
@@ -266,23 +263,13 @@ class CleanupManager:
             logger.info("No files found on VPS - nothing to clean up")
             return
         
-        # First, identify and delete orphaned signatures (signatures without corresponding packages)
-        orphaned_sigs_deleted = self._cleanup_orphaned_signatures_vps(vps_files)
-        if orphaned_sigs_deleted > 0:
-            logger.info(f"Deleted {orphaned_sigs_deleted} orphaned signatures from VPS")
+        # Track counters for summary
+        guard_keep_count = 0
+        guard_delete_count = 0
         
-        # Refresh file list after orphan cleanup
-        vps_files = self._get_vps_file_inventory()
-        if not vps_files:
-            logger.info("No files remaining on VPS after orphan cleanup")
-            return
-        
-        # Import SmartCleanup for package name extraction
-        from modules.repo.smart_cleanup import SmartCleanup
-        
-        # Identify files to keep based on target versions with desired inventory guard
-        files_to_keep = set()
+        # Process package files for cleanup decisions
         files_to_delete = []
+        processed_packages = set()
         
         for vps_file in vps_files:
             filename = Path(vps_file).name
@@ -290,70 +277,107 @@ class CleanupManager:
             # Skip database and signature files from deletion logic (handled separately)
             is_db_or_sig = any(filename.endswith(ext) for ext in ['.db', '.db.tar.gz', '.sig', '.files', '.files.tar.gz'])
             if is_db_or_sig:
-                files_to_keep.add(filename)
                 continue
             
-            # Extract package name from filename
-            pkg_name = SmartCleanup.extract_package_name_from_filename(filename)
-            
-            if not pkg_name:
-                # Can't parse, keep to be safe
-                files_to_keep.add(filename)
+            # Only process package files
+            if not (filename.endswith('.pkg.tar.zst') or filename.endswith('.pkg.tar.xz')):
                 continue
             
-            # SAFETY GUARD: Check if package is in desired inventory
-            if desired_inventory and pkg_name in desired_inventory:
-                # Package is in desired inventory, keep it even if no target version
-                files_to_keep.add(filename)
-                logger.info(f"Guard keep: {filename} (pkgname {pkg_name} in desired inventory)")
+            # Parse pkgname and version from filename using VersionTracker
+            pkg_name, file_version = version_tracker.parse_package_filename(filename)
+            
+            if not pkg_name or not file_version:
+                # Cannot parse, skip to be safe
                 continue
             
-            # Check if this package has a target version
-            # We only check by pkgname, not full version (simpler logic for server)
-            if pkg_name in version_tracker._package_target_versions:
-                # Keep the file (version cleanup is handled elsewhere)
-                files_to_keep.add(filename)
-                logger.debug(f"Keeping {filename} (has target version)")
+            # Determine if this file should be kept or deleted
+            keep_file, reason = self._evaluate_vps_file_for_cleanup(
+                pkg_name, file_version, filename, desired_inventory, version_tracker
+            )
+            
+            if keep_file:
+                guard_keep_count += 1
+                logger.info(f"GUARD_KEEP: {filename} pkg={pkg_name} file_ver={file_version} target_ver={version_tracker.get_target_version(pkg_name)} reason={reason}")
             else:
-                # No target version registered for this package
-                # Check if it's in our skipped packages
-                if pkg_name in version_tracker._skipped_packages:
-                    files_to_keep.add(filename)
-                    logger.debug(f"Keeping {filename} (skipped package)")
-                else:
-                    # Not in target versions or skipped packages - mark for deletion
-                    files_to_delete.append(vps_file)
-                    logger.info(f"Marking for deletion: {filename} (not in target versions)")
+                guard_delete_count += 1
+                logger.info(f"GUARD_DELETE: {filename} pkg={pkg_name} file_ver={file_version} target_ver={version_tracker.get_target_version(pkg_name)} reason={reason}")
+                
+                # Mark package for deletion
+                files_to_delete.append(vps_file)
+                
+                # Also mark corresponding signature file for deletion
+                sig_file = vps_file + '.sig'
+                if sig_file in vps_files:
+                    files_to_delete.append(sig_file)
+                    logger.info(f"Also deleting signature: {Path(sig_file).name}")
         
         # Execute deletion with improved observability
         if not files_to_delete:
             logger.info("No zombie packages found on VPS")
-            return
-        
-        logger.info(f"Identified {len(files_to_delete)} zombie packages for deletion")
-        
-        # IMPROVED OBSERVABILITY: Log first 20 basenames
-        if files_to_delete:
+        else:
+            logger.info(f"Identified {len(files_to_delete)} files for deletion")
+            
+            # IMPROVED OBSERVABILITY: Log first 20 basenames
             logger.info(f"Deleting {len(files_to_delete)} remote files (showing first 20):")
             for i, vps_file in enumerate(files_to_delete[:20]):
                 filename = Path(vps_file).name
                 logger.info(f"  [{i+1}] {filename}")
             if len(files_to_delete) > 20:
                 logger.info(f"  ... and {len(files_to_delete) - 20} more")
+            
+            # Delete files in batches
+            batch_size = 50
+            deleted_count = 0
+            
+            for i in range(0, len(files_to_delete), batch_size):
+                batch = files_to_delete[i:i + batch_size]
+                if self._delete_files_remote(batch):
+                    deleted_count += len(batch)
+            
+            logger.info(f"Server cleanup: Deleted {deleted_count} files")
         
-        # Delete files in batches
-        batch_size = 50
-        deleted_count = 0
-        
-        for i in range(0, len(files_to_delete), batch_size):
-            batch = files_to_delete[i:i + batch_size]
-            if self._delete_files_remote(batch):
-                deleted_count += len(batch)
-        
-        logger.info(f"Server cleanup complete: Deleted {deleted_count} zombie packages")
+        # Log summary counters
+        logger.info(f"REMOTE_GUARD_KEEP_COUNT={guard_keep_count}")
+        logger.info(f"REMOTE_GUARD_DELETE_COUNT={guard_delete_count}")
         
         # After deleting packages, clean up any signatures for deleted packages
         self._cleanup_orphaned_signatures_vps()
+    
+    def _evaluate_vps_file_for_cleanup(self, pkg_name: str, file_version: str, filename: str, 
+                                      desired_inventory: Optional[Set[str]], version_tracker) -> Tuple[bool, str]:
+        """
+        Evaluate whether a VPS file should be kept or deleted based on desired inventory and target versions.
+        
+        Args:
+            pkg_name: Package name
+            file_version: Normalized version from filename
+            filename: Original filename for logging
+            desired_inventory: Set of desired package names
+            version_tracker: VersionTracker instance
+            
+        Returns:
+            Tuple of (should_keep: bool, reason: str)
+        """
+        # Check if package is in desired inventory
+        if desired_inventory and pkg_name not in desired_inventory:
+            return False, "not_in_desired_inventory"
+        
+        # Package is in desired inventory, check target version
+        target_version = version_tracker.get_target_version(pkg_name)
+        
+        if not target_version:
+            # No target version registered for this package (should not happen for desired inventory)
+            # Keep to be safe
+            return True, "no_target_version_fallback"
+        
+        # Normalize target version for comparison
+        normalized_target = version_tracker.normalize_version_string(target_version)
+        
+        # Compare versions
+        if file_version == normalized_target:
+            return True, "target_match"
+        else:
+            return False, "old_version_not_target"
     
     def _cleanup_orphaned_signatures_vps(self, vps_files: Optional[List[str]] = None) -> int:
         """
