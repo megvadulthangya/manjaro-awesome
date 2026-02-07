@@ -87,17 +87,10 @@ class CleanupManager:
         🚨 STRICT VPS ZERO-RESIDUE VERSION PRUNE:
         When a package has a newer target/latest version, any older versions MUST be deleted from VPS.
         
-        NEW: Implementation of strict version pruning:
-        1. Use VersionTracker registered target versions as the ONLY allowed versions for each pkgname.
-        2. For each VPS package file:
-           - Parse pkgname + full version.
-           - If pkgname has a registered target version:
-               - KEEP only the file whose version == target version.
-               - DELETE all other versions for the same pkgname (old versions), and delete their corresponding .sig if present.
-           - If pkgname has NO target version registered:
-               - If pkgname is in desired_inventory -> KEEP (do not delete unknown pkgname presence).
-               - Else delete (out-of-policy), but still pkg+sig together.
-        3. Logging includes grep-safe proof lines.
+        FIXED: Do NOT delete desired inventory packages when target version is missing.
+        
+        NEW: Improved decision logging with grep-safe lines:
+        VPS_PRUNE_DECISION: pkg=<pkg> file=<basename> vps_ver=<ver> target_ver=<target_or_NONE> desired=<0/1> action=KEEP/DELETE reason=<...>
         
         Args:
             version_tracker: VersionTracker instance with target versions
@@ -155,16 +148,21 @@ class CleanupManager:
         
         for pkg_name, packages in packages_by_name.items():
             target_version = version_tracker.get_target_version(pkg_name)
+            is_desired = desired_inventory and pkg_name in desired_inventory
             
             if target_version:
                 # Package has a target version - keep only target version, delete others
                 for vps_file, filename, file_version in packages:
                     if file_version == target_version:
                         # This is the target version - keep it
-                        logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={pkg_name} ver={file_version} reason=target")
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
+                                  f"target_ver={target_version} desired={1 if is_desired else 0} "
+                                  f"action=KEEP reason=target_version_match")
                     else:
                         # Old version - mark for deletion
-                        logger.info(f"VPS_PRUNE_DELETE: file={filename} pkg={pkg_name} ver={file_version} reason=old_version_not_target")
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
+                                  f"target_ver={target_version} desired={1 if is_desired else 0} "
+                                  f"action=DELETE reason=old_version_not_target")
                         files_to_delete.append(vps_file)
                         deleted_count += 1
                         
@@ -174,15 +172,16 @@ class CleanupManager:
                             logger.info(f"  Also deleting signature for: {filename}")
             else:
                 # No target version registered for this package
-                if desired_inventory and pkg_name in desired_inventory:
-                    # Package is in desired inventory but no target version (should not happen)
-                    # Keep all versions for safety
+                if is_desired:
+                    # Package is in desired inventory but no target version - KEEP ALL VERSIONS
                     for vps_file, filename, file_version in packages:
-                        logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={pkg_name} ver={file_version} reason=desired_guard")
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
+                                  f"target_ver=NONE desired=1 action=KEEP reason=desired_guard_no_target")
                 else:
                     # Package not in desired inventory - delete all versions
                     for vps_file, filename, file_version in packages:
-                        logger.info(f"VPS_PRUNE_DELETE: file={filename} pkg={pkg_name} ver={file_version} reason=out_of_policy")
+                        logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} vps_ver={file_version} "
+                                  f"target_ver=NONE desired=0 action=DELETE reason=out_of_policy")
                         files_to_delete.append(vps_file)
                         deleted_count += 1
                         
@@ -204,7 +203,8 @@ class CleanupManager:
                     continue
                 else:
                     # Keep database files
-                    logger.info(f"VPS_PRUNE_KEEP: file={filename} pkg={self.repo_name} ver=db reason=db")
+                    logger.info(f"VPS_PRUNE_DECISION: pkg={self.repo_name} file={filename} vps_ver=db "
+                              f"target_ver=db desired=1 action=KEEP reason=db")
         
         # Execute deletion in batches
         if not files_to_delete:
