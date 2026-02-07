@@ -58,6 +58,11 @@ jobs:
     name: Build and Deploy Packages
 #    needs: cleanup
     runs-on: ubuntu-latest
+    # Bot-loop guard: prevent workflow from running on hokibot commits
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write  # Required for token-based git push
+    
     container:
       image: archlinux:base-devel
 
@@ -77,7 +82,9 @@ jobs:
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       
-      # GITHUB INTERNAL
+      # GITHUB INTERNAL - Token-based authentication for hokibot
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
       CI_PUSH_SSH_KEY: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPO: ${{ github.repository }}.git
 
@@ -378,9 +385,6 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf
             
-          # Restore pacman.conf
-          mv /etc/pacman.conf.backup /etc/pacman.conf
-          
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
           if ! command -v yay &> /dev/null; then
