@@ -259,6 +259,7 @@ class PackageBuilderOrchestrator:
         Phase I: VPS State Fetch
         - List VPS repo files
         - Sync missing files locally
+        - FIX: Build persistent remote version index
         """
         logger.info("PHASE I: VPS State Fetch")
         
@@ -280,6 +281,9 @@ class PackageBuilderOrchestrator:
         self.vps_files = self.vps_packages + remote_signatures
         
         logger.info(f"Found {len(self.vps_packages)} package files and {len(remote_signatures)} signatures on VPS")
+        
+        # FIX: Build persistent remote version index from VPS package files
+        self.version_tracker.build_remote_version_index(self.vps_packages)
         
         # Run post-repo-enable pacman -Sy if repository has packages
         if not self._run_post_repo_enable_pacman_sy():
@@ -431,8 +435,14 @@ class PackageBuilderOrchestrator:
         Phase IV: Version Audit & Build
         - Compare PKGBUILD version vs mirror version
         - Build only if source is newer
+        - FIX: Log remote version index stats before audit
         """
         logger.info("PHASE IV: Version Audit & Build")
+        
+        # FIX: Log remote version index statistics before audit
+        index_count, sample_list = self.version_tracker.get_remote_version_index_stats()
+        logger.info(f"REMOTE_VERSION_INDEX_COUNT={index_count}")
+        logger.info(f"REMOTE_VERSION_INDEX_SAMPLE={','.join(sample_list)}")
         
         local_packages, aur_packages = self.get_package_lists()
         
@@ -444,14 +454,16 @@ class PackageBuilderOrchestrator:
         for pkg_name in local_packages:
             pkg_dir = self.repo_root / pkg_name
             if pkg_dir.exists():
-                remote_version = self.version_tracker.get_remote_version(pkg_name, self.vps_files)
+                # FIX: Use version tracker with persistent index (pass empty list - tracker uses index)
+                remote_version = self.version_tracker.get_remote_version(pkg_name, [])
                 local_packages_with_versions.append((pkg_dir, remote_version))
             else:
                 logger.warning(f"Local package directory not found: {pkg_name}")
         
         # Process AUR packages
         for pkg_name in aur_packages:
-            remote_version = self.version_tracker.get_remote_version(pkg_name, self.vps_files)
+            # FIX: Use version tracker with persistent index (pass empty list - tracker uses index)
+            remote_version = self.version_tracker.get_remote_version(pkg_name, [])
             aur_packages_with_versions.append((pkg_name, remote_version))
         
         # NEW: Set desired inventory in version tracker for cleanup guard

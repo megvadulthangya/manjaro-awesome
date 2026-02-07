@@ -38,6 +38,9 @@ class VersionTracker:
         self._built_packages: Dict[str, str] = {}  # {pkg_name: built_version} - packages we just built
         self._upload_successful = False
         self._desired_inventory: Set[str] = set()  # NEW: Desired inventory for cleanup guard
+        
+        # FIX: Add persistent remote version index
+        self._remote_version_index: Dict[str, str] = {}  # {pkg_name: normalized_version}
     
     def set_desired_inventory(self, desired_inventory: Set[str]):
         """Set the desired inventory for cleanup guard"""
@@ -46,6 +49,41 @@ class VersionTracker:
     def set_upload_successful(self, successful: bool):
         """Set the upload success flag for safety valve"""
         self._upload_successful = successful
+    
+    def build_remote_version_index(self, remote_files: List[str]):
+        """
+        FIX: Build authoritative remote version index from VPS package files.
+        This index persists across phases and is the source of truth for remote versions.
+        
+        Args:
+            remote_files: List of VPS filenames (basenames) from SSH find
+        """
+        logger.info("Building remote version index from VPS package files...")
+        self._remote_version_index = {}
+        
+        for filename in remote_files:
+            # Only process package files, not signatures
+            if not (filename.endswith('.pkg.tar.zst') or filename.endswith('.pkg.tar.xz')):
+                continue
+            
+            pkg_name, version = self.parse_package_filename(filename)
+            if pkg_name and version:
+                # Store the normalized version
+                self._remote_version_index[pkg_name] = version
+                logger.debug(f"Indexed: {pkg_name} -> {version}")
+        
+        logger.info(f"Remote version index built: {len(self._remote_version_index)} packages")
+    
+    def get_remote_version_index_stats(self) -> Tuple[int, List[str]]:
+        """
+        Get remote version index statistics for logging.
+        
+        Returns:
+            Tuple of (count, first_10_package_names)
+        """
+        count = len(self._remote_version_index)
+        sample = list(self._remote_version_index.keys())[:10]
+        return count, sample
     
     def register_package_target_version(self, pkg_name: str, target_version: str):
         """
@@ -104,6 +142,27 @@ class VersionTracker:
         """
         return self._package_target_versions.get(pkg_name)
     
+    def get_remote_version(self, pkg_name: str, remote_files: List[str] = None) -> Optional[str]:
+        """
+        FIX: Get remote version from persistent index, not from re-parsing files each time.
+        Added grep-proof debug logging.
+        
+        Args:
+            pkg_name: Package name
+            remote_files: Ignored (kept for backward compatibility, using index instead)
+            
+        Returns:
+            Normalized version string or None if not found
+        """
+        # Use the persistent index
+        version = self._remote_version_index.get(pkg_name)
+        
+        # Log grep-proof debug line
+        found = 1 if version else 0
+        logger.info(f"REMOTE_LOOKUP: pkg={pkg_name} found={found} remote_ver={version or 'NONE'} source=vps_list")
+        
+        return version
+    
     def parse_package_filename(self, filename: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Parse package name and version from package filename.
@@ -161,17 +220,8 @@ class VersionTracker:
     
     def package_exists(self, pkg_name: str, remote_files: List[str]) -> bool:
         """Check if package exists on server"""
-        if not remote_files:
-            return False
-        
-        pattern = f"^{re.escape(pkg_name)}-"
-        matches = [f for f in remote_files if re.match(pattern, f)]
-        
-        if matches:
-            logger.debug(f"Package {pkg_name} exists: {matches[0]}")
-            return True
-        
-        return False
+        # Use the index for existence check
+        return pkg_name in self._remote_version_index
     
     def normalize_version_string(self, version_string: str) -> str:
         """
@@ -203,18 +253,3 @@ class VersionTracker:
                 version_string = f"0:{version_string}-1"
         
         return version_string
-    
-    def get_remote_version(self, pkg_name: str, remote_files: List[str]) -> Optional[str]:
-        """Get the version of a package from remote server using SRCINFO-based extraction"""
-        if not remote_files:
-            return None
-        
-        # Look for any file with this package name
-        for filename in remote_files:
-            if filename.startswith(f"{pkg_name}-"):
-                # Extract version from filename
-                pkg_name_from_file, version = self.parse_package_filename(filename)
-                if pkg_name_from_file == pkg_name and version:
-                    return version
-        
-        return None
