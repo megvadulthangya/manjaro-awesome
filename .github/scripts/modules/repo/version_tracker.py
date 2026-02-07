@@ -62,6 +62,8 @@ class VersionTracker:
         self._remote_version_index = {}
         
         processed_count = 0
+        fail_count = 0
+        
         for filename in remote_files:
             # Only process package files, not signatures
             if not (filename.endswith('.pkg.tar.zst') or filename.endswith('.pkg.tar.xz')):
@@ -72,16 +74,25 @@ class VersionTracker:
                 # Store the normalized version
                 self._remote_version_index[pkg_name] = version
                 processed_count += 1
-                logger.debug(f"Indexed: {pkg_name} -> {version}")
+                if fail_count < 5:  # Only log first 5 successful parses for debugging
+                    logger.info(f"PARSE_VPS_PKG: file={filename} pkg={pkg_name} ver={version}")
+            else:
+                fail_count += 1
+                if fail_count <= 5:  # Only log first 5 failures to avoid spam
+                    logger.info(f"PARSE_VPS_PKG: file={filename} pkg=NONE ver=NONE")
+        
+        if fail_count > 0:
+            logger.info(f"PARSE_VPS_FAIL_COUNT={fail_count}")
         
         logger.info(f"Remote version index built: {processed_count} packages indexed")
     
     def _parse_package_filename_for_index(self, filename: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Parse package name and version from package filename for indexing.
+        FIX: Robust parsing for pkgnames ending with digits and where version also starts with digits.
         
         Args:
-            filename: Package filename (e.g., 'package-1.0-1-x86_64.pkg.tar.zst')
+            filename: Package filename (e.g., 'ttf-font-awesome-5-5.15.4-1-any.pkg.tar.zst')
             
         Returns:
             Tuple of (pkg_name, normalized_version) or (None, None) if cannot parse
@@ -95,45 +106,83 @@ class VersionTracker:
             # Not a package file
             return None, None
         
-        # Parse using the same logic as VersionManager/VersionTracker normalization
-        # Extract package name and full version from the base filename
+        # Remove known architecture suffixes from the end
+        # These are only stripped if they appear as the final token
+        arch_patterns = [r'-x86_64$', r'-any$', r'-i686$', r'-aarch64$', r'-armv7h$', r'-armv6h$']
+        for pattern in arch_patterns:
+            base = re.sub(pattern, '', base)
+        
+        # Now split by hyphens
         parts = base.split('-')
-        if len(parts) < 3:
+        
+        if len(parts) < 3:  # Need at least pkgname, version, and release
             return None, None
         
-        # Try to find the split point between package name and version
-        # Package name can contain hyphens, so we need to find where version starts
-        for i in range(1, len(parts) - 1):
-            # Check if this could be a version part (contains digits or colon)
-            test_part = parts[i]
-            if any(c.isdigit() for c in test_part) or ':' in test_part:
-                # Found the version start
-                pkg_name = '-'.join(parts[:i])
-                version_components = parts[i:]
-                
-                # Reconstruct version string without architecture
-                # Remove architecture suffix (last part if it doesn't look like version/release)
-                if len(version_components) >= 2:
-                    # Check if last part looks like an architecture
-                    last_part = version_components[-1]
-                    arch_suffixes = ['x86_64', 'any', 'i686', 'aarch64', 'armv7h', 'armv6h']
-                    if last_part in arch_suffixes:
-                        version_components = version_components[:-1]
-                
-                # Now we have version components: could be [version, release] or [epoch, version, release]
-                if len(version_components) >= 2:
-                    if len(version_components) >= 3 and version_components[0].isdigit():
-                        # epoch-version-release format
-                        epoch, version, release = version_components[0], version_components[1], version_components[2]
-                        version_str = f"{epoch}:{version}-{release}"
-                    else:
-                        # version-release format
-                        version, release = version_components[0], version_components[1]
-                        version_str = f"{version}-{release}"
-                    
-                    # Normalize the version
+        # Try to find where version starts
+        # We look for patterns that indicate version start:
+        # 1. Contains ':' (epoch:version) - e.g., "1:r1797.88f5a8a"
+        # 2. Contains a dot and digits - e.g., "5.15.4"
+        # 3. Starts with 'r' followed by digits (git revisions) - e.g., "r1797.88f5a8a"
+        # 4. All digits (could be epoch alone)
+        
+        # Start from the end and work backwards
+        for i in range(len(parts) - 2, -1, -1):
+            # Check if current part could be the start of version
+            current_part = parts[i]
+            
+            # Check for epoch:version format
+            if ':' in current_part:
+                # This is epoch:version format
+                # The next part should be the release
+                if i + 1 < len(parts) and parts[i + 1].isdigit():
+                    pkg_name = '-'.join(parts[:i])
+                    # Reconstruct version: epoch:version-release
+                    version_str = f"{current_part}-{parts[i + 1]}"
                     normalized = self.normalize_version_string(version_str)
                     return pkg_name, normalized
+            
+            # Check if current part looks like a version (contains digits and maybe dots/letters)
+            # and next part is a digit (the release)
+            elif i + 1 < len(parts) and parts[i + 1].isdigit():
+                # Check if current part could be a version
+                # It should contain at least one digit
+                if any(c.isdigit() for c in current_part):
+                    # Check if this is actually the package name (e.g., "ttf-font-awesome-5" where "5" is part of pkgname)
+                    # To avoid false positives, we need additional checks
+                    # 1. If current_part is all digits, it might be part of package name (e.g., "ttf-font-awesome-5")
+                    # 2. Look ahead to see if we have a valid version pattern
+                    
+                    # Check if we have a valid version pattern
+                    # A version typically contains a dot or starts with 'r' for git
+                    is_likely_version = (
+                        '.' in current_part or  # e.g., "5.15.4"
+                        current_part.startswith('r') or  # e.g., "r1797.88f5a8a"
+                        ':' in current_part or  # Already handled above
+                        (any(c.isdigit() for c in current_part) and any(c.isalpha() for c in current_part))  # Mixed alphanumeric
+                    )
+                    
+                    if is_likely_version:
+                        pkg_name = '-'.join(parts[:i])
+                        # Reconstruct version: version-release
+                        version_str = f"{current_part}-{parts[i + 1]}"
+                        normalized = self.normalize_version_string(version_str)
+                        return pkg_name, normalized
+                    else:
+                        # Check if the part before current could be the version
+                        # This handles cases like "ttf-font-awesome-5-5.15.4-1"
+                        # Where parts are: ["ttf", "font", "awesome", "5", "5.15.4", "1"]
+                        # "5" is not a version, "5.15.4" is
+                        continue
+        
+        # If we get here, try a simpler approach: assume last 2 parts are version-release
+        # This handles standard cases
+        if len(parts) >= 2:
+            # Check if second to last part could be version and last part is release
+            if parts[-1].isdigit() and any(c.isdigit() for c in parts[-2]):
+                pkg_name = '-'.join(parts[:-2])
+                version_str = f"{parts[-2]}-{parts[-1]}"
+                normalized = self.normalize_version_string(version_str)
+                return pkg_name, normalized
         
         return None, None
     
