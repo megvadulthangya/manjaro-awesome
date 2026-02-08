@@ -1,6 +1,7 @@
 """
 Hokibot Module - Handles automatic version bumping for local packages
 WITH NON-BLOCKING FAIL-SAFE SEMANTICS AND TOKEN-BASED GIT AUTH
+AND PKGBUILD REWRITE VALIDATION
 """
 
 import os
@@ -536,69 +537,146 @@ class HokibotRunner:
             logger.info("HOKIBOT_PUSH=0")
             return False, "SSH push exception"
     
-    def _update_pkgbuild(self, pkgbuild_path: Path, pkgver: str, pkgrel: str, epoch: Optional[str] = None) -> Tuple[bool, bool]:
+    def _update_pkgbuild(self, pkgbuild_path: Path, pkgver: str, pkgrel: str, epoch: Optional[str] = None) -> Tuple[bool, bool, Optional[str]]:
         """
         Update PKGBUILD file with new version, release, and optionally epoch.
-        Returns: (content_changed: bool, success: bool)
+        FIX: Remove space after '=' in assignments.
+        Returns: (content_changed: bool, success: bool, validation_error: Optional[str])
         """
         try:
             # Read current content
             with open(pkgbuild_path, 'r', encoding='utf-8') as f:
                 current_content = f.read()
             
-            # Start with current content
-            new_content = current_content
+            # Store original for backup
+            original_content = current_content
             
-            # Update pkgver
-            new_content = re.sub(
-                r'^(\s*pkgver\s*=).*$',
-                r'\1 ' + pkgver,
-                new_content,
-                flags=re.MULTILINE
-            )
+            # Fix I3: Remove spaces after '=' in assignments
+            # We need to update pkgver, pkgrel, and optionally epoch
+            lines = current_content.split('\n')
+            new_lines = []
+            pkgver_updated = False
+            pkgrel_updated = False
+            epoch_updated = False
             
-            # Update pkgrel
-            new_content = re.sub(
-                r'^(\s*pkgrel\s*=).*$',
-                r'\1 ' + pkgrel,
-                new_content,
-                flags=re.MULTILINE
-            )
+            for line in lines:
+                original_line = line
+                stripped = line.strip()
+                
+                # Handle pkgver assignment - FIX: Remove space after '='
+                if stripped.startswith('pkgver=') and not pkgver_updated:
+                    line = f"pkgver={pkgver}"
+                    pkgver_updated = True
+                    logger.info(f"HOKIBOT_PKGBUILD_UPDATE: {pkgbuild_path.parent.name} pkgver: {original_line} -> {line}")
+                
+                # Handle pkgrel assignment - FIX: Remove space after '='
+                elif stripped.startswith('pkgrel=') and not pkgrel_updated:
+                    line = f"pkgrel={pkgrel}"
+                    pkgrel_updated = True
+                    logger.info(f"HOKIBOT_PKGBUILD_UPDATE: {pkgbuild_path.parent.name} pkgrel: {original_line} -> {line}")
+                
+                # Handle epoch assignment - FIX: Remove space after '='
+                elif stripped.startswith('epoch=') and epoch and epoch != '0' and not epoch_updated:
+                    line = f"epoch={epoch}"
+                    epoch_updated = True
+                    logger.info(f"HOKIBOT_PKGBUILD_UPDATE: {pkgbuild_path.parent.name} epoch: {original_line} -> {line}")
+                
+                new_lines.append(line)
             
-            # Update epoch if provided and not '0'
-            if epoch and epoch != '0':
-                if re.search(r'^\s*epoch\s*=.*$', new_content, re.MULTILINE):
-                    new_content = re.sub(
-                        r'^(\s*epoch\s*=).*$',
-                        r'\1 ' + epoch,
-                        new_content,
-                        flags=re.MULTILINE
-                    )
-                else:
-                    new_content = re.sub(
-                        r'^(\s*pkgrel\s*=.*)$',
-                        r'\1\nepoch=' + epoch,
-                        new_content,
-                        flags=re.MULTILINE
-                    )
+            # If pkgver or pkgrel not found, we need to insert them
+            # This is a safety fallback - should not happen with valid PKGBUILDs
+            if not pkgver_updated or not pkgrel_updated:
+                logger.warning(f"PKGBUILD missing required fields: pkgver_updated={pkgver_updated}, pkgrel_updated={pkgrel_updated}")
+                # We'll skip this PKGBUILD to avoid corruption
+                return False, False, "Missing required pkgver/pkgrel fields"
+            
+            # If epoch needs to be added and wasn't found
+            if epoch and epoch != '0' and not epoch_updated:
+                # Find where to insert epoch (typically before pkgver)
+                for i, line in enumerate(new_lines):
+                    if line.strip().startswith('pkgver='):
+                        # Insert epoch line before pkgver
+                        new_lines.insert(i, f"epoch={epoch}")
+                        epoch_updated = True
+                        logger.info(f"HOKIBOT_PKGBUILD_INSERT: {pkgbuild_path.parent.name} added epoch={epoch}")
+                        break
+            
+            new_content = '\n'.join(new_lines)
             
             # Check if content actually changed
             if new_content == current_content:
-                return False, True  # No change, but operation successful
+                return False, True, None  # No change, but operation successful
             
             # Write new content
             with open(pkgbuild_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             
-            return True, True
+            # Validate the PKGBUILD
+            validation_error = self._validate_pkgbuild(pkgbuild_path)
+            if validation_error:
+                # Revert changes
+                with open(pkgbuild_path, 'w', encoding='utf-8') as f:
+                    f.write(original_content)
+                logger.warning(f"HOKIBOT_PKGBUILD_VALIDATION_FAILED: {pkgbuild_path.parent.name} - {validation_error}")
+                return False, False, validation_error
             
-        except Exception:
-            return False, False
+            logger.info(f"HOKIBOT_PKGBUILD_VALIDATION_SUCCESS: {pkgbuild_path.parent.name}")
+            return True, True, None
+            
+        except Exception as e:
+            logger.error(f"HOKIBOT_PKGBUILD_UPDATE_ERROR: {pkgbuild_path} - {e}")
+            return False, False, str(e)
+    
+    def _validate_pkgbuild(self, pkgbuild_path: Path) -> Optional[str]:
+        """
+        Validate PKGBUILD by running makepkg --printsrcinfo.
+        
+        Args:
+            pkgbuild_path: Path to PKGBUILD file
+            
+        Returns:
+            Error message if validation fails, None if successful
+        """
+        try:
+            pkg_dir = pkgbuild_path.parent
+            
+            # Run makepkg --printsrcinfo to validate PKGBUILD
+            cmd = ["makepkg", "--printsrcinfo"]
+            result = subprocess.run(
+                cmd,
+                cwd=pkg_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                return f"makepkg --printsrcinfo failed: {error_msg}"
+            
+            # Also check that we can parse the output
+            if not result.stdout.strip():
+                return "makepkg --printsrcinfo produced empty output"
+            
+            # Check for key fields in the output
+            required_fields = ['pkgver', 'pkgrel']
+            srcinfo_content = result.stdout
+            for field in required_fields:
+                if f"\n{field} = " not in srcinfo_content:
+                    return f"Missing {field} in generated .SRCINFO"
+            
+            return None  # Validation successful
+            
+        except subprocess.TimeoutExpired:
+            return "makepkg --printsrcinfo timeout"
+        except Exception as e:
+            return f"Validation exception: {str(e)}"
     
     def run(self, hokibot_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Run hokibot action: update PKGBUILD versions and push changes
-        WITH NON-BLOCKING FAIL-SAFE SEMANTICS
+        WITH NON-BLOCKING FAIL-SAFE SEMANTICS AND PKGBUILD VALIDATION
         """
         data_count = len(hokibot_data)
         logger.info(f"HOKIBOT_DATA_COUNT={data_count}")
@@ -608,7 +686,7 @@ class HokibotRunner:
             logger.info("HOKIBOT_FAILSAFE=0")
             logger.info("HOKIBOT_PHASE_RAN=0")
             logger.info("No hokibot data to process")
-            return {"changed": 0, "committed": False, "pushed": False}
+            return {"changed": 0, "committed": False, "pushed": False, "validation_errors": 0}
         
         logger.info("HOKIBOT_PHASE_RAN=1")
         
@@ -618,7 +696,7 @@ class HokibotRunner:
             logger.info("HOKIBOT_FAILSAFE=1")
             logger.info("HOKIBOT_SKIP_REASON=missing_repository")
             logger.warning("GITHUB_REPOSITORY not configured - hokibot skipping")
-            return {"changed": 0, "committed": False, "pushed": False}
+            return {"changed": 0, "committed": False, "pushed": False, "validation_errors": 0}
         
         # Check for any authentication method
         token = self._get_auth_token()
@@ -627,7 +705,7 @@ class HokibotRunner:
             logger.info("HOKIBOT_FAILSAFE=1")
             logger.info("HOKIBOT_SKIP_REASON=no_auth_method")
             logger.warning("No authentication method available - hokibot skipping")
-            return {"changed": 0, "committed": False, "pushed": False}
+            return {"changed": 0, "committed": False, "pushed": False, "validation_errors": 0}
         
         logger.info("HOKIBOT_ACTION=PROCESS")
         
@@ -644,7 +722,7 @@ class HokibotRunner:
                 logger.info("HOKIBOT_FAILSAFE=1")
                 logger.info("HOKIBOT_SKIP_REASON=clone_failed")
                 logger.warning("Failed to clone repository - hokibot skipping")
-                return {"changed": 0, "committed": False, "pushed": False}
+                return {"changed": 0, "committed": False, "pushed": False, "validation_errors": 0}
             
             # Step 2: Set git identity
             if not self._set_git_identity(clone_dir):
@@ -653,9 +731,10 @@ class HokibotRunner:
             # Step 3: Get current branch
             self._get_current_branch(clone_dir)
             
-            # Step 4: Update PKGBUILD files for each package
+            # Step 4: Update PKGBUILD files for each package WITH VALIDATION
             actually_changed_packages = []
             changed_files = []
+            validation_errors = 0
             
             for entry in hokibot_data:
                 pkg_name = entry.get('name')
@@ -669,13 +748,22 @@ class HokibotRunner:
                 # Find PKGBUILD
                 pkgbuild_path = clone_dir / pkg_name / "PKGBUILD"
                 if not pkgbuild_path.exists():
+                    logger.warning(f"PKGBUILD not found for {pkg_name}")
                     continue
                 
-                # Update PKGBUILD
-                content_changed, success = self._update_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch)
+                # Update PKGBUILD with validation
+                content_changed, success, validation_error = self._update_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch)
+                
+                if validation_error:
+                    validation_errors += 1
+                    logger.warning(f"HOKIBOT_PKGBUILD_VALIDATION_SKIP: {pkg_name} - {validation_error}")
+                    # Skip this package - PKGBUILD remains unchanged
+                    continue
+                
                 if success and content_changed:
                     actually_changed_packages.append(pkg_name)
                     changed_files.append(f"{pkg_name}/PKGBUILD")
+                    logger.info(f"HOKIBOT_PKGBUILD_UPDATED: {pkg_name} pkgver={pkgver} pkgrel={pkgrel} epoch={epoch or 'none'}")
             
             # Step 5: Run git diagnostics
             status_count, status_lines = self._git_status_porcelain(clone_dir)
@@ -686,8 +774,9 @@ class HokibotRunner:
                 logger.info("HOKIBOT_ACTION=SKIP")
                 logger.info("HOKIBOT_SKIP_REASON=no_changes")
                 logger.info("HOKIBOT_FAILSAFE=0")
+                logger.info("HOKIBOT_VALIDATION_ERRORS={validation_errors}")
                 logger.info("No changes detected in working tree")
-                return {"changed": 0, "committed": False, "pushed": False}
+                return {"changed": 0, "committed": False, "pushed": False, "validation_errors": validation_errors}
             
             # Step 7: Commit changes with [skip ci]
             commit_message = f"hokibot: bump pkgver for {len(actually_changed_packages)} packages\n\n"
@@ -704,15 +793,16 @@ class HokibotRunner:
                     # No error means nothing to commit (clean tree after staging)
                     logger.info("HOKIBOT_FAILSAFE=0")
                     logger.info("HOKIBOT_SKIP_REASON=no_changes_after_staging")
-                return {"changed": len(actually_changed_packages), "committed": False, "pushed": False}
+                logger.info(f"HOKIBOT_VALIDATION_ERRORS={validation_errors}")
+                return {"changed": len(actually_changed_packages), "committed": False, "pushed": False, "validation_errors": validation_errors}
             
             # Step 8: Push changes with authentication
             push_success, push_error = self._git_push_with_auth(clone_dir)
             
             if push_success:
                 logger.info("HOKIBOT_FAILSAFE=0")
-                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=yes")
-                return {"changed": len(actually_changed_packages), "committed": True, "pushed": True}
+                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=yes validation_errors={validation_errors}")
+                return {"changed": len(actually_changed_packages), "committed": True, "pushed": True, "validation_errors": validation_errors}
             else:
                 logger.info("HOKIBOT_FAILSAFE=1")
                 logger.info("HOKIBOT_SKIP_REASON=push_failed")
@@ -720,14 +810,14 @@ class HokibotRunner:
                     logger.warning(f"Push failed: {push_error}")
                 else:
                     logger.warning("Push failed")
-                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=no")
-                return {"changed": len(actually_changed_packages), "committed": True, "pushed": False}
+                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=no validation_errors={validation_errors}")
+                return {"changed": len(actually_changed_packages), "committed": True, "pushed": False, "validation_errors": validation_errors}
             
         except Exception as e:
             logger.info("HOKIBOT_FAILSAFE=1")
             logger.info("HOKIBOT_SKIP_REASON=exception")
             logger.warning(f"Hokibot phase exception - skipping: {e}")
-            return {"changed": 0, "committed": False, "pushed": False}
+            return {"changed": 0, "committed": False, "pushed": False, "validation_errors": validation_errors}
         finally:
             # Step 9: Cleanup
             self._cleanup_clone_dir(clone_dir)

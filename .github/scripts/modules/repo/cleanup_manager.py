@@ -180,11 +180,11 @@ class CleanupManager:
             target_norm = self._normalize_version_for_comparison(target_version) if target_version else None
             is_desired = desired_inventory and pkg_name in desired_inventory
             
-            if target_version:
-                # Package has a target version - keep only matching normalized versions
-                for vps_file, filename, file_version in packages:
-                    file_norm = self._normalize_version_for_comparison(file_version)
-                    
+            # Log prune decision for each file
+            for vps_file, filename, file_version in packages:
+                file_norm = self._normalize_version_for_comparison(file_version)
+                
+                if target_version:
                     if file_norm == target_norm:
                         # This matches the target version - keep it
                         logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
@@ -205,12 +205,8 @@ class CleanupManager:
                         # Also delete corresponding signature if exists
                         if filename in signature_map:
                             files_to_delete.append(signature_map[filename])
-                            logger.info(f"  Also deleting signature for: {filename}")
-            else:
-                # No target version registered for this package
-                for vps_file, filename, file_version in packages:
-                    file_norm = self._normalize_version_for_comparison(file_version)
-                    
+                else:
+                    # No target version registered for this package
                     if is_desired:
                         # Package is in desired inventory but no target version - KEEP
                         logger.info(f"VPS_PRUNE_DECISION: pkg={pkg_name} file={filename} "
@@ -229,7 +225,6 @@ class CleanupManager:
                         # Also delete corresponding signature if exists
                         if filename in signature_map:
                             files_to_delete.append(signature_map[filename])
-                            logger.info(f"  Also deleting signature for: {filename}")
         
         # Also handle database/signature files - always keep them
         for vps_file in vps_files:

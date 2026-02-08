@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 import logging
+import re
 
 # Import required modules
 from modules.repo.manifest_factory import ManifestFactory
@@ -82,7 +83,7 @@ class PackageBuilder:
         pkg_dir: Path,
         remote_version: Optional[str],
         skip_check: bool = False
-    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[Dict[str, str]]]:
         """
         Audit and build local package.
         
@@ -92,7 +93,7 @@ class PackageBuilder:
             skip_check: Skip version check and force build (for testing)
             
         Returns:
-            Tuple of (built: bool, built_version: str, metadata: dict)
+            Tuple of (built: bool, built_version: str, metadata: dict, artifact_versions: dict)
         """
         logger.info(f"🔍 Auditing local package: {pkg_dir.name}")
         
@@ -101,11 +102,11 @@ class PackageBuilder:
             pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
             source_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
             
-            logger.info(f"📦 Source version: {source_version}")
+            logger.info(f"📦 PKGBUILD source version: {source_version}")
             logger.info(f"📦 Remote version: {remote_version or 'Not found'}")
         except Exception as e:
             logger.error(f"❌ Failed to extract version from {pkg_dir}: {e}")
-            return False, None, None
+            return False, None, None, None
         
         # Step 2: Extract all package names from PKGBUILD
         pkg_names = self._extract_package_names(pkg_dir)
@@ -134,7 +135,7 @@ class PackageBuilder:
                             "pkgrel": pkgrel,
                             "epoch": epoch,
                             "pkgnames": pkg_names
-                        }
+                        }, None
                     else:
                         # Incomplete on VPS - force build
                         logger.info(f"🔄 {pkg_dir.name}: Version matches but VPS is incomplete - FORCING BUILD")
@@ -148,21 +149,70 @@ class PackageBuilder:
                         "pkgrel": pkgrel,
                         "epoch": epoch,
                         "pkgnames": pkg_names
-                    }
+                    }, None
         
         # Step 4: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
         logger.info("LOCAL_BUILDER_USED=1")
-        built_files = self._build_local_package(pkg_dir, source_version)
+        built_files, build_output = self._build_local_package(pkg_dir, source_version)
         
         if built_files:
-            # Step 5: Sign ALL built package files (including split packages)
-            self._sign_built_packages(built_files, source_version)
+            # Step 5: Extract ACTUAL artifact versions from built files
+            artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
             
-            # NEW: Register target version for ALL pkgname entries
-            self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+            # Fallback: try to extract from makepkg output if artifact parsing fails
+            if not artifact_versions and build_output:
+                artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                if artifact_version:
+                    for pkg_name in pkg_names:
+                        artifact_versions[pkg_name] = artifact_version
             
-            # NEW: Record hokibot data for local package
+            # Step 6: Determine which version to use (artifact truth vs PKGBUILD)
+            actual_version = None
+            if artifact_versions:
+                # Use artifact version for the main package
+                main_pkg = pkg_dir.name
+                if main_pkg in artifact_versions:
+                    actual_version = artifact_versions[main_pkg]
+                    logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
+                    
+                    # For VCS packages, update the source version with artifact truth
+                    if actual_version != source_version:
+                        logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
+                        # Parse the artifact version to update pkgver/pkgrel/epoch
+                        if ':' in actual_version:
+                            epoch_part, rest = actual_version.split(':', 1)
+                            if '-' in rest:
+                                pkgver_actual, pkgrel_actual = rest.split('-', 1)
+                            else:
+                                pkgver_actual = rest
+                                pkgrel_actual = "1"
+                        else:
+                            epoch_part = "0"
+                            if '-' in actual_version:
+                                pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
+                            else:
+                                pkgver_actual = actual_version
+                                pkgrel_actual = "1"
+                        
+                        # Update metadata with artifact truth
+                        pkgver = pkgver_actual
+                        pkgrel = pkgrel_actual
+                        epoch = epoch_part if epoch_part != "0" else epoch
+                        source_version = actual_version
+            
+            # Use PKGBUILD version if no artifact version found
+            if not actual_version:
+                actual_version = source_version
+                logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
+            
+            # Step 7: Sign ALL built package files (including split packages)
+            self._sign_built_packages(built_files, actual_version)
+            
+            # NEW: Register target version for ALL pkgname entries using ACTUAL version
+            self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
+            
+            # NEW: Record hokibot data for local package with ACTUAL version
             if self.build_tracker:
                 self.build_tracker.add_hokibot_data(
                     pkg_name=pkg_dir.name,
@@ -170,17 +220,23 @@ class PackageBuilder:
                     pkgrel=pkgrel,
                     epoch=epoch,
                     old_version=remote_version,
-                    new_version=source_version
+                    new_version=actual_version
                 )
             
-            return True, source_version, {
+            # Log version truth chain
+            logger.info(f"[VERSION_TRUTH_CHAIN] Package: {pkg_dir.name}")
+            logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
+            logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
+            logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
+            
+            return True, actual_version, {
                 "pkgver": pkgver,
                 "pkgrel": pkgrel,
                 "epoch": epoch,
                 "pkgnames": pkg_names
-            }
+            }, artifact_versions
         
-        return False, source_version, None
+        return False, source_version, None, None
     
     def audit_and_build_aur(
         self,
@@ -188,7 +244,7 @@ class PackageBuilder:
         remote_version: Optional[str],
         aur_build_dir: Path,
         skip_check: bool = False
-    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[Dict[str, str]]]:
         """
         Audit and build AUR package.
         
@@ -199,7 +255,7 @@ class PackageBuilder:
             skip_check: Skip version check and force build (for testing)
             
         Returns:
-            Tuple of (built: bool, built_version: str, metadata: dict)
+            Tuple of (built: bool, built_version: str, metadata: dict, artifact_versions: dict)
         """
         logger.info(f"🔍 Auditing AUR package: {aur_package_name}")
         
@@ -214,13 +270,13 @@ class PackageBuilder:
             clone_success = self._clone_aur_package(aur_package_name, temp_path)
             if not clone_success:
                 logger.error(f"❌ Failed to clone AUR package: {aur_package_name}")
-                return False, None, None
+                return False, None, None, None
             
             # Step 2: Extract version from PKGBUILD
             pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(temp_path)
             source_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
             
-            logger.info(f"📦 AUR source version: {source_version}")
+            logger.info(f"📦 AUR PKGBUILD source version: {source_version}")
             logger.info(f"📦 Remote version: {remote_version or 'Not found'}")
             
             # Step 3: Extract all package names from PKGBUILD
@@ -250,7 +306,7 @@ class PackageBuilder:
                                 "pkgrel": pkgrel,
                                 "epoch": epoch,
                                 "pkgnames": pkg_names
-                            }
+                            }, None
                         else:
                             # Incomplete on VPS - force build
                             logger.info(f"🔄 {aur_package_name}: Version matches but VPS is incomplete - FORCING BUILD")
@@ -264,34 +320,88 @@ class PackageBuilder:
                             "pkgrel": pkgrel,
                             "epoch": epoch,
                             "pkgnames": pkg_names
-                        }
+                        }, None
             
             # Step 5: Build package
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
             logger.info("AUR_BUILDER_USED=1")
-            built_files = self._build_aur_package(temp_path, aur_package_name, source_version)
+            built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version)
             
             if built_files:
-                # Step 6: Sign ALL built package files (including split packages)
-                self._sign_built_packages(built_files, source_version)
+                # Step 6: Extract ACTUAL artifact versions from built files
+                artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
                 
-                # NEW: Register target version for ALL pkgname entries
-                self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+                # Fallback: try to extract from makepkg output if artifact parsing fails
+                if not artifact_versions and build_output:
+                    artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                    if artifact_version:
+                        for pkg_name in pkg_names:
+                            artifact_versions[pkg_name] = artifact_version
+                
+                # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
+                actual_version = None
+                if artifact_versions:
+                    # Use artifact version for the main package
+                    if aur_package_name in artifact_versions:
+                        actual_version = artifact_versions[aur_package_name]
+                        logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
+                        
+                        # For VCS packages, update the source version with artifact truth
+                        if actual_version != source_version:
+                            logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
+                            # Parse the artifact version to update pkgver/pkgrel/epoch
+                            if ':' in actual_version:
+                                epoch_part, rest = actual_version.split(':', 1)
+                                if '-' in rest:
+                                    pkgver_actual, pkgrel_actual = rest.split('-', 1)
+                                else:
+                                    pkgver_actual = rest
+                                    pkgrel_actual = "1"
+                            else:
+                                epoch_part = "0"
+                                if '-' in actual_version:
+                                    pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
+                                else:
+                                    pkgver_actual = actual_version
+                                    pkgrel_actual = "1"
+                            
+                            # Update metadata with artifact truth
+                            pkgver = pkgver_actual
+                            pkgrel = pkgrel_actual
+                            epoch = epoch_part if epoch_part != "0" else epoch
+                            source_version = actual_version
+                
+                # Use PKGBUILD version if no artifact version found
+                if not actual_version:
+                    actual_version = source_version
+                    logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
+                
+                # Step 8: Sign ALL built package files (including split packages)
+                self._sign_built_packages(built_files, actual_version)
+                
+                # NEW: Register target version for ALL pkgname entries using ACTUAL version
+                self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
                 
                 # Note: AUR packages do NOT record hokibot data per requirements
                 
-                return True, source_version, {
+                # Log version truth chain
+                logger.info(f"[VERSION_TRUTH_CHAIN] Package: {aur_package_name}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
+                
+                return True, actual_version, {
                     "pkgver": pkgver,
                     "pkgrel": pkgrel,
                     "epoch": epoch,
                     "pkgnames": pkg_names
-                }
+                }, artifact_versions
             
-            return False, source_version, None
+            return False, source_version, None, None
             
         except Exception as e:
             logger.error(f"❌ Error building AUR package {aur_package_name}: {e}")
-            return False, None, None
+            return False, None, None, None
         finally:
             # Cleanup temporary directory
             if temp_dir and Path(temp_dir).exists():
@@ -397,8 +507,8 @@ class PackageBuilder:
         logger.error(f"❌ Failed to clone {pkg_name} from any AUR URL")
         return False
     
-    def _build_local_package(self, pkg_dir: Path, version: str) -> List[str]:
-        """Build local package using LocalBuilder and return list of built files."""
+    def _build_local_package(self, pkg_dir: Path, version: str) -> Tuple[List[str], str]:
+        """Build local package using LocalBuilder and return list of built files and output."""
         try:
             # Clean workspace using ArtifactManager
             self.artifact_manager.clean_workspace(pkg_dir)
@@ -417,7 +527,7 @@ class PackageBuilder:
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                return []
+                return [], ""
             
             # Build package using LocalBuilder
             logger.info("   Building package...")
@@ -434,26 +544,28 @@ class PackageBuilder:
                 timeout=3600
             )
             
+            build_output = build_result.stdout if build_result else ""
+            
             if build_result.returncode != 0:
                 logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
-                return []
+                return [], build_output
             
             # Move built packages to output directory and return list
             built_files = self._move_built_packages(pkg_dir, pkg_dir.name, version)
             
             if built_files:
                 logger.info(f"✅ Successfully built {pkg_dir.name}")
-                return built_files
+                return built_files, build_output
             else:
                 logger.error(f"❌ No package files created for {pkg_dir.name}")
-                return []
+                return [], build_output
                 
         except Exception as e:
             logger.error(f"❌ Error building {pkg_dir.name}: {e}")
-            return []
+            return [], ""
     
-    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> List[str]:
-        """Build AUR package using AURBuilder and return list of built files."""
+    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> Tuple[List[str], str]:
+        """Build AUR package using AURBuilder and return list of built files and output."""
         try:
             # Clean workspace using ArtifactManager
             self.artifact_manager.clean_workspace(pkg_dir)
@@ -471,17 +583,19 @@ class PackageBuilder:
                 timeout=3600
             )
             
+            build_output = ""  # AURBuilder doesn't return output, would need to modify
+            
             if built_files:
                 # Move built packages to output directory and return list
                 moved_files = self._move_built_packages(pkg_dir, pkg_name, version)
-                return moved_files
+                return moved_files, build_output
             else:
                 logger.error(f"❌ No package files created for {pkg_name}")
-                return []
+                return [], build_output
                 
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
-            return []
+            return [], ""
     
     def _move_built_packages(self, source_dir: Path, pkg_name: str, version: str) -> List[str]:
         """Move built packages to output directory and return list of moved files."""
@@ -632,7 +746,7 @@ class PackageBuilder:
         logger.info(f"📦 Auditing {len(local_packages)} local packages...")
         for pkg_dir, remote_version in local_packages:
             try:
-                built, version, metadata = self.audit_and_build_local(
+                built, version, metadata, artifact_versions = self.audit_and_build_local(
                     pkg_dir, remote_version
                 )
                 
@@ -653,7 +767,7 @@ class PackageBuilder:
         logger.info(f"📦 Auditing {len(aur_packages)} AUR packages...")
         for aur_name, remote_version in aur_packages:
             try:
-                built, version, metadata = self.audit_and_build_aur(
+                built, version, metadata, artifact_versions = self.audit_and_build_aur(
                     aur_name, remote_version, aur_build_dir
                 )
                 

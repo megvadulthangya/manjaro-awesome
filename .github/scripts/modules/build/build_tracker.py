@@ -35,7 +35,7 @@ class BuildTracker:
         # Create hokibot entry
         entry = {
             'name': pkg_name,
-            'built_version': f"{epoch or '0'}:{pkgver}-{pkgrel}" if epoch and epoch != '0' else f"{pkgver}-{pkgrel}",
+            'built_version': new_version or f"{epoch or '0'}:{pkgver}-{pkgrel}" if epoch and epoch != '0' else f"{pkgver}-{pkgrel}",
             'pkgver': pkgver,
             'pkgrel': pkgrel,
             'epoch': epoch
