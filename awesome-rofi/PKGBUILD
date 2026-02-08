@@ -1,7 +1,7 @@
 # Maintainer: megvadulthangya <hello@gshoots.hu>
 pkgname=awesome-rofi
-pkgver= r154.056cb99
-pkgrel= 1
+pkgver=r154.056cb99
+pkgrel=1
 pkgdesc="A huge collection of Rofi-based custom Applets, Launchers & Powermenus, fully compatible with Awesome WM."
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-rofi"
