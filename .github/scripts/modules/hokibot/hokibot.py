@@ -1,6 +1,7 @@
 """
 Hokibot Module - Handles automatic version bumping for local packages
 WITH NON-BLOCKING FAIL-SAFE SEMANTICS AND TOKEN-BASED GIT AUTH
+AND ATOMIC PKGBUILD VALIDATION
 """
 
 import os
@@ -63,61 +64,90 @@ class HokibotRunner:
         # Register cleanup
         atexit.register(self._cleanup)
     
-    def _parse_target_version(self, version_string: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    def _validate_pkgbuild_atomic(self, pkgbuild_path: Path, pkg_name: str) -> Tuple[bool, str]:
         """
-        Parse target version string into components.
+        Validate PKGBUILD file atomically before committing changes.
         
-        Target version format: epoch:pkgver-pkgrel (e.g., "0:r157.83dee18-1", "5.15.4-1")
-        
+        Args:
+            pkgbuild_path: Path to PKGBUILD file
+            pkg_name: Package name for logging
+            
         Returns:
-            Tuple of (pkgver, pkgrel, epoch) or (None, None, None) if cannot parse
+            Tuple of (is_valid: bool, reason: str)
         """
-        if not version_string:
-            return None, None, None
-        
         try:
-            epoch = None
-            pkgver = None
-            pkgrel = None
+            # Read the file content to check for assignment lines
+            with open(pkgbuild_path, 'r', encoding='utf-8') as f:
+                content = f.read()
             
-            # Handle epoch:version-release format
-            if ':' in version_string:
-                epoch_part, rest = version_string.split(':', 1)
-                epoch = epoch_part.strip()
-                if '-' in rest:
-                    pkgver, pkgrel = rest.split('-', 1)
-                else:
-                    # No pkgrel in string, assume 1
-                    pkgver = rest
-                    pkgrel = "1"
-            else:
-                # No epoch
-                epoch = "0"
-                if '-' in version_string:
-                    pkgver, pkgrel = version_string.split('-', 1)
-                else:
-                    # No pkgrel in string, assume 1
-                    pkgver = version_string
-                    pkgrel = "1"
+            # Check 1: Detect pkgver and pkgrel assignment lines exist and are syntactically valid
+            pkgver_match = re.search(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)["\']?', content, re.MULTILINE | re.IGNORECASE)
+            pkgrel_match = re.search(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)["\']?', content, re.MULTILINE | re.IGNORECASE)
             
-            # Clean up values
-            pkgver = pkgver.strip() if pkgver else None
-            pkgrel = pkgrel.strip() if pkgrel else None
-            epoch = epoch.strip() if epoch else None
+            if not pkgver_match:
+                return False, "pkgver assignment line missing or invalid"
+            if not pkgrel_match:
+                return False, "pkgrel assignment line missing or invalid"
             
-            # Validate
-            if not pkgver or not pkgrel:
-                return None, None, None
+            # Validate the values are not empty
+            pkgver_value = pkgver_match.group(1).strip()
+            pkgrel_value = pkgrel_match.group(1).strip()
             
-            return pkgver, pkgrel, epoch
+            if not pkgver_value:
+                return False, "pkgver value is empty"
+            if not pkgrel_value:
+                return False, "pkgrel value is empty"
+            
+            # Check 2: Run bash -n to check for syntax errors
+            bash_check_cmd = ['bash', '-n', str(pkgbuild_path)]
+            result = subprocess.run(
+                bash_check_cmd,
+                capture_output=True,
+                text=True,
+                cwd=pkgbuild_path.parent,
+                timeout=10
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr[:200] if result.stderr else "Unknown syntax error"
+                return False, f"bash -n failed: {error_msg}"
+            
+            # Check 3: Optional - try makepkg --printsrcinfo (in the cloned repo context)
+            try:
+                # Get the package directory (parent of PKGBUILD)
+                pkg_dir = pkgbuild_path.parent
+                
+                # Try makepkg --printsrcinfo but with timeout
+                makepkg_cmd = ['makepkg', '--printsrcinfo']
+                makepkg_result = subprocess.run(
+                    makepkg_cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=pkg_dir,
+                    timeout=30,
+                    check=False
+                )
+                
+                if makepkg_result.returncode != 0:
+                    logger.warning(f"makepkg --printsrcinfo failed for {pkg_name}: {makepkg_result.stderr[:200]}")
+                    # This is not a fatal error - we already passed bash -n
+                    # Log but continue
+                    logger.info(f"HOKIBOT_PKGBUILD_VALIDATE=WARNING pkg={pkg_name} reason=makepkg_printsrcinfo_failed")
+            
+            except subprocess.TimeoutExpired:
+                logger.warning(f"makepkg --printsrcinfo timeout for {pkg_name}")
+            except Exception as e:
+                logger.warning(f"makepkg check error for {pkg_name}: {e}")
+            
+            return True, "validation passed"
             
         except Exception as e:
-            logger.debug(f"Failed to parse version string '{version_string}': {e}")
-            return None, None, None
+            return False, f"validation error: {str(e)[:200]}"
     
     def _safe_edit_pkgbuild(self, pkgbuild_path: Path, new_pkgver: str, new_pkgrel: str, epoch: Optional[str] = None) -> Tuple[bool, int, Optional[str], Optional[str], Optional[str], Optional[str]]:
         """
         Safely edit PKGBUILD to update pkgver and pkgrel without duplicates.
+        WITH ATOMIC VALIDATION AND FAIL-SAFE.
         
         Args:
             pkgbuild_path: Path to PKGBUILD file
@@ -130,154 +160,232 @@ class HokibotRunner:
                      old_pkgver: str or None, new_pkgver: str,
                      old_pkgrel: str or None, new_pkgrel: str)
         """
+        # Create a temporary file for atomic write
+        temp_file = None
+        original_content = None
+        pkg_name = pkgbuild_path.parent.name
+        
         try:
+            # Read original content for restoration if needed
             with open(pkgbuild_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+                original_content = f.read()
             
-            # Track line indices for assignments
-            pkgver_lines = []
-            pkgrel_lines = []
-            epoch_lines = []
-            
-            old_pkgver = None
-            old_pkgrel = None
-            old_epoch = None
-            
-            # First pass: find all assignments and capture values
-            for i, line in enumerate(lines):
-                stripped = line.rstrip()
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.PKGBUILD', delete=False, encoding='utf-8') as tmp:
+                temp_file = Path(tmp.name)
+                # Write the modified content
+                lines = original_content.splitlines(True)
                 
-                # Normalize for matching: replace tabs with spaces, collapse multiple spaces
-                normalized = re.sub(r'\s+', ' ', stripped).strip()
+                # Track line indices for assignments
+                pkgver_lines = []
+                pkgrel_lines = []
+                epoch_lines = []
                 
-                # Match pkgver assignment (tolerate spaces around =)
-                if re.match(r'^\s*pkgver\s*=', normalized, re.IGNORECASE):
-                    pkgver_lines.append(i)
-                    # Extract value (handle quoted values)
-                    match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
-                    if match:
-                        value = match.group(1).strip()
-                        # Remove quotes if present
-                        if (value.startswith('"') and value.endswith('"')) or \
-                           (value.startswith("'") and value.endswith("'")):
-                            value = value[1:-1]
-                        if pkgver_lines[0] == i:  # First occurrence
-                            old_pkgver = value
+                old_pkgver = None
+                old_pkgrel = None
+                old_epoch = None
                 
-                # Match pkgrel assignment
-                elif re.match(r'^\s*pkgrel\s*=', normalized, re.IGNORECASE):
-                    pkgrel_lines.append(i)
-                    match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
-                    if match:
-                        value = match.group(1).strip()
-                        if (value.startswith('"') and value.endswith('"')) or \
-                           (value.startswith("'") and value.endswith("'")):
-                            value = value[1:-1]
-                        if pkgrel_lines[0] == i:  # First occurrence
-                            old_pkgrel = value
-                
-                # Match epoch assignment
-                elif re.match(r'^\s*epoch\s*=', normalized, re.IGNORECASE):
-                    epoch_lines.append(i)
-                    match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
-                    if match:
-                        value = match.group(1).strip()
-                        if (value.startswith('"') and value.endswith('"')) or \
-                           (value.startswith("'") and value.endswith("'")):
-                            value = value[1:-1]
-                        if epoch_lines[0] == i:  # First occurrence
-                            old_epoch = value
-            
-            duplicates_fixed = 0
-            modified = False
-            
-            # Remove duplicate lines (keep first occurrence)
-            # Process in reverse order to preserve indices
-            for line_indices, var_name in [(pkgver_lines, 'pkgver'), (pkgrel_lines, 'pkgrel'), (epoch_lines, 'epoch')]:
-                if len(line_indices) > 1:
-                    for idx in reversed(line_indices[1:]):  # All but first
-                        lines.pop(idx)
-                        duplicates_fixed += 1
-                        modified = True
-            
-            # Update values if needed
-            if pkgver_lines:
-                first_idx = pkgver_lines[0]
-                line = lines[first_idx]
-                # Preserve original formatting as much as possible
-                match = re.match(r'^(\s*pkgver\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
-                if match:
-                    prefix = match.group(1)
-                    comment = match.group(3) or ''
-                    # Quote if it contains spaces or special characters
-                    if ' ' in new_pkgver or any(c in new_pkgver for c in '\\$`"!'):
-                        new_line = f"{prefix} \"{new_pkgver}\"{comment}\n"
-                    else:
-                        new_line = f"{prefix} {new_pkgver}{comment}\n"
+                # First pass: find all assignments and capture values
+                for i, line in enumerate(lines):
+                    stripped = line.rstrip()
                     
-                    if line != new_line:
-                        lines[first_idx] = new_line
-                        modified = True
-            else:
-                # Insert pkgver after pkgname if found, or near the top
-                insert_idx = self._find_insertion_point(lines)
-                lines.insert(insert_idx, f"pkgver={new_pkgver}\n")
-                modified = True
-            
-            if pkgrel_lines:
-                first_idx = pkgrel_lines[0] if pkgrel_lines[0] < len(lines) else self._find_pkgrel_insertion_point(lines)
-                if first_idx < len(lines):
+                    # Normalize for matching: replace tabs with spaces, collapse multiple spaces
+                    normalized = re.sub(r'\s+', ' ', stripped).strip()
+                    
+                    # Match pkgver assignment (tolerate spaces around =)
+                    if re.match(r'^\s*pkgver\s*=', normalized, re.IGNORECASE):
+                        pkgver_lines.append(i)
+                        # Extract value (handle quoted values)
+                        match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
+                        if match:
+                            value = match.group(1).strip()
+                            # Remove quotes if present
+                            if (value.startswith('"') and value.endswith('"')) or \
+                               (value.startswith("'") and value.endswith("'")):
+                                value = value[1:-1]
+                            if pkgver_lines[0] == i:  # First occurrence
+                                old_pkgver = value
+                    
+                    # Match pkgrel assignment
+                    elif re.match(r'^\s*pkgrel\s*=', normalized, re.IGNORECASE):
+                        pkgrel_lines.append(i)
+                        match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
+                        if match:
+                            value = match.group(1).strip()
+                            if (value.startswith('"') and value.endswith('"')) or \
+                               (value.startswith("'") and value.endswith("'")):
+                                value = value[1:-1]
+                            if pkgrel_lines[0] == i:  # First occurrence
+                                old_pkgrel = value
+                    
+                    # Match epoch assignment
+                    elif re.match(r'^\s*epoch\s*=', normalized, re.IGNORECASE):
+                        epoch_lines.append(i)
+                        match = re.search(r'=\s*(.*?)\s*(#.*)?$', stripped)
+                        if match:
+                            value = match.group(1).strip()
+                            if (value.startswith('"') and value.endswith('"')) or \
+                               (value.startswith("'") and value.endswith("'")):
+                                value = value[1:-1]
+                            if epoch_lines[0] == i:  # First occurrence
+                                old_epoch = value
+                
+                duplicates_fixed = 0
+                modified = False
+                
+                # Remove duplicate lines (keep first occurrence)
+                # Process in reverse order to preserve indices
+                for line_indices, var_name in [(pkgver_lines, 'pkgver'), (pkgrel_lines, 'pkgrel'), (epoch_lines, 'epoch')]:
+                    if len(line_indices) > 1:
+                        for idx in reversed(line_indices[1:]):  # All but first
+                            lines.pop(idx)
+                            duplicates_fixed += 1
+                            modified = True
+                
+                # Update values if needed
+                if pkgver_lines:
+                    first_idx = pkgver_lines[0]
                     line = lines[first_idx]
-                    match = re.match(r'^(\s*pkgrel\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
+                    # Preserve original formatting as much as possible
+                    match = re.match(r'^(\s*pkgver\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
                     if match:
                         prefix = match.group(1)
                         comment = match.group(3) or ''
-                        # Quote if needed
-                        if ' ' in new_pkgrel or any(c in new_pkgrel for c in '\\$`"!'):
-                            new_line = f"{prefix} \"{new_pkgrel}\"{comment}\n"
+                        # Quote if it contains spaces or special characters
+                        if ' ' in new_pkgver or any(c in new_pkgver for c in '\\$`"!'):
+                            new_line = f"{prefix} \"{new_pkgver}\"{comment}\n"
                         else:
-                            new_line = f"{prefix} {new_pkgrel}{comment}\n"
+                            new_line = f"{prefix} {new_pkgver}{comment}\n"
                         
                         if line != new_line:
                             lines[first_idx] = new_line
                             modified = True
                 else:
+                    # Insert pkgver after pkgname if found, or near the top
+                    insert_idx = self._find_insertion_point(lines)
+                    lines.insert(insert_idx, f"pkgver={new_pkgver}\n")
+                    modified = True
+                
+                if pkgrel_lines:
+                    first_idx = pkgrel_lines[0] if pkgrel_lines[0] < len(lines) else self._find_pkgrel_insertion_point(lines)
+                    if first_idx < len(lines):
+                        line = lines[first_idx]
+                        match = re.match(r'^(\s*pkgrel\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
+                        if match:
+                            prefix = match.group(1)
+                            comment = match.group(3) or ''
+                            # Quote if needed
+                            if ' ' in new_pkgrel or any(c in new_pkgrel for c in '\\$`"!'):
+                                new_line = f"{prefix} \"{new_pkgrel}\"{comment}\n"
+                            else:
+                                new_line = f"{prefix} {new_pkgrel}{comment}\n"
+                            
+                            if line != new_line:
+                                lines[first_idx] = new_line
+                                modified = True
+                    else:
+                        insert_idx = self._find_pkgrel_insertion_point(lines)
+                        lines.insert(insert_idx, f"pkgrel={new_pkgrel}\n")
+                        modified = True
+                else:
+                    # Insert pkgrel after pkgver
                     insert_idx = self._find_pkgrel_insertion_point(lines)
                     lines.insert(insert_idx, f"pkgrel={new_pkgrel}\n")
                     modified = True
-            else:
-                # Insert pkgrel after pkgver
-                insert_idx = self._find_pkgrel_insertion_point(lines)
-                lines.insert(insert_idx, f"pkgrel={new_pkgrel}\n")
-                modified = True
+                
+                # Handle epoch: only update if it already exists in PKGBUILD
+                if epoch_lines and epoch is not None:
+                    first_idx = epoch_lines[0]
+                    line = lines[first_idx]
+                    match = re.match(r'^(\s*epoch\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
+                    if match:
+                        prefix = match.group(1)
+                        comment = match.group(3) or ''
+                        # Quote if needed
+                        if ' ' in epoch or any(c in epoch for c in '\\$`"!'):
+                            new_line = f"{prefix} \"{epoch}\"{comment}\n"
+                        else:
+                            new_line = f"{prefix} {epoch}{comment}\n"
+                        
+                        if line != new_line:
+                            lines[first_idx] = new_line
+                            modified = True
+                
+                # Write all lines to temporary file
+                tmp.writelines(lines)
             
-            # Handle epoch: only update if it already exists in PKGBUILD
-            if epoch_lines and epoch is not None:
-                first_idx = epoch_lines[0]
-                line = lines[first_idx]
-                match = re.match(r'^(\s*epoch\s*=)\s*(.*?)(\s*(#.*))?$', line, re.IGNORECASE)
-                if match:
-                    prefix = match.group(1)
-                    comment = match.group(3) or ''
-                    # Quote if needed
-                    if ' ' in epoch or any(c in epoch for c in '\\$`"!'):
-                        new_line = f"{prefix} \"{epoch}\"{comment}\n"
-                    else:
-                        new_line = f"{prefix} {epoch}{comment}\n"
-                    
-                    if line != new_line:
-                        lines[first_idx] = new_line
-                        modified = True
+            # Now validate the temporary file
+            is_valid, reason = self._validate_pkgbuild_atomic(temp_file, pkg_name)
             
-            # Write back if modified
-            if modified:
-                with open(pkgbuild_path, 'w', encoding='utf-8') as f:
-                    f.writelines(lines)
+            if not is_valid:
+                # Validation failed - log and restore
+                logger.error(f"HOKIBOT_PKGBUILD_VALIDATE=FAIL pkg={pkg_name} reason={reason}")
+                logger.info(f"HOKIBOT_FAILSAFE=1 reason=invalid_pkgbuild")
+                
+                # Restore original file by writing back original content
+                if original_content:
+                    with open(pkgbuild_path, 'w', encoding='utf-8') as f:
+                        f.write(original_content)
+                
+                # Clean up temp file
+                if temp_file and temp_file.exists():
+                    temp_file.unlink()
+                
+                return False, 0, None, new_pkgver, None, new_pkgrel
             
-            return True, duplicates_fixed, old_pkgver, new_pkgver, old_pkgrel, new_pkgrel
+            # Validation passed - replace original with temp file
+            # First backup original
+            backup_file = pkgbuild_path.with_suffix('.PKGBUILD.backup')
+            import shutil
+            shutil.copy2(pkgbuild_path, backup_file)
+            
+            try:
+                # Replace original with validated temp file
+                shutil.copy2(temp_file, pkgbuild_path)
+                logger.info(f"HOKIBOT_PKGBUILD_VALIDATE=PASS pkg={pkg_name}")
+                
+                # Clean up temp file
+                if temp_file and temp_file.exists():
+                    temp_file.unlink()
+                
+                # Clean up backup file
+                if backup_file.exists():
+                    backup_file.unlink()
+                
+                return True, duplicates_fixed, old_pkgver, new_pkgver, old_pkgrel, new_pkgrel
+                
+            except Exception as e:
+                # If replacement fails, restore from backup
+                logger.error(f"HOKIBOT_PKGBUILD_REPLACE_FAILED pkg={pkg_name} error={str(e)[:100]}")
+                if backup_file.exists():
+                    shutil.copy2(backup_file, pkgbuild_path)
+                    backup_file.unlink()
+                
+                # Clean up temp file
+                if temp_file and temp_file.exists():
+                    temp_file.unlink()
+                
+                return False, 0, None, new_pkgver, None, new_pkgrel
             
         except Exception as e:
-            logger.error(f"Error editing PKGBUILD {pkgbuild_path}: {e}")
+            logger.error(f"HOKIBOT_PKGBUILD_EDIT_ERROR pkg={pkg_name} error={str(e)[:100]}")
+            logger.info(f"HOKIBOT_FAILSAFE=1 reason=edit_exception")
+            
+            # Try to restore original content if we have it
+            if original_content and pkgbuild_path.exists():
+                try:
+                    with open(pkgbuild_path, 'w', encoding='utf-8') as f:
+                        f.write(original_content)
+                except Exception:
+                    pass
+            
+            # Clean up temp file if it exists
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
+            
             return False, 0, None, new_pkgver, None, new_pkgrel
     
     def _find_insertion_point(self, lines: List[str]) -> int:
@@ -855,7 +963,7 @@ class HokibotRunner:
             # Step 3: Get current branch
             self._get_current_branch(clone_dir)
             
-            # Step 4: Update PKGBUILD files for each package
+            # Step 4: Update PKGBUILD files for each package WITH ATOMIC VALIDATION
             actually_changed_packages = []
             changed_files = []
             
@@ -879,7 +987,7 @@ class HokibotRunner:
                 if not pkgbuild_path.exists():
                     continue
                 
-                # Update PKGBUILD with safe editor
+                # Update PKGBUILD with safe editor (now with atomic validation)
                 success, duplicates_fixed, old_pkgver, new_pkgver, old_pkgrel, new_pkgrel = self._safe_edit_pkgbuild(
                     pkgbuild_path, pkgver, pkgrel, epoch
                 )
@@ -953,6 +1061,58 @@ class HokibotRunner:
         finally:
             # Step 9: Cleanup
             self._cleanup_clone_dir(clone_dir)
+    
+    def _parse_target_version(self, version_string: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Parse target version string into components.
+        
+        Target version format: epoch:pkgver-pkgrel (e.g., "0:r157.83dee18-1", "5.15.4-1")
+        
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or (None, None, None) if cannot parse
+        """
+        if not version_string:
+            return None, None, None
+        
+        try:
+            epoch = None
+            pkgver = None
+            pkgrel = None
+            
+            # Handle epoch:version-release format
+            if ':' in version_string:
+                epoch_part, rest = version_string.split(':', 1)
+                epoch = epoch_part.strip()
+                if '-' in rest:
+                    pkgver, pkgrel = rest.split('-', 1)
+                else:
+                    # No pkgrel in string, assume 1
+                    pkgver = rest
+                    pkgrel = "1"
+            else:
+                # No epoch
+                epoch = "0"
+                if '-' in version_string:
+                    pkgver, pkgrel = version_string.split('-', 1)
+                else:
+                    # No pkgrel in string, assume 1
+                    pkgver = version_string
+                    pkgrel = "1"
+            
+            # Clean up values
+            pkgver = pkgver.strip() if pkgver else None
+            pkgrel = pkgrel.strip() if pkgrel else None
+            epoch = epoch.strip() if epoch else None
+            
+            # Validate
+            if not pkgver or not pkgrel:
+                return None, None, None
+            
+            return pkgver, pkgrel, epoch
+            
+        except Exception as e:
+            logger.debug(f"Failed to parse version string '{version_string}': {e}")
+            return None, None, None
     
     def _analyze_ssh_key_format(self, key_content: str) -> Dict[str, Any]:
         """Analyze SSH key format and extract metadata without exposing key content."""
