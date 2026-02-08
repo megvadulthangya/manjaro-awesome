@@ -1,4 +1,3 @@
-FILE: .github/scripts/modules/hokibot/hokibot.py
 """
 Hokibot Module - Handles automatic version bumping for local packages
 WITH NON-BLOCKING FAIL-SAFE SEMANTICS AND TOKEN-BASED GIT AUTH
