@@ -47,6 +47,15 @@ class HokibotRunner:
         # Get GitHub repository from environment
         self.github_repository = os.getenv('GITHUB_REPOSITORY')
         
+        # Get hokibot git identity from config
+        try:
+            import config
+            self.git_user_name = getattr(config, 'HOKIBOT_GIT_USER_NAME', 'hokibot')
+            self.git_user_email = getattr(config, 'HOKIBOT_GIT_USER_EMAIL', 'hokibot@users.noreply.github.com')
+        except ImportError:
+            self.git_user_name = 'hokibot'
+            self.git_user_email = 'hokibot@users.noreply.github.com'
+        
         # Track temporary SSH key file for cleanup
         self._ssh_key_file = None
         self._clone_dir = None
@@ -54,31 +63,279 @@ class HokibotRunner:
         # Register cleanup
         atexit.register(self._cleanup)
     
-    def _get_auth_token(self) -> Optional[str]:
+    def _set_git_identity(self, clone_dir: Path) -> bool:
         """
-        Get authentication token in priority order:
-        1. GITHUB_TOKEN (preferred for token-based auth)
-        2. CI_PUSH_TOKEN
-        3. CI_PUSH_SSH_KEY (if it's a token, not an SSH key)
+        Set git user identity for the repository.
         
+        Args:
+            clone_dir: Repository directory
+            
         Returns:
-            Token string or None if no valid token found
+            True if successful, False otherwise
         """
-        # Check for tokens in priority order
+        try:
+            # Set user name
+            name_cmd = f"git -C {clone_dir} config user.name \"{self.git_user_name}\""
+            name_result = subprocess.run(
+                name_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            # Set user email
+            email_cmd = f"git -C {clone_dir} config user.email \"{self.git_user_email}\""
+            email_result = subprocess.run(
+                email_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if name_result.returncode == 0 and email_result.returncode == 0:
+                logger.info(f"HOKIBOT_GIT_IDENTITY_SET=1 name={self.git_user_name} email={self.git_user_email}")
+                return True
+            else:
+                logger.warning(f"HOKIBOT_GIT_IDENTITY_SET=0 name_rc={name_result.returncode} email_rc={email_result.returncode}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"HOKIBOT_GIT_IDENTITY_SET=0 error={str(e)[:100]}")
+            return False
+    
+    def _get_current_branch(self, clone_dir: Path) -> str:
+        """
+        Get current branch name.
+        
+        Args:
+            clone_dir: Repository directory
+            
+        Returns:
+            Branch name or empty string if cannot determine
+        """
+        try:
+            # Try to get current branch
+            branch_cmd = f"git -C {clone_dir} branch --show-current"
+            result = subprocess.run(
+                branch_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                branch = result.stdout.strip()
+                logger.info(f"HOKIBOT_BRANCH={branch}")
+                return branch
+            
+            # Fallback: try to get default branch from origin/HEAD
+            default_cmd = f"git -C {clone_dir} symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'"
+            result = subprocess.run(
+                default_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                branch = result.stdout.strip()
+                logger.info(f"HOKIBOT_BRANCH={branch} (from origin/HEAD)")
+                return branch
+            
+            # Last resort: try main or master
+            for test_branch in ['main', 'master']:
+                test_cmd = f"git -C {clone_dir} show-ref --verify --quiet refs/heads/{test_branch} 2>/dev/null"
+                if subprocess.run(test_cmd, shell=True, check=False).returncode == 0:
+                    logger.info(f"HOKIBOT_BRANCH={test_branch} (assumed)")
+                    return test_branch
+            
+            logger.warning("HOKIBOT_BRANCH=unknown")
+            return ""
+                
+        except Exception:
+            logger.warning("HOKIBOT_BRANCH=unknown")
+            return ""
+    
+    def _git_status_porcelain(self, clone_dir: Path) -> Tuple[int, List[str]]:
+        """
+        Get git status in porcelain format.
+        
+        Args:
+            clone_dir: Repository directory
+            
+        Returns:
+            Tuple of (count, first_5_lines)
+        """
+        try:
+            status_cmd = f"git -C {clone_dir} status --porcelain"
+            result = subprocess.run(
+                status_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                count = len(lines)
+                sample = lines[:5]
+                logger.info(f"HOKIBOT_GIT_STATUS_PORCELAIN_COUNT={count}")
+                logger.info(f"HOKIBOT_GIT_STATUS_PORCELAIN_SAMPLE={','.join(sample) if sample else 'none'}")
+                return count, lines
+            else:
+                logger.info("HOKIBOT_GIT_STATUS_PORCELAIN_COUNT=0")
+                logger.info("HOKIBOT_GIT_STATUS_PORCELAIN_SAMPLE=none")
+                return 0, []
+                
+        except Exception:
+            logger.info("HOKIBOT_GIT_STATUS_PORCELAIN_COUNT=0")
+            logger.info("HOKIBOT_GIT_STATUS_PORCELAIN_SAMPLE=none")
+            return 0, []
+    
+    def _git_diff_name_only(self, clone_dir: Path) -> List[str]:
+        """
+        Get list of changed files.
+        
+        Args:
+            clone_dir: Repository directory
+            
+        Returns:
+            List of changed filenames
+        """
+        try:
+            diff_cmd = f"git -C {clone_dir} diff --name-only"
+            result = subprocess.run(
+                diff_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                files = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                sample = files[:10]
+                logger.info(f"HOKIBOT_GIT_DIFF_NAME_ONLY={','.join(sample) if sample else 'none'}")
+                return files
+            else:
+                logger.info("HOKIBOT_GIT_DIFF_NAME_ONLY=none")
+                return []
+                
+        except Exception:
+            logger.info("HOKIBOT_GIT_DIFF_NAME_ONLY=none")
+            return []
+    
+    def _stage_changed_files(self, clone_dir: Path, changed_files: List[str]) -> bool:
+        """
+        Stage only changed files.
+        
+        Args:
+            clone_dir: Repository directory
+            changed_files: List of files to stage
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not changed_files:
+            return True
+        
+        try:
+            # Quote each filename for safety
+            quoted_files = [f"'{f}'" for f in changed_files]
+            files_str = ' '.join(quoted_files)
+            
+            # Use git add with specific files
+            add_cmd = f"git -C {clone_dir} add {files_str}"
+            result = subprocess.run(
+                add_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"HOKIBOT_GIT_ADD_SUCCESS=1 count={len(changed_files)}")
+                return True
+            else:
+                logger.warning(f"HOKIBOT_GIT_ADD_SUCCESS=0 error={result.stderr[:100]}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"HOKIBOT_GIT_ADD_SUCCESS=0 error={str(e)[:100]}")
+            return False
+    
+    def _git_commit_with_skip_token(self, clone_dir: Path, message: str, changed_files: List[str]) -> Tuple[bool, Optional[str]]:
+        """
+        Commit changes with [skip ci] token and robust error handling.
+        
+        Args:
+            clone_dir: Repository directory
+            message: Commit message (will be prefixed with [skip ci])
+            changed_files: List of files that were changed
+            
+        Returns:
+            Tuple of (success: bool, error_snippet: Optional[str])
+        """
+        try:
+            # Add [skip ci] prefix to commit message
+            full_message = f"[skip ci] {message}"
+            
+            # Sanitize for logging (first line only)
+            first_line = full_message.split('\n')[0][:100]
+            logger.info(f"HOKIBOT_COMMIT_MSG={first_line}")
+            
+            # Stage only changed files
+            if not self._stage_changed_files(clone_dir, changed_files):
+                return False, "Failed to stage files"
+            
+            # Commit
+            commit_cmd = f"git -C {clone_dir} commit -m '{full_message}'"
+            result = subprocess.run(
+                commit_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("HOKIBOT_COMMIT_SUCCESS=1")
+                return True, None
+            elif "nothing to commit" in result.stderr:
+                logger.info("HOKIBOT_COMMIT_SKIP=1 (nothing to commit)")
+                return False, None
+            else:
+                # Extract error snippet (first 3 lines)
+                error_lines = result.stderr.strip().split('\n')[:3]
+                error_snippet = '; '.join([line[:100] for line in error_lines if line.strip()])
+                logger.info(f"HOKIBOT_COMMIT_ERROR_SNIPPET={error_snippet}")
+                return False, error_snippet
+                
+        except Exception as e:
+            error_msg = str(e)[:100]
+            logger.info(f"HOKIBOT_COMMIT_ERROR_SNIPPET={error_msg}")
+            return False, error_msg
+    
+    # The following methods remain unchanged except for docstrings
+    def _get_auth_token(self) -> Optional[str]:
+        """Get authentication token in priority order."""
         for token_name, token in [
             ('GITHUB_TOKEN', self.github_token),
             ('CI_PUSH_TOKEN', self.ci_push_token),
             ('CI_PUSH_SSH_KEY', self.ci_push_ssh_key)
         ]:
             if token and token.strip():
-                # Basic validation: check if it's likely a GitHub token
-                # GitHub tokens typically start with 'ghp_' or 'github_pat_'
                 if (token.startswith('ghp_') or 
                     token.startswith('github_pat_') or 
                     token.startswith('gho_') or
-                    len(token) >= 36):  # Generic token length check
+                    len(token) >= 36):
                     logger.info(f"HOKIBOT_AUTH_SOURCE={token_name}")
-                    # Never log the actual token
                     logger.info(f"HOKIBOT_TOKEN_PRESENT=1 source={token_name} length={len(token)}")
                     return token
         
@@ -86,12 +343,7 @@ class HokibotRunner:
         return None
     
     def _get_token_based_repo_url(self) -> Optional[str]:
-        """
-        Get HTTPS repository URL with token authentication.
-        
-        Returns:
-            HTTPS URL with token or None if missing required information
-        """
+        """Get HTTPS repository URL with token authentication."""
         token = self._get_auth_token()
         if not token:
             return None
@@ -100,32 +352,19 @@ class HokibotRunner:
             logger.warning("GITHUB_REPOSITORY environment variable not set")
             return None
         
-        # Build HTTPS URL with token (redacted for logging)
         repo_url = f"https://x-access-token:{token}@github.com/{self.github_repository}.git"
-        
-        # Log redacted URL (without token)
         redacted_url = f"https://x-access-token:***REDACTED***@github.com/{self.github_repository}.git"
         logger.info(f"HOKIBOT_HTTPS_URL={redacted_url}")
         
         return repo_url
     
     def _clone_with_auth(self, clone_dir: Path) -> bool:
-        """
-        Clone repository using authentication (token preferred, SSH fallback).
-        
-        Args:
-            clone_dir: Directory to clone into
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        # Try token-based HTTPS first
+        """Clone repository using authentication (token preferred, SSH fallback)."""
         token_url = self._get_token_based_repo_url()
         if token_url:
             logger.info("HOKIBOT_CLONE_MODE=token")
             return self._clone_with_token(token_url, clone_dir)
         
-        # Fallback to SSH if SSH URL is available
         if self.ssh_repo_url:
             logger.info("HOKIBOT_CLONE_MODE=ssh")
             return self._clone_with_ssh_fallback(clone_dir)
@@ -134,23 +373,11 @@ class HokibotRunner:
         return False
     
     def _clone_with_token(self, token_url: str, clone_dir: Path) -> bool:
-        """
-        Clone repository using token-based HTTPS authentication.
-        
-        Args:
-            token_url: HTTPS URL with token
-            clone_dir: Directory to clone into
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Clone repository using token-based HTTPS authentication."""
         try:
-            # Clone command with token URL
             clone_cmd = f"git clone --depth 1 {token_url} {clone_dir}"
-            
             logger.info(f"HOKIBOT_CLONE_START=1 url=***REDACTED*** dir={clone_dir}")
             
-            # Run clone
             result = subprocess.run(
                 clone_cmd,
                 shell=True,
@@ -165,7 +392,6 @@ class HokibotRunner:
                 self._clone_dir = clone_dir
                 return True
             else:
-                # Log error without exposing token
                 error_msg = result.stderr.replace(self._get_auth_token(), '***REDACTED***') if self._get_auth_token() else result.stderr
                 logger.error(f"Token clone failed: {error_msg[:200]}")
                 return False
@@ -178,15 +404,7 @@ class HokibotRunner:
             return False
     
     def _clone_with_ssh_fallback(self, clone_dir: Path) -> bool:
-        """
-        Clone repository using SSH key (fallback method).
-        
-        Args:
-            clone_dir: Directory to clone into
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Clone repository using SSH key (fallback method)."""
         if not self.ssh_repo_url:
             return False
         
@@ -195,19 +413,13 @@ class HokibotRunner:
             return False
         
         try:
-            # Create GIT_SSH_COMMAND
             git_ssh_cmd = self._setup_git_ssh_command(ssh_key_path)
-            
-            # Set environment for git command
             env = os.environ.copy()
             env['GIT_SSH_COMMAND'] = git_ssh_cmd
             
-            # Clone command
             clone_cmd = f"git clone --depth 1 {self.ssh_repo_url} {clone_dir}"
-            
             logger.info(f"HOKIBOT_CLONE_START=1 url={self.ssh_repo_url} dir={clone_dir}")
             
-            # Run clone
             result = subprocess.run(
                 clone_cmd,
                 shell=True,
@@ -230,57 +442,29 @@ class HokibotRunner:
         except Exception:
             return False
     
-    def _git_push_with_auth(self, clone_dir: Path) -> bool:
+    def _git_push_with_auth(self, clone_dir: Path) -> Tuple[bool, Optional[str]]:
         """
         Push changes using authentication (token preferred, SSH fallback).
         
-        Args:
-            clone_dir: Repository directory
-            
         Returns:
-            True if successful, False otherwise
+            Tuple of (success: bool, error_snippet: Optional[str])
         """
-        # Try token-based push first
         token = self._get_auth_token()
         if token:
             logger.info("HOKIBOT_PUSH_MODE=token")
             return self._git_push_with_token(clone_dir, token)
         
-        # Fallback to SSH
         logger.info("HOKIBOT_PUSH_MODE=ssh")
         return self._git_push_with_ssh_fallback(clone_dir)
     
-    def _git_push_with_token(self, clone_dir: Path, token: str) -> bool:
-        """
-        Push changes using token-based authentication.
-        
-        Args:
-            clone_dir: Repository directory
-            token: GitHub token
-            
-        Returns:
-            True if successful, False otherwise
-        """
+    def _git_push_with_token(self, clone_dir: Path, token: str) -> Tuple[bool, Optional[str]]:
+        """Push changes using token-based authentication."""
         try:
-            # Set remote URL with token
             token_url = f"https://x-access-token:{token}@github.com/{self.github_repository}.git"
-            
-            # Update remote URL
             remote_cmd = f"git -C {clone_dir} remote set-url origin {token_url}"
-            result = subprocess.run(
-                remote_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            subprocess.run(remote_cmd, shell=True, capture_output=True, text=True, check=False)
             
-            if result.returncode != 0:
-                logger.warning("Failed to update remote URL")
-            
-            # Push command
             push_cmd = f"git -C {clone_dir} push"
-            
             logger.info("HOKIBOT_PUSH_START=1 mode=token")
             
             result = subprocess.run(
@@ -295,47 +479,33 @@ class HokibotRunner:
             if result.returncode == 0:
                 logger.info("HOKIBOT_PUSH_SUCCESS=1")
                 logger.info("HOKIBOT_PUSH=1")
-                return True
+                return True, None
             else:
-                # Log error without exposing token
-                error_msg = result.stderr.replace(token, '***REDACTED***')
-                logger.error(f"Token push failed: {error_msg[:200]}")
+                error_lines = result.stderr.strip().split('\n')[:3]
+                error_snippet = '; '.join([line[:100] for line in error_lines if line.strip()])
+                logger.info(f"HOKIBOT_PUSH_ERROR_SNIPPET={error_snippet}")
                 logger.info("HOKIBOT_PUSH=0")
-                return False
+                return False, error_snippet
                 
         except subprocess.TimeoutExpired:
             logger.info("HOKIBOT_PUSH=0")
-            return False
+            return False, "Push timeout"
         except Exception as e:
-            logger.error(f"Token push exception: {e}")
             logger.info("HOKIBOT_PUSH=0")
-            return False
+            return False, str(e)[:100]
     
-    def _git_push_with_ssh_fallback(self, clone_dir: Path) -> bool:
-        """
-        Push changes using SSH key (fallback method).
-        
-        Args:
-            clone_dir: Repository directory
-            
-        Returns:
-            True if successful, False otherwise
-        """
+    def _git_push_with_ssh_fallback(self, clone_dir: Path) -> Tuple[bool, Optional[str]]:
+        """Push changes using SSH key (fallback method)."""
         ssh_key_path = self._write_ssh_key_file()
         if not ssh_key_path:
-            return False
+            return False, "No SSH key available"
         
         try:
-            # Create GIT_SSH_COMMAND
             git_ssh_cmd = self._setup_git_ssh_command(ssh_key_path)
-            
-            # Set environment
             env = os.environ.copy()
             env['GIT_SSH_COMMAND'] = git_ssh_cmd
             
-            # Push command
             push_cmd = f"git -C {clone_dir} push"
-            
             logger.info("HOKIBOT_PUSH_START=1 mode=ssh")
             
             result = subprocess.run(
@@ -351,30 +521,85 @@ class HokibotRunner:
             if result.returncode == 0:
                 logger.info("HOKIBOT_PUSH_SUCCESS=1")
                 logger.info("HOKIBOT_PUSH=1")
-                return True
+                return True, None
             else:
+                error_lines = result.stderr.strip().split('\n')[:3]
+                error_snippet = '; '.join([line[:100] for line in error_lines if line.strip()])
+                logger.info(f"HOKIBOT_PUSH_ERROR_SNIPPET={error_snippet}")
                 logger.info("HOKIBOT_PUSH=0")
-                return False
+                return False, error_snippet
                 
         except subprocess.TimeoutExpired:
             logger.info("HOKIBOT_PUSH=0")
-            return False
+            return False, "Push timeout"
         except Exception:
             logger.info("HOKIBOT_PUSH=0")
-            return False
+            return False, "SSH push exception"
+    
+    def _update_pkgbuild(self, pkgbuild_path: Path, pkgver: str, pkgrel: str, epoch: Optional[str] = None) -> Tuple[bool, bool]:
+        """
+        Update PKGBUILD file with new version, release, and optionally epoch.
+        Returns: (content_changed: bool, success: bool)
+        """
+        try:
+            # Read current content
+            with open(pkgbuild_path, 'r', encoding='utf-8') as f:
+                current_content = f.read()
+            
+            # Start with current content
+            new_content = current_content
+            
+            # Update pkgver
+            new_content = re.sub(
+                r'^(\s*pkgver\s*=).*$',
+                r'\1 ' + pkgver,
+                new_content,
+                flags=re.MULTILINE
+            )
+            
+            # Update pkgrel
+            new_content = re.sub(
+                r'^(\s*pkgrel\s*=).*$',
+                r'\1 ' + pkgrel,
+                new_content,
+                flags=re.MULTILINE
+            )
+            
+            # Update epoch if provided and not '0'
+            if epoch and epoch != '0':
+                if re.search(r'^\s*epoch\s*=.*$', new_content, re.MULTILINE):
+                    new_content = re.sub(
+                        r'^(\s*epoch\s*=).*$',
+                        r'\1 ' + epoch,
+                        new_content,
+                        flags=re.MULTILINE
+                    )
+                else:
+                    new_content = re.sub(
+                        r'^(\s*pkgrel\s*=.*)$',
+                        r'\1\nepoch=' + epoch,
+                        new_content,
+                        flags=re.MULTILINE
+                    )
+            
+            # Check if content actually changed
+            if new_content == current_content:
+                return False, True  # No change, but operation successful
+            
+            # Write new content
+            with open(pkgbuild_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            
+            return True, True
+            
+        except Exception:
+            return False, False
     
     def run(self, hokibot_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Run hokibot action: update PKGBUILD versions and push changes
         WITH NON-BLOCKING FAIL-SAFE SEMANTICS
-        
-        Args:
-            hokibot_data: List of package metadata from BuildTracker
-            
-        Returns:
-            Dictionary with results: {changed: int, committed: bool, pushed: bool}
         """
-        # Log data count
         data_count = len(hokibot_data)
         logger.info(f"HOKIBOT_DATA_COUNT={data_count}")
         
@@ -421,8 +646,17 @@ class HokibotRunner:
                 logger.warning("Failed to clone repository - hokibot skipping")
                 return {"changed": 0, "committed": False, "pushed": False}
             
-            # Step 2: Update PKGBUILD files for each package
-            changed_packages = []
+            # Step 2: Set git identity
+            if not self._set_git_identity(clone_dir):
+                logger.warning("Failed to set git identity, continuing anyway")
+            
+            # Step 3: Get current branch
+            self._get_current_branch(clone_dir)
+            
+            # Step 4: Update PKGBUILD files for each package
+            actually_changed_packages = []
+            changed_files = []
+            
             for entry in hokibot_data:
                 pkg_name = entry.get('name')
                 pkgver = entry.get('pkgver')
@@ -438,36 +672,56 @@ class HokibotRunner:
                     continue
                 
                 # Update PKGBUILD
-                if self._update_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch):
-                    changed_packages.append(pkg_name)
+                content_changed, success = self._update_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch)
+                if success and content_changed:
+                    actually_changed_packages.append(pkg_name)
+                    changed_files.append(f"{pkg_name}/PKGBUILD")
             
-            if not changed_packages:
-                logger.info("No packages updated")
+            # Step 5: Run git diagnostics
+            status_count, status_lines = self._git_status_porcelain(clone_dir)
+            diff_files = self._git_diff_name_only(clone_dir)
+            
+            # Step 6: Check if there are actual changes
+            if status_count == 0:
+                logger.info("HOKIBOT_ACTION=SKIP")
+                logger.info("HOKIBOT_SKIP_REASON=no_changes")
+                logger.info("HOKIBOT_FAILSAFE=0")
+                logger.info("No changes detected in working tree")
                 return {"changed": 0, "committed": False, "pushed": False}
             
-            # Step 3: Commit changes with [skip ci]
-            commit_message = f"hokibot: bump pkgver for {len(changed_packages)} packages\n\n"
-            commit_message += "\n".join([f"- {pkg}" for pkg in changed_packages])
+            # Step 7: Commit changes with [skip ci]
+            commit_message = f"hokibot: bump pkgver for {len(actually_changed_packages)} packages\n\n"
+            commit_message += "\n".join([f"- {pkg}" for pkg in actually_changed_packages])
             
-            if not self._git_commit_with_skip_token(clone_dir, commit_message):
-                logger.info("HOKIBOT_FAILSAFE=1")
-                logger.info("HOKIBOT_SKIP_REASON=commit_failed")
-                logger.warning("Failed to commit changes - hokibot skipping")
-                return {"changed": len(changed_packages), "committed": False, "pushed": False}
+            commit_success, commit_error = self._git_commit_with_skip_token(clone_dir, commit_message, changed_files)
             
-            # Step 4: Push changes with authentication
-            push_success = self._git_push_with_auth(clone_dir)
+            if not commit_success:
+                if commit_error:
+                    logger.info("HOKIBOT_FAILSAFE=1")
+                    logger.info("HOKIBOT_SKIP_REASON=commit_failed")
+                    logger.warning(f"Failed to commit changes: {commit_error}")
+                else:
+                    # No error means nothing to commit (clean tree after staging)
+                    logger.info("HOKIBOT_FAILSAFE=0")
+                    logger.info("HOKIBOT_SKIP_REASON=no_changes_after_staging")
+                return {"changed": len(actually_changed_packages), "committed": False, "pushed": False}
+            
+            # Step 8: Push changes with authentication
+            push_success, push_error = self._git_push_with_auth(clone_dir)
             
             if push_success:
                 logger.info("HOKIBOT_FAILSAFE=0")
-                logger.info(f"HOKIBOT_SUMMARY changed={len(changed_packages)} committed=yes pushed=yes")
-                return {"changed": len(changed_packages), "committed": True, "pushed": True}
+                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=yes")
+                return {"changed": len(actually_changed_packages), "committed": True, "pushed": True}
             else:
                 logger.info("HOKIBOT_FAILSAFE=1")
                 logger.info("HOKIBOT_SKIP_REASON=push_failed")
-                logger.warning("Push failed - hokibot skipping")
-                logger.info(f"HOKIBOT_SUMMARY changed={len(changed_packages)} committed=yes pushed=no")
-                return {"changed": len(changed_packages), "committed": True, "pushed": False}
+                if push_error:
+                    logger.warning(f"Push failed: {push_error}")
+                else:
+                    logger.warning("Push failed")
+                logger.info(f"HOKIBOT_SUMMARY changed={len(actually_changed_packages)} committed=yes pushed=no")
+                return {"changed": len(actually_changed_packages), "committed": True, "pushed": False}
             
         except Exception as e:
             logger.info("HOKIBOT_FAILSAFE=1")
@@ -475,13 +729,12 @@ class HokibotRunner:
             logger.warning(f"Hokibot phase exception - skipping: {e}")
             return {"changed": 0, "committed": False, "pushed": False}
         finally:
-            # Step 5: Cleanup
+            # Step 9: Cleanup
             self._cleanup_clone_dir(clone_dir)
     
-    # The following methods remain unchanged from the original except for docstrings
+    # The following methods remain unchanged
     def _analyze_ssh_key_format(self, key_content: str) -> Dict[str, Any]:
         """Analyze SSH key format and extract metadata without exposing key content."""
-        # ... existing implementation ...
         meta = {
             'length': len(key_content),
             'has_begin': 0,
@@ -649,91 +902,6 @@ class HokibotRunner:
         ssh_cmd = f"ssh -i {ssh_key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
         logger.info(f"HOKIBOT_SSH_CMD={ssh_cmd}")
         return ssh_cmd
-    
-    def _git_commit_with_skip_token(self, clone_dir: Path, message: str) -> bool:
-        """Commit changes with [skip ci] token."""
-        try:
-            full_message = f"[skip ci] {message}"
-            
-            first_line = full_message.split('\n')[0][:100]
-            logger.info(f"HOKIBOT_COMMIT_MSG={first_line}")
-            
-            add_cmd = f"git -C {clone_dir} add ."
-            result = subprocess.run(
-                add_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode != 0:
-                return False
-            
-            commit_cmd = f"git -C {clone_dir} commit -m '{full_message}'"
-            result = subprocess.run(
-                commit_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                logger.info("HOKIBOT_COMMIT_SUCCESS=1")
-                return True
-            elif "nothing to commit" in result.stderr:
-                logger.info("HOKIBOT_COMMIT_SKIP=1 (nothing to commit)")
-                return False
-            else:
-                return False
-                
-        except Exception:
-            return False
-    
-    def _update_pkgbuild(self, pkgbuild_path: Path, pkgver: str, pkgrel: str, epoch: Optional[str] = None) -> bool:
-        """Update PKGBUILD file with new version, release, and optionally epoch."""
-        try:
-            with open(pkgbuild_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            content = re.sub(
-                r'^(\s*pkgver\s*=).*$',
-                r'\1 ' + pkgver,
-                content,
-                flags=re.MULTILINE
-            )
-            
-            content = re.sub(
-                r'^(\s*pkgrel\s*=).*$',
-                r'\1 ' + pkgrel,
-                content,
-                flags=re.MULTILINE
-            )
-            
-            if epoch and epoch != '0':
-                if re.search(r'^\s*epoch\s*=.*$', content, re.MULTILINE):
-                    content = re.sub(
-                        r'^(\s*epoch\s*=).*$',
-                        r'\1 ' + epoch,
-                        content,
-                        flags=re.MULTILINE
-                    )
-                else:
-                    content = re.sub(
-                        r'^(\s*pkgrel\s*=.*)$',
-                        r'\1\nepoch=' + epoch,
-                        content,
-                        flags=re.MULTILINE
-                    )
-            
-            with open(pkgbuild_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            return True
-            
-        except Exception:
-            return False
     
     def _cleanup_clone_dir(self, clone_dir: Path):
         """Cleanup temporary clone directory."""

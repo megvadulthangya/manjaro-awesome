@@ -8,6 +8,10 @@ BUILD_TRACKING_DIR = ".buildtracking"  # Build tracking directory
 # PACKAGER identity from environment variable (secure via GitHub Secrets)
 PACKAGER_ID = os.getenv("PACKAGER_ENV", "Maintainer <no-reply@gshoots.hu>")
 
+# Hokibot Git identity for commits
+HOKIBOT_GIT_USER_NAME = "hokibot"
+HOKIBOT_GIT_USER_EMAIL = "hokibot@users.noreply.github.com"
+
 # SSH and Git configuration
 SSH_REPO_URL = "git@github.com:megvadulthangya/manjaro-awesome.git"
 SSH_OPTIONS = [
