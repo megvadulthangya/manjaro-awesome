@@ -505,6 +505,9 @@ class PackageBuilderOrchestrator:
         hokibot_count = len(self.build_tracker.hokibot_data)
         logger.info(f"HOKIBOT_DATA_COUNT={hokibot_count}")
         
+        # NEW: Log authoritative version usage for debugging
+        logger.info(f"BUILT_VERSION_AUTHORITATIVE_TOTAL: packages_with_hokibot_data={hokibot_count}")
+        
         # Log results
         logger.info(f"Build Results:")
         logger.info(f"   Built: {len(built_packages)} packages")

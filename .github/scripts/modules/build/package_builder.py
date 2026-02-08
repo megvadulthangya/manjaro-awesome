@@ -15,6 +15,7 @@ from modules.build.aur_builder import AURBuilder
 from modules.scm.git_client import GitClient
 from modules.common.shell_executor import ShellExecutor
 from modules.build.artifact_manager import ArtifactManager
+from modules.build.package_version_extractor import PackageVersionExtractor  # NEW: Import version extractor
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class PackageBuilder:
         """
         logger.info(f"🔍 Auditing local package: {pkg_dir.name}")
         
-        # Step 1: Extract version from PKGBUILD
+        # Step 1: Extract version from PKGBUILD (source version)
         try:
             pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
             source_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
@@ -156,13 +157,34 @@ class PackageBuilder:
         built_files = self._build_local_package(pkg_dir, source_version)
         
         if built_files:
+            # NEW: Get authoritative version from actual built artifacts
+            artifact_version = self._get_authoritative_version_from_built_files(built_files, pkg_dir.name)
+            
+            if artifact_version:
+                artifact_pkgver, artifact_pkgrel, artifact_epoch = artifact_version
+                artifact_version_str = self.version_manager.get_full_version_string(
+                    artifact_pkgver, artifact_pkgrel, artifact_epoch
+                )
+                
+                # Log the authoritative version comparison
+                logger.info(f"BUILT_VERSION_AUTHORITATIVE: pkg={pkg_dir.name} "
+                          f"source_ver={source_version} artifact_ver={artifact_version_str} chosen=artifact")
+                
+                # Use artifact version for registration and signing
+                built_version = artifact_version_str
+                pkgver, pkgrel, epoch = artifact_pkgver, artifact_pkgrel, artifact_epoch
+            else:
+                # Fallback to source version if we can't extract from artifact
+                built_version = source_version
+                logger.warning(f"Could not extract authoritative version from artifacts, using source version: {source_version}")
+            
             # Step 5: Sign ALL built package files (including split packages)
-            self._sign_built_packages(built_files, source_version)
+            self._sign_built_packages(built_files, built_version)
             
-            # NEW: Register target version for ALL pkgname entries
-            self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+            # NEW: Register target version for ALL pkgname entries using AUTHORITATIVE version
+            self.version_tracker.register_split_packages(pkg_names, built_version, is_built=True)
             
-            # NEW: Record hokibot data for local package
+            # NEW: Record hokibot data for local package with AUTHORITATIVE version
             if self.build_tracker:
                 self.build_tracker.add_hokibot_data(
                     pkg_name=pkg_dir.name,
@@ -170,10 +192,10 @@ class PackageBuilder:
                     pkgrel=pkgrel,
                     epoch=epoch,
                     old_version=remote_version,
-                    new_version=source_version
+                    new_version=built_version
                 )
             
-            return True, source_version, {
+            return True, built_version, {
                 "pkgver": pkgver,
                 "pkgrel": pkgrel,
                 "epoch": epoch,
@@ -272,15 +294,36 @@ class PackageBuilder:
             built_files = self._build_aur_package(temp_path, aur_package_name, source_version)
             
             if built_files:
-                # Step 6: Sign ALL built package files (including split packages)
-                self._sign_built_packages(built_files, source_version)
+                # NEW: Get authoritative version from actual built artifacts
+                artifact_version = self._get_authoritative_version_from_built_files(built_files, aur_package_name)
                 
-                # NEW: Register target version for ALL pkgname entries
-                self.version_tracker.register_split_packages(pkg_names, source_version, is_built=True)
+                if artifact_version:
+                    artifact_pkgver, artifact_pkgrel, artifact_epoch = artifact_version
+                    artifact_version_str = self.version_manager.get_full_version_string(
+                        artifact_pkgver, artifact_pkgrel, artifact_epoch
+                    )
+                    
+                    # Log the authoritative version comparison
+                    logger.info(f"BUILT_VERSION_AUTHORITATIVE: pkg={aur_package_name} "
+                              f"source_ver={source_version} artifact_ver={artifact_version_str} chosen=artifact")
+                    
+                    # Use artifact version for registration and signing
+                    built_version = artifact_version_str
+                    pkgver, pkgrel, epoch = artifact_pkgver, artifact_pkgrel, artifact_epoch
+                else:
+                    # Fallback to source version if we can't extract from artifact
+                    built_version = source_version
+                    logger.warning(f"Could not extract authoritative version from artifacts, using source version: {source_version}")
+                
+                # Step 6: Sign ALL built package files (including split packages)
+                self._sign_built_packages(built_files, built_version)
+                
+                # NEW: Register target version for ALL pkgname entries using AUTHORITATIVE version
+                self.version_tracker.register_split_packages(pkg_names, built_version, is_built=True)
                 
                 # Note: AUR packages do NOT record hokibot data per requirements
                 
-                return True, source_version, {
+                return True, built_version, {
                     "pkgver": pkgver,
                     "pkgrel": pkgrel,
                     "epoch": epoch,
@@ -296,6 +339,35 @@ class PackageBuilder:
             # Cleanup temporary directory
             if temp_dir and Path(temp_dir).exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    def _get_authoritative_version_from_built_files(self, built_files: List[str], pkg_name: str) -> Optional[Tuple[str, str, Optional[str]]]:
+        """
+        NEW: Extract authoritative version from built package files.
+        
+        Args:
+            built_files: List of built package filenames
+            pkg_name: Package name for logging
+        
+        Returns:
+            Tuple of (pkgver, pkgrel, epoch) or None if cannot extract
+        """
+        if not built_files:
+            return None
+        
+        # Convert filenames to Path objects in output directory
+        package_paths = [self.output_dir / filename for filename in built_files]
+        
+        # Use PackageVersionExtractor to get version
+        version = PackageVersionExtractor.get_authoritative_version_from_built_files(package_paths)
+        
+        if version:
+            pkgver, pkgrel, epoch = version
+            logger.info(f"✅ Extracted authoritative version for {pkg_name}: "
+                      f"pkgver={pkgver}, pkgrel={pkgrel}, epoch={epoch or 'none'}")
+            return version
+        
+        logger.warning(f"⚠️ Could not extract authoritative version for {pkg_name} from files: {built_files}")
+        return None
     
     def _check_split_package_completeness(self, pkgbuild_name: str, pkg_names: List[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """
