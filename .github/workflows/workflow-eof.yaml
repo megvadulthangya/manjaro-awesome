@@ -95,6 +95,27 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ================== DEBUG: After Checkout ==================
+      - name: Debug after checkout
+        run: |
+          echo "=== DEBUG AFTER CHECKOUT ==="
+          echo "GITHUB_SHA: $GITHUB_SHA"
+          echo "git rev-parse HEAD: $(git rev-parse HEAD)"
+          echo "git status --porcelain:"
+          git status --porcelain
+          echo ""
+          echo "First 60 lines of awesome-rofi/PKGBUILD:"
+          if [ -f "awesome-rofi/PKGBUILD" ]; then
+            nl -ba awesome-rofi/PKGBUILD | head -60
+            echo ""
+            echo "grep for pkgver and pkgrel:"
+            grep -E "^(pkgver|pkgrel)=" awesome-rofi/PKGBUILD || echo "No pkgver or pkgrel found"
+            echo ""
+            echo "sha256sum: $(sha256sum awesome-rofi/PKGBUILD)"
+          else
+            echo "awesome-rofi/PKGBUILD not found"
+          fi
+
       # ================== CACHE: Pacman Package Cache ==================
       # Cache for system packages to avoid re-downloading pacman packages every run
       - name: Restore Pacman Package Cache
@@ -133,7 +154,7 @@ jobs:
         with:
           path: |
             /mnt/build_artifacts
-            build_aur
+            /tmp/build_aur_cache  # CHANGED: Cache to /tmp instead of workspace
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
@@ -147,6 +168,7 @@ jobs:
           mkdir -p /mnt/yay_cache
           mkdir -p /mnt/vps_cache
           mkdir -p /mnt/build_artifacts
+          mkdir -p /tmp/build_aur_cache  # CHANGED: Create cache directory in /tmp
 
           rm -rf /var/cache/pacman/pkg
           ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
@@ -158,6 +180,8 @@ jobs:
           # Use a neutral path for artifacts initially
           ln -sf /mnt/build_artifacts /tmp/build_artifacts
 
+          # CHANGED: Don't symlink build_aur from workspace - create fresh
+          mkdir -p "$(pwd)/build_aur"
           chmod -R 777 /mnt
 
       - name: Install Python and Dependencies
@@ -180,7 +204,7 @@ jobs:
           echo "  - Yay cache: $(du -sh /root/.cache/yay 2>/dev/null | cut -f1 || echo '0')"
           echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - Built packages: $(ls -1 /tmp/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "  - AUR sources cache: $(ls -1 /tmp/build_aur_cache/*/ 2>/dev/null | wc -l) directories"
           
           # Skip key signing issues for system updates
           echo "Setting up pacman without key signing for updates..."
@@ -677,6 +701,27 @@ jobs:
           pacman -Ss gcc14
           echo "CACHYOS: DONE"
 
+      # ================== DEBUG: Before Builder ==================
+      - name: Debug before builder
+        run: |
+          echo "=== DEBUG BEFORE BUILDER ==="
+          echo "GITHUB_SHA: $GITHUB_SHA"
+          echo "git rev-parse HEAD: $(git rev-parse HEAD)"
+          echo "git status --porcelain:"
+          git status --porcelain
+          echo ""
+          echo "First 60 lines of awesome-rofi/PKGBUILD:"
+          if [ -f "awesome-rofi/PKGBUILD" ]; then
+            nl -ba awesome-rofi/PKGBUILD | head -60
+            echo ""
+            echo "grep for pkgver and pkgrel:"
+            grep -E "^(pkgver|pkgrel)=" awesome-rofi/PKGBUILD || echo "No pkgver or pkgrel found"
+            echo ""
+            echo "sha256sum: $(sha256sum awesome-rofi/PKGBUILD)"
+          else
+            echo "awesome-rofi/PKGBUILD not found"
+          fi
+
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -694,13 +739,32 @@ jobs:
           USE_CACHE: "true"  # Enable cache-aware building
         run: |
           echo "=== Starting Builder with Cache Optimization ==="
+          
+          # CHANGED: Restore AUR cache from /tmp to workspace build_aur directory
+          if [ -d "/tmp/build_aur_cache" ] && [ -n "$(ls -A /tmp/build_aur_cache 2>/dev/null)" ]; then
+            echo "Restoring AUR cache from /tmp/build_aur_cache to workspace..."
+            # Copy AUR cache directories to workspace build_aur
+            for dir in /tmp/build_aur_cache/*/; do
+              if [ -d "$dir" ]; then
+                dirname=$(basename "$dir")
+                dest_dir="$(pwd)/build_aur/$dirname"
+                if [ ! -d "$dest_dir" ]; then
+                  echo "  Restoring $dirname"
+                  cp -r "$dir" "$dest_dir"
+                  chown -R builder:builder "$dest_dir"
+                fi
+              fi
+            done
+          fi
+          
           # Make builder script executable
           chmod +x .github/scripts/builder.py
           
           echo "📊 Cache Status Before Build:"
           echo "  - Pacman cache: $(ls -1 /var/cache/pacman/pkg/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - Built packages in cache: $(ls -1 /home/builder/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "  - AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "  - AUR sources in cache: $(ls -1 /tmp/build_aur_cache/*/ 2>/dev/null | wc -l) directories"
+          echo "  - AUR sources in workspace: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           echo "  - VPS mirror cache: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - USE_CACHE environment variable: $USE_CACHE"
           
@@ -803,7 +867,7 @@ jobs:
         with:
           path: |
             /mnt/build_artifacts
-            build_aur
+            /tmp/build_aur_cache  # CHANGED: Cache from /tmp instead of workspace
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
 
       - name: Upload Build Artifacts
@@ -824,7 +888,7 @@ jobs:
           echo "=== Cache Status Report After Build ==="
           echo "Pacman cache saved: $(du -sh /mnt/pacman_cache 2>/dev/null | cut -f1 || echo '0')"
           echo "Built packages in cache: $(ls -1 /mnt/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
-          echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
+          echo "AUR sources in cache: $(ls -1 /tmp/build_aur_cache/*/ 2>/dev/null | wc -l) directories"
           echo "VPS mirror cache: $(du -sh /mnt/vps_cache 2>/dev/null | cut -f1 || echo '0')"
           echo ""
           echo "📊 Cache keys used:"
