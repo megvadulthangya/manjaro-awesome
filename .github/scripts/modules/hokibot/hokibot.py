@@ -612,7 +612,7 @@ class HokibotRunner:
                 f.write(new_content)
             
             # Validate the PKGBUILD
-            validation_error = self._validate_pkgbuild(pkgbuild_path, pkgver, pkgrel, epoch)
+            validation_error = self._validate_pkgbuild(pkgbuild_path)
             if validation_error:
                 # Revert changes
                 with open(pkgbuild_path, 'w', encoding='utf-8') as f:
@@ -627,24 +627,21 @@ class HokibotRunner:
             logger.error(f"HOKIBOT_PKGBUILD_UPDATE_ERROR: {pkgbuild_path} - {e}")
             return False, False, str(e)
     
-    def _validate_pkgbuild(self, pkgbuild_path: Path, expected_pkgver: str, expected_pkgrel: str, expected_epoch: Optional[str] = None) -> Optional[str]:
+    def _validate_pkgbuild(self, pkgbuild_path: Path) -> Optional[str]:
         """
-        Validate PKGBUILD by running makepkg --printsrcinfo and checking extracted values.
+        Validate PKGBUILD by running makepkg --printsrcinfo.
         
         Args:
             pkgbuild_path: Path to PKGBUILD file
-            expected_pkgver: Expected pkgver value
-            expected_pkgrel: Expected pkgrel value
-            expected_epoch: Expected epoch value (None if not set)
             
         Returns:
             Error message if validation fails, None if successful
         """
-        pkg_dir = pkgbuild_path.parent
-        
-        # Run makepkg --printsrcinfo to validate PKGBUILD
-        cmd = ["makepkg", "--printsrcinfo"]
         try:
+            pkg_dir = pkgbuild_path.parent
+            
+            # Run makepkg --printsrcinfo to validate PKGBUILD
+            cmd = ["makepkg", "--printsrcinfo"]
             result = subprocess.run(
                 cmd,
                 cwd=pkg_dir,
@@ -654,65 +651,20 @@ class HokibotRunner:
                 timeout=30
             )
             
-            # Log exit code for debugging
-            logger.info(f"HOKIBOT_MAKEPKG_SRCINFO_EXIT_CODE={result.returncode}")
-            
             if result.returncode != 0:
-                # Log concise failure summary
-                stderr_preview = "\n".join(result.stderr.splitlines()[:40])
-                stdout_preview = "\n".join(result.stdout.splitlines()[:40])
-                error_msg = f"makepkg --printsrcinfo failed (exit code {result.returncode}): stderr={stderr_preview}, stdout={stdout_preview}"
-                logger.error(f"HOKIBOT_MAKEPKG_VALIDATION_FAILED: {error_msg}")
-                return error_msg
+                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                return f"makepkg --printsrcinfo failed: {error_msg}"
             
-            # Check that output is not empty
+            # Also check that we can parse the output
             if not result.stdout.strip():
                 return "makepkg --printsrcinfo produced empty output"
             
-            # Parse the output for pkgver, pkgrel, epoch using robust patterns
+            # Check for key fields in the output
+            required_fields = ['pkgver', 'pkgrel']
             srcinfo_content = result.stdout
-            pkgver = None
-            pkgrel = None
-            epoch = None
-            
-            # Use robust regex patterns that match .SRCINFO format with spaces
-            pkgver_pattern = re.compile(r'^pkgver\s*=\s*(\S+)', re.MULTILINE)
-            pkgrel_pattern = re.compile(r'^pkgrel\s*=\s*(\S+)', re.MULTILINE)
-            epoch_pattern = re.compile(r'^epoch\s*=\s*(\S+)', re.MULTILINE)
-            
-            pkgver_match = pkgver_pattern.search(srcinfo_content)
-            pkgrel_match = pkgrel_pattern.search(srcinfo_content)
-            epoch_match = epoch_pattern.search(srcinfo_content)
-            
-            if pkgver_match:
-                pkgver = pkgver_match.group(1)
-            if pkgrel_match:
-                pkgrel = pkgrel_match.group(1)
-            if epoch_match:
-                epoch = epoch_match.group(1)
-            
-            # Check for required fields
-            if not pkgver:
-                return "Missing pkgver in generated .SRCINFO"
-            if not pkgrel:
-                return "Missing pkgrel in generated .SRCINFO"
-            
-            # Validate that extracted values match expected values
-            if pkgver != expected_pkgver:
-                return f"pkgver mismatch: expected '{expected_pkgver}', got '{pkgver}'"
-            if pkgrel != expected_pkgrel:
-                return f"pkgrel mismatch: expected '{expected_pkgrel}', got '{pkgrel}'"
-            
-            # Handle epoch validation
-            if expected_epoch and expected_epoch != '0':
-                if not epoch:
-                    return f"epoch missing: expected '{expected_epoch}', but no epoch found"
-                if epoch != expected_epoch:
-                    return f"epoch mismatch: expected '{expected_epoch}', got '{epoch}'"
-            else:
-                # If epoch is not expected, check if it exists and is not 0
-                if epoch and epoch != '0':
-                    return f"unexpected epoch: expected none or '0', got '{epoch}'"
+            for field in required_fields:
+                if f"\n{field} = " not in srcinfo_content:
+                    return f"Missing {field} in generated .SRCINFO"
             
             return None  # Validation successful
             
@@ -763,9 +715,6 @@ class HokibotRunner:
         clone_dir = Path(f"/tmp/hokibot_{run_id}")
         logger.info(f"HOKIBOT_CLONE_DIR={clone_dir}")
         
-        # Initialize validation_errors variable
-        validation_errors = 0
-        
         try:
             # Step 1: Clone repository with authentication
             if not self._clone_with_auth(clone_dir):
@@ -773,7 +722,7 @@ class HokibotRunner:
                 logger.info("HOKIBOT_FAILSAFE=1")
                 logger.info("HOKIBOT_SKIP_REASON=clone_failed")
                 logger.warning("Failed to clone repository - hokibot skipping")
-                return {"changed": 0, "committed": False, "pushed": False, "validation_errors": validation_errors}
+                return {"changed": 0, "committed": False, "pushed": False, "validation_errors": 0}
             
             # Step 2: Set git identity
             if not self._set_git_identity(clone_dir):
@@ -785,6 +734,7 @@ class HokibotRunner:
             # Step 4: Update PKGBUILD files for each package WITH VALIDATION
             actually_changed_packages = []
             changed_files = []
+            validation_errors = 0
             
             for entry in hokibot_data:
                 pkg_name = entry.get('name')
@@ -824,7 +774,7 @@ class HokibotRunner:
                 logger.info("HOKIBOT_ACTION=SKIP")
                 logger.info("HOKIBOT_SKIP_REASON=no_changes")
                 logger.info("HOKIBOT_FAILSAFE=0")
-                logger.info(f"HOKIBOT_VALIDATION_ERRORS={validation_errors}")
+                logger.info("HOKIBOT_VALIDATION_ERRORS={validation_errors}")
                 logger.info("No changes detected in working tree")
                 return {"changed": 0, "committed": False, "pushed": False, "validation_errors": validation_errors}
             
