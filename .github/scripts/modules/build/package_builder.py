@@ -15,8 +15,7 @@ from modules.build.aur_builder import AURBuilder
 from modules.scm.git_client import GitClient
 from modules.common.shell_executor import ShellExecutor
 from modules.build.artifact_manager import ArtifactManager
-from modules.build.package_version_extractor import PackageVersionExtractor
-from modules.build.package_version_extractor_fallback import PackageVersionExtractorFallback  # NEW: Import fallback extractor
+from modules.build.package_version_extractor import PackageVersionExtractor  # NEW: Import version extractor
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,6 @@ class PackageBuilder:
         self.vps_files = vps_files or []  # NEW: Store VPS file inventory
         self.build_tracker = build_tracker  # NEW: Store build tracker
         self._recently_built_files: List[str] = []  # NEW: Track files built in current session
-        self._failed_packages = []  # NEW: Track packages that failed version extraction
         
         # Initialize modular components
         self.local_builder = LocalBuilder(debug_mode=debug_mode)
@@ -87,7 +85,7 @@ class PackageBuilder:
         skip_check: bool = False
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
         """
-        Audit and build local package WITH SAFE VERSION EXTRACTION.
+        Audit and build local package.
         
         Args:
             pkg_dir: Path to local package directory
@@ -98,25 +96,16 @@ class PackageBuilder:
             Tuple of (built: bool, built_version: str, metadata: dict)
         """
         logger.info(f"🔍 Auditing local package: {pkg_dir.name}")
-        pkg_name = pkg_dir.name
         
-        # Step 1: Extract version from PKGBUILD (source version) WITH SAFE FALLBACK
+        # Step 1: Extract version from PKGBUILD (source version)
         try:
-            pkgver, pkgrel, epoch, fallback_used = PackageVersionExtractorFallback.safe_extract_version(pkg_dir, pkg_name)
-            
-            if pkgver is None or pkgrel is None:
-                # Version extraction failed completely
-                logger.error(f"❌ Failed to extract version from {pkg_name} (both primary and fallback methods failed)")
-                self._failed_packages.append(pkg_name)
-                return False, None, None
-            
+            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
             source_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
             
-            logger.info(f"📦 Source version: {source_version} {'(via fallback)' if fallback_used else ''}")
+            logger.info(f"📦 Source version: {source_version}")
             logger.info(f"📦 Remote version: {remote_version or 'Not found'}")
         except Exception as e:
             logger.error(f"❌ Failed to extract version from {pkg_dir}: {e}")
-            self._failed_packages.append(pkg_name)
             return False, None, None
         
         # Step 2: Extract all package names from PKGBUILD
@@ -223,7 +212,7 @@ class PackageBuilder:
         skip_check: bool = False
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
         """
-        Audit and build AUR package WITH SAFE VERSION EXTRACTION.
+        Audit and build AUR package.
         
         Args:
             aur_package_name: AUR package name
@@ -247,21 +236,13 @@ class PackageBuilder:
             clone_success = self._clone_aur_package(aur_package_name, temp_path)
             if not clone_success:
                 logger.error(f"❌ Failed to clone AUR package: {aur_package_name}")
-                self._failed_packages.append(aur_package_name)
                 return False, None, None
             
-            # Step 2: Extract version from PKGBUILD WITH SAFE FALLBACK
-            pkgver, pkgrel, epoch, fallback_used = PackageVersionExtractorFallback.safe_extract_version(temp_path, aur_package_name)
-            
-            if pkgver is None or pkgrel is None:
-                # Version extraction failed completely
-                logger.error(f"❌ Failed to extract version from AUR package {aur_package_name} (both primary and fallback methods failed)")
-                self._failed_packages.append(aur_package_name)
-                return False, None, None
-            
+            # Step 2: Extract version from PKGBUILD
+            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(temp_path)
             source_version = self.version_manager.get_full_version_string(pkgver, pkgrel, epoch)
             
-            logger.info(f"📦 AUR source version: {source_version} {'(via fallback)' if fallback_used else ''}")
+            logger.info(f"📦 AUR source version: {source_version}")
             logger.info(f"📦 Remote version: {remote_version or 'Not found'}")
             
             # Step 3: Extract all package names from PKGBUILD
@@ -353,16 +334,11 @@ class PackageBuilder:
             
         except Exception as e:
             logger.error(f"❌ Error building AUR package {aur_package_name}: {e}")
-            self._failed_packages.append(aur_package_name)
             return False, None, None
         finally:
             # Cleanup temporary directory
             if temp_dir and Path(temp_dir).exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
-    
-    def get_failed_packages(self) -> List[str]:
-        """Get list of packages that failed version extraction"""
-        return self._failed_packages.copy()
     
     def _get_authoritative_version_from_built_files(self, built_files: List[str], pkg_name: str) -> Optional[Tuple[str, str, Optional[str]]]:
         """
@@ -682,10 +658,8 @@ class PackageBuilder:
             if not pkg_names:
                 return None
             
-            # Extract version using safe method
-            pkgver, pkgrel, epoch, _ = PackageVersionExtractorFallback.safe_extract_version(pkg_dir, pkg_dir.name)
-            if pkgver is None or pkgrel is None:
-                return None
+            # Extract version
+            pkgver, pkgrel, epoch = self.version_manager.extract_version_from_srcinfo(pkg_dir)
             
             return {
                 "pkgnames": pkg_names,
@@ -774,9 +748,6 @@ class PackageBuilder:
                 shutil.rmtree(aur_build_dir, ignore_errors=True)
         except Exception:
             pass
-        
-        # Add packages that failed version extraction
-        failed_packages.extend(self._failed_packages)
         
         return built_packages, skipped_packages, failed_packages
 

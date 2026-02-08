@@ -1,12 +1,10 @@
 """
 Version Manager Module - Handles version extraction, comparison, and management
-WITH SAFE FALLBACK WHEN MAKEPKG --PRINTSRCINFO FAILS
 """
 
 import os
 import subprocess
 import logging
-import re
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -17,9 +15,8 @@ class VersionManager:
     """Handles package version extraction, comparison, and management"""
     
     def extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
-        """Extract pkgver, pkgrel, and epoch from .SRCINFO or makepkg --printsrcinfo output WITH SAFE FALLBACK"""
+        """Extract pkgver, pkgrel, and epoch from .SRCINFO or makepkg --printsrcinfo output"""
         srcinfo_path = pkg_dir / ".SRCINFO"
-        pkg_name = pkg_dir.name
         
         # First try to read existing .SRCINFO
         if srcinfo_path.exists():
@@ -28,17 +25,16 @@ class VersionManager:
                     srcinfo_content = f.read()
                 return self._parse_srcinfo_content(srcinfo_content)
             except Exception as e:
-                logger.warning(f"Failed to parse existing .SRCINFO for {pkg_name}: {e}")
+                logger.warning(f"Failed to parse existing .SRCINFO: {e}")
         
-        # Try to generate .SRCINFO using makepkg --printsrcinfo
+        # Generate .SRCINFO using makepkg --printsrcinfo
         try:
             result = subprocess.run(
                 ['makepkg', '--printsrcinfo'],
                 cwd=pkg_dir,
                 capture_output=True,
                 text=True,
-                check=False,
-                timeout=30  # Add timeout to prevent hanging
+                check=False
             )
             
             if result.returncode == 0 and result.stdout:
@@ -47,109 +43,12 @@ class VersionManager:
                     f.write(result.stdout)
                 return self._parse_srcinfo_content(result.stdout)
             else:
-                logger.warning(f"makepkg --printsrcinfo failed for {pkg_name}: {result.stderr[:200] if result.stderr else 'No error output'}")
-                # Fall back to direct PKGBUILD parsing
-                return self._extract_version_from_pkgbuild_fallback(pkg_dir, pkg_name)
+                logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
+                raise RuntimeError(f"Failed to generate .SRCINFO: {result.stderr}")
                 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"makepkg --printsrcinfo timeout for {pkg_name}")
-            # Fall back to direct PKGBUILD parsing
-            return self._extract_version_from_pkgbuild_fallback(pkg_dir, pkg_name)
         except Exception as e:
-            logger.warning(f"Error running makepkg --printsrcinfo for {pkg_name}: {e}")
-            # Fall back to direct PKGBUILD parsing
-            return self._extract_version_from_pkgbuild_fallback(pkg_dir, pkg_name)
-    
-    def _extract_version_from_pkgbuild_fallback(self, pkg_dir: Path, pkg_name: str) -> Tuple[str, str, Optional[str]]:
-        """
-        Safe fallback: parse pkgver and pkgrel directly from PKGBUILD text without executing it.
-        
-        Args:
-            pkg_dir: Package directory
-            pkg_name: Package name for logging
-            
-        Returns:
-            Tuple of (pkgver, pkgrel, epoch)
-            
-        Raises:
-            ValueError: If cannot extract pkgver and pkgrel
-        """
-        pkgbuild_path = pkg_dir / "PKGBUILD"
-        
-        if not pkgbuild_path.exists():
-            logger.error(f"PKGBUILD not found in {pkg_dir}")
-            logger.info(f"PKGBUILD_VERSION_FALLBACK_FAIL=1 pkg={pkg_name}")
-            raise ValueError(f"PKGBUILD not found in {pkg_dir}")
-        
-        try:
-            with open(pkgbuild_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # Remove comments to avoid matching commented assignments
-            lines = []
-            for line in content.split('\n'):
-                # Remove everything after # (comments)
-                if '#' in line:
-                    line = line[:line.index('#')]
-                lines.append(line)
-            
-            # Join lines back (handling line continuations)
-            cleaned_content = ''
-            i = 0
-            while i < len(lines):
-                line = lines[i]
-                if line.endswith('\\'):
-                    # Continuation line
-                    cleaned_content += line.rstrip('\\')
-                    i += 1
-                    while i < len(lines) and lines[i].endswith('\\'):
-                        cleaned_content += lines[i].rstrip('\\')
-                        i += 1
-                    if i < len(lines):
-                        cleaned_content += lines[i]
-                else:
-                    cleaned_content += line
-                cleaned_content += '\n'
-                i += 1
-            
-            # Look for assignments (case-insensitive, with optional whitespace)
-            pkgver = None
-            pkgrel = None
-            epoch = None
-            
-            # Regex patterns for assignments (handles pkgver=value, pkgver = value, etc.)
-            pkgver_pattern = re.compile(r'^\s*pkgver\s*=\s*["\']?([^"\'\n]+)["\']?', re.IGNORECASE | re.MULTILINE)
-            pkgrel_pattern = re.compile(r'^\s*pkgrel\s*=\s*["\']?([^"\'\n]+)["\']?', re.IGNORECASE | re.MULTILINE)
-            epoch_pattern = re.compile(r'^\s*epoch\s*=\s*["\']?([^"\'\n]+)["\']?', re.IGNORECASE | re.MULTILINE)
-            
-            pkgver_match = pkgver_pattern.search(cleaned_content)
-            if pkgver_match:
-                pkgver = pkgver_match.group(1).strip()
-            
-            pkgrel_match = pkgrel_pattern.search(cleaned_content)
-            if pkgrel_match:
-                pkgrel = pkgrel_match.group(1).strip()
-            
-            epoch_match = epoch_pattern.search(cleaned_content)
-            if epoch_match:
-                epoch_val = epoch_match.group(1).strip()
-                if epoch_val != '0':
-                    epoch = epoch_val
-            
-            if not pkgver or not pkgrel:
-                logger.error(f"Cannot extract pkgver and pkgrel from PKGBUILD for {pkg_name}")
-                logger.info(f"PKGBUILD_VERSION_FALLBACK_FAIL=1 pkg={pkg_name}")
-                raise ValueError(f"Cannot extract pkgver and pkgrel from PKGBUILD for {pkg_name}")
-            
-            logger.info(f"PKGBUILD_VERSION_FALLBACK_USED=1 pkg={pkg_name}")
-            logger.info(f"Extracted via fallback for {pkg_name}: pkgver={pkgver}, pkgrel={pkgrel}, epoch={epoch or 'none'}")
-            
-            return pkgver, pkgrel, epoch
-            
-        except Exception as e:
-            logger.error(f"Error in PKGBUILD fallback parsing for {pkg_name}: {e}")
-            logger.info(f"PKGBUILD_VERSION_FALLBACK_FAIL=1 pkg={pkg_name}")
-            raise ValueError(f"Failed to parse PKGBUILD for {pkg_name}: {e}")
+            logger.error(f"Error running makepkg --printsrcinfo: {e}")
+            raise
     
     def _parse_srcinfo_content(self, srcinfo_content: str) -> Tuple[str, str, Optional[str]]:
         """Parse SRCINFO content to extract version information"""
