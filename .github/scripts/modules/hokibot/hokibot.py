@@ -1,3 +1,4 @@
+FILE: .github/scripts/modules/hokibot/hokibot.py
 """
 Hokibot Module - Handles automatic version bumping for local packages
 WITH NON-BLOCKING FAIL-SAFE SEMANTICS AND TOKEN-BASED GIT AUTH
@@ -551,6 +552,12 @@ class HokibotRunner:
             # Store original for backup
             original_content = current_content
             
+            # AUDIT: Log pkgver/pkgrel lines in the PKGBUILD before update
+            logger.info(f"HOKIBOT_PKGBUILD_AUDIT_BEFORE: {pkgbuild_path.parent.name}")
+            for line_num, line in enumerate(current_content.split('\n'), 1):
+                if line.strip().startswith('pkgver=') or line.strip().startswith('pkgrel='):
+                    logger.info(f"  line {line_num}: {repr(line[:80])}")
+            
             # Fix I3: Remove spaces after '=' in assignments
             # We need to update pkgver, pkgrel, and optionally epoch
             lines = current_content.split('\n')
@@ -607,6 +614,25 @@ class HokibotRunner:
             if new_content == current_content:
                 return False, True, None  # No change, but operation successful
             
+            # AUDIT: Log git diff for this PKGBUILD before validation
+            pkg_dir = pkgbuild_path.parent
+            try:
+                diff_cmd = f"git -C {pkg_dir} diff --no-ext-diff {pkgbuild_path.name} 2>/dev/null || true"
+                diff_result = subprocess.run(
+                    diff_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if diff_result.returncode == 0 and diff_result.stdout.strip():
+                    diff_lines = diff_result.stdout.strip().split('\n')
+                    logger.info(f"HOKIBOT_PKGBUILD_GIT_DIFF: {pkgbuild_path.parent.name} (first 80 lines)")
+                    for i, line in enumerate(diff_lines[:80]):
+                        logger.info(f"  diff line {i+1}: {repr(line[:100])}")
+            except Exception as e:
+                logger.warning(f"Could not get git diff for audit: {e}")
+            
             # Write new content
             with open(pkgbuild_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
@@ -618,6 +644,42 @@ class HokibotRunner:
                 with open(pkgbuild_path, 'w', encoding='utf-8') as f:
                     f.write(original_content)
                 logger.warning(f"HOKIBOT_PKGBUILD_VALIDATION_FAILED: {pkgbuild_path.parent.name} - {validation_error}")
+                
+                # AUDIT: Log revert happened and check git status
+                logger.info(f"HOKIBOT_REVERT_HAPPENED: {pkgbuild_path.parent.name}")
+                try:
+                    # Check git diff after revert (should be empty)
+                    diff_cmd = f"git -C {pkg_dir} diff --no-ext-diff {pkgbuild_path.name} 2>/dev/null || true"
+                    diff_result = subprocess.run(
+                        diff_cmd,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if diff_result.returncode == 0:
+                        if diff_result.stdout.strip():
+                            logger.info(f"HOKIBOT_REVERT_DIFF_NON_EMPTY: {pkgbuild_path.parent.name}")
+                            for i, line in enumerate(diff_result.stdout.strip().split('\n')[:20]):
+                                logger.info(f"  revert diff line {i+1}: {repr(line[:100])}")
+                        else:
+                            logger.info(f"HOKIBOT_REVERT_DIFF_EMPTY: {pkgbuild_path.parent.name}")
+                    
+                    # Check git status porcelain count after revert
+                    status_cmd = f"git -C {pkg_dir} status --porcelain {pkgbuild_path.name} 2>/dev/null | wc -l || echo 0"
+                    status_result = subprocess.run(
+                        status_cmd,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if status_result.returncode == 0:
+                        count = status_result.stdout.strip()
+                        logger.info(f"HOKIBOT_REVERT_STATUS_COUNT: {pkgbuild_path.parent.name} count={count}")
+                except Exception as e:
+                    logger.warning(f"Could not audit revert: {e}")
+                
                 return False, False, validation_error
             
             logger.info(f"HOKIBOT_PKGBUILD_VALIDATION_SUCCESS: {pkgbuild_path.parent.name}")
@@ -650,6 +712,36 @@ class HokibotRunner:
                 check=False,
                 timeout=30
             )
+            
+            # AUDIT: Log makepkg --printsrcinfo results
+            logger.info(f"HOKIBOT_MAKEPKG_SRCINFO_AUDIT: {pkgbuild_path.parent.name}")
+            logger.info(f"  exit_code={result.returncode}")
+            logger.info(f"  stdout_length={len(result.stdout)}")
+            logger.info(f"  stderr_length={len(result.stderr)}")
+            logger.info(f"  stdout_first_80_chars={repr(result.stdout[:80])}")
+            
+            # Bounded output logs
+            if result.stdout:
+                stdout_lines = result.stdout.strip().split('\n')
+                logger.info(f"  stdout_first_50_lines:")
+                for i, line in enumerate(stdout_lines[:50]):
+                    logger.info(f"    line {i+1}: {repr(line[:200])}")
+            
+            if result.stderr:
+                stderr_lines = result.stderr.strip().split('\n')
+                logger.info(f"  stderr_first_20_lines:")
+                for i, line in enumerate(stderr_lines[:20]):
+                    logger.info(f"    line {i+1}: {repr(line[:200])}")
+            
+            # Diagnostic regex checks (do not change pass/fail)
+            pkgver_pattern = r'(^|\n)\s*pkgver\s*=\s*'
+            pkgrel_pattern = r'(^|\n)\s*pkgrel\s*=\s*'
+            
+            pkgver_match = re.search(pkgver_pattern, result.stdout) is not None
+            pkgrel_match = re.search(pkgrel_pattern, result.stdout) is not None
+            
+            logger.info(f"  pkgver_regex_match={pkgver_match}")
+            logger.info(f"  pkgrel_regex_match={pkgrel_match}")
             
             if result.returncode != 0:
                 error_msg = result.stderr[:500] if result.stderr else "Unknown error"
@@ -774,7 +866,7 @@ class HokibotRunner:
                 logger.info("HOKIBOT_ACTION=SKIP")
                 logger.info("HOKIBOT_SKIP_REASON=no_changes")
                 logger.info("HOKIBOT_FAILSAFE=0")
-                logger.info("HOKIBOT_VALIDATION_ERRORS={validation_errors}")
+                logger.info(f"HOKIBOT_VALIDATION_ERRORS={validation_errors}")
                 logger.info("No changes detected in working tree")
                 return {"changed": 0, "committed": False, "pushed": False, "validation_errors": validation_errors}
             
