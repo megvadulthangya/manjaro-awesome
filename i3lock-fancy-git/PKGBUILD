@@ -1,6 +1,7 @@
 # Maintainer: megvadulthangya <megvadulthangya@gmail.com>
 # Contributor: Dolores Portalatin <meskarune at gmail dot com>
 # Contributor: burntcookie90 <aur at vishnurajeevan dot com>
+
 _gitname=i3lock-fancy
 pkgname=i3lock-fancy-git
 pkgver=r194.4659b6f
@@ -10,13 +11,16 @@ arch=('i686' 'x86_64')
 url="https://github.com/megvadulthangya/i3lock-fancy"
 license=('MIT')
 depends=('coreutils' 'awk' 'bash' 'util-linux' 'imagemagick' 'i3lock')
-optdepends=('wmctrl: minimize windows before locking'
-            'scrot: alternative screenshot creator'
-            'maim: alternative screenshot creator'
-            'gnome-screenshot: alternative screenshot creator')
+optdepends=(
+  'wmctrl: minimize windows before locking'
+  'scrot: alternative screenshot creator'
+  'maim: alternative screenshot creator'
+  'gnome-screenshot: alternative screenshot creator'
+)
 makedepends=('git')
 provides=('i3lock-fancy')
-source=("git+https://github.com/megvadulthangya/$_gitname.git")
+
+source=("git+https://github.com/megvadulthangya/i3lock-fancy.git")
 md5sums=('SKIP')
 
 pkgver() {
@@ -25,6 +29,6 @@ pkgver() {
 }
 
 package() {
-    cd "${srcdir}/$_gitname"
-    DESTDIR="$pkgdir" make install
+  cd "${srcdir}/$_gitname"
+  DESTDIR="$pkgdir" make install
 }
