@@ -750,12 +750,16 @@ class HokibotRunner:
             if not result.stdout.strip():
                 return "makepkg --printsrcinfo produced empty output"
             
-            # Check for key fields in the output
-            required_fields = ['pkgver', 'pkgrel']
+            # Check for key fields in the output using robust regex
             srcinfo_content = result.stdout
-            for field in required_fields:
-                if f"\n{field} = " not in srcinfo_content:
-                    return f"Missing {field} in generated .SRCINFO"
+            
+            # Check pkgver with regex that tolerates leading whitespace
+            if not re.search(r'(?m)^\s*pkgver\s*=\s*.+$', srcinfo_content):
+                return "Missing pkgver in generated .SRCINFO"
+            
+            # Check pkgrel with regex that tolerates leading whitespace
+            if not re.search(r'(?m)^\s*pkgrel\s*=\s*.+$', srcinfo_content):
+                return "Missing pkgrel in generated .SRCINFO"
             
             return None  # Validation successful
             
