@@ -15,6 +15,113 @@ logger = logging.getLogger(__name__)
 class VersionManager:
     """Handles package version extraction, comparison, and management"""
     
+    def is_vcs_package(self, pkg_dir: Path) -> Tuple[bool, str]:
+        """
+        Detect if a package is a VCS package without network calls.
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            Tuple of (is_vcs: bool, reason: str)
+        """
+        try:
+            # First try to read PKGBUILD
+            pkgbuild_path = pkg_dir / "PKGBUILD"
+            if not pkgbuild_path.exists():
+                # Fallback to .SRCINFO
+                srcinfo_path = pkg_dir / ".SRCINFO"
+                if srcinfo_path.exists():
+                    with open(srcinfo_path, 'r') as f:
+                        content = f.read()
+                    return self._detect_vcs_from_content(content)
+                return False, "no_pkgbuild_or_srcinfo"
+            
+            with open(pkgbuild_path, 'r') as f:
+                content = f.read()
+            
+            return self._detect_vcs_from_content(content)
+            
+        except Exception as e:
+            logger.warning(f"VCS detection failed for {pkg_dir}: {e}")
+            return False, f"error: {e}"
+    
+    def _detect_vcs_from_content(self, content: str) -> Tuple[bool, str]:
+        """
+        Detect VCS package from PKGBUILD or .SRCINFO content.
+        
+        Args:
+            content: Content of PKGBUILD or .SRCINFO
+            
+        Returns:
+            Tuple of (is_vcs: bool, reason: str)
+        """
+        # Check for pkgver() function definition
+        if re.search(r'^\s*pkgver\s*\(\)', content, re.MULTILINE):
+            return True, "pkgver_function"
+        
+        # Check for VCS source URLs
+        vcs_patterns = [
+            r'git\+',           # git+https://
+            r'git://',          # git://
+            r'\.git\b',         # .git extension
+            r'svn\+',           # svn+https://
+            r'hg\+',            # hg+https://
+            r'bzr\+',           # bzr+https://
+            r'cvs\+',           # cvs+https://
+        ]
+        
+        for pattern in vcs_patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                return True, f"vcs_source_{pattern.rstrip('+').rstrip('\\\\')}"
+        
+        return False, "none"
+    
+    def is_placeholder_version(self, pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+        """
+        Detect if version is a placeholder.
+        
+        Args:
+            pkgver: Package version
+            pkgrel: Package release
+            epoch: Package epoch (optional)
+            
+        Returns:
+            True if version is a placeholder, False otherwise
+        """
+        # Build full version string
+        full_version = self.get_full_version_string(pkgver, pkgrel, epoch)
+        
+        # Common placeholders for VCS packages
+        placeholder_patterns = [
+            # Exact matches
+            r'^0-1$',              # 0-1
+            r'^0:0-1$',           # 0:0-1 (with epoch)
+            r'^9999-1$',          # 9999-1
+            r'^0:9999-1$',        # 0:9999-1 (with epoch)
+            r'^0\.0\.0-1$',       # 0.0.0-1
+            r'^0:0\.0\.0-1$',     # 0:0.0.0-1 (with epoch)
+            
+            # Common VCS placeholders (conservative)
+            r'^\d+\.\d+\.\d+\.r\d+\.\w+-1$',  # git snapshot versions
+            r'^r\d+-1$',                      # r1234-1
+            r'^\d{8}-1$',                     # 20230101-1 (date snapshots)
+        ]
+        
+        for pattern in placeholder_patterns:
+            if re.match(pattern, full_version):
+                return True
+        
+        # Additional conservative checks
+        if pkgver in ["0", "9999", "0.0.0", "0.0", "0.0.0.0"] and pkgrel == "1":
+            return True
+        
+        # Check if pkgver looks like a git commit hash (hexadecimal, 7+ chars)
+        if re.match(r'^[0-9a-f]{7,}$', pkgver, re.IGNORECASE) and pkgrel == "1":
+            return True
+        
+        return False
+    
     def extract_version_from_srcinfo(self, pkg_dir: Path) -> Tuple[str, str, Optional[str]]:
         """Extract pkgver, pkgrel, and epoch from .SRCINFO or makepkg --printsrcinfo output"""
         srcinfo_path = pkg_dir / ".SRCINFO"
@@ -174,13 +281,30 @@ class VersionManager:
         
         return None
     
-    def compare_versions(self, remote_version: Optional[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+    def compare_versions(self, pkg_dir: Path, remote_version: Optional[str], pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """
         Compare versions using vercmp-style logic with canonical normalization
+        and VCS placeholder override.
         
+        Args:
+            pkg_dir: Path to package directory (for VCS detection)
+            remote_version: Remote version from VPS
+            pkgver: Source package version
+            pkgrel: Source package release
+            epoch: Source package epoch (optional)
+            
         Returns:
             True if AUR_VERSION > REMOTE_VERSION (should build), False otherwise
         """
+        # VCS detection
+        is_vcs, vcs_reason = self.is_vcs_package(pkg_dir)
+        logger.info(f"VCS_DETECTED={1 if is_vcs else 0} pkg={pkg_dir.name} reason={vcs_reason}")
+        
+        # Placeholder detection
+        is_placeholder = self.is_placeholder_version(pkgver, pkgrel, epoch)
+        source_version = self.get_full_version_string(pkgver, pkgrel, epoch)
+        logger.info(f"VCS_PLACEHOLDER={1 if is_placeholder else 0} pkg={pkg_dir.name} source_version={source_version}")
+        
         # If no remote version exists, we should build
         if not remote_version:
             norm_remote = "None"
@@ -199,6 +323,12 @@ class VersionManager:
         # Log for debugging
         logger.info(f"[VERSION_COMPARE] PKGBUILD source: {source_version} (norm={norm_source})")
         logger.info(f"[VERSION_COMPARE] Remote version: {remote_version} (norm={norm_remote})")
+        
+        # Check for VCS placeholder override BEFORE version comparison
+        if is_vcs and is_placeholder:
+            logger.info(f"VCS_PLACEHOLDER_OVERRIDE=1 pkg={pkg_dir.name} source={source_version} remote={remote_version}")
+            logger.info(f"[VERSION_COMPARE] VCS placeholder detected - forcing BUILD regardless of version comparison")
+            return True
         
         # Use vercmp for proper version comparison
         try:
@@ -219,14 +349,25 @@ class VersionManager:
             else:
                 # Fallback to simple comparison if vercmp fails
                 logger.warning("vercmp failed, using fallback comparison")
-                return self._fallback_version_comparison(remote_version, pkgver, pkgrel, epoch)
+                return self._fallback_version_comparison(pkg_dir, remote_version, pkgver, pkgrel, epoch)
                 
         except Exception as e:
             logger.warning(f"vercmp comparison failed: {e}, using fallback")
-            return self._fallback_version_comparison(remote_version, pkgver, pkgrel, epoch)
+            return self._fallback_version_comparison(pkg_dir, remote_version, pkgver, pkgrel, epoch)
     
-    def _fallback_version_comparison(self, remote_version: str, pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
+    def _fallback_version_comparison(self, pkg_dir: Path, remote_version: str, pkgver: str, pkgrel: str, epoch: Optional[str]) -> bool:
         """Fallback version comparison when vercmp is not available"""
+        # VCS detection for fallback
+        is_vcs, vcs_reason = self.is_vcs_package(pkg_dir)
+        is_placeholder = self.is_placeholder_version(pkgver, pkgrel, epoch)
+        
+        # Check for VCS placeholder override in fallback
+        if is_vcs and is_placeholder:
+            source_version = self.get_full_version_string(pkgver, pkgrel, epoch)
+            logger.info(f"VCS_PLACEHOLDER_OVERRIDE=1 pkg={pkg_dir.name} source={source_version} remote={remote_version}")
+            logger.info(f"[FALLBACK_COMPARE] VCS placeholder detected - forcing BUILD")
+            return True
+        
         # Normalize versions for fallback comparison too
         source_version = self.get_full_version_string(pkgver, pkgrel, epoch)
         norm_remote = self.normalize_version_string(remote_version)

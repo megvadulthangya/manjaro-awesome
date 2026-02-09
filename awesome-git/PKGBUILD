@@ -1,7 +1,7 @@
 # awesome-git PKGBUILD - JAVÍTOTT, FLAT FORMAT
 _pkgname=awesome
 pkgname=${_pkgname}-git
-pkgver=4.3.1714.g875f12087
+pkgver=4.3.1711.gcab3e81dc
 pkgrel=1
 pkgdesc='Highly configurable framework window manager'
 arch=('i686' 'x86_64')
