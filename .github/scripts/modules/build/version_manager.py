@@ -120,12 +120,12 @@ class VersionManager:
         
         return version_string
     
-    def extract_artifact_versions(self, output_dir: Path, pkg_names: List[str]) -> Dict[str, str]:
+    def extract_artifact_versions_from_files(self, built_files: List[str], pkg_names: List[str]) -> Dict[str, str]:
         """
-        Extract actual built versions from artifact filenames.
+        Extract actual built versions from the provided built_files list (files created/moved in this run).
         
         Args:
-            output_dir: Directory containing built artifacts
+            built_files: List of built package filenames
             pkg_names: List of package names to look for
             
         Returns:
@@ -134,7 +134,40 @@ class VersionManager:
         artifact_versions = {}
         
         for pkg_name in pkg_names:
-            # Look for artifacts matching this package name
+            for built_file in built_files:
+                # Skip signature files
+                if built_file.endswith('.sig'):
+                    continue
+                
+                # Parse version from filename
+                match = re.match(rf'^{re.escape(pkg_name)}-(.+?)-(?:x86_64|any|i686|aarch64|armv7h|armv6h)\.pkg\.tar\.(?:zst|xz)$', built_file)
+                if match:
+                    version = match.group(1)
+                    artifact_versions[pkg_name] = version
+                    logger.info(f"ARTIFACT_FROM_BUILT_FILES pkg={pkg_name} ver={version}")
+                    break  # Found a version for this package
+        
+        return artifact_versions
+    
+    def extract_artifact_versions(self, output_dir: Path, pkg_names: List[str]) -> Dict[str, str]:
+        """
+        Extract actual built versions from artifact filenames in output_dir.
+        Collects ALL matching artifacts per package and chooses the newest version.
+        
+        Args:
+            output_dir: Directory containing built artifacts
+            pkg_names: List of package names to look for
+            
+        Returns:
+            Dictionary mapping pkg_name -> actual built version (newest found)
+        """
+        artifact_versions = {}
+        
+        for pkg_name in pkg_names:
+            # Collect ALL matching artifacts for this package
+            candidates = []
+            bad_candidates = 0
+            
             for artifact in output_dir.glob(f"{pkg_name}-*.pkg.tar.*"):
                 # Skip signature files
                 if artifact.name.endswith('.sig'):
@@ -144,11 +177,58 @@ class VersionManager:
                 match = re.match(rf'^{re.escape(pkg_name)}-(.+?)-(?:x86_64|any|i686|aarch64|armv7h|armv6h)\.pkg\.tar\.(?:zst|xz)$', artifact.name)
                 if match:
                     version = match.group(1)
-                    artifact_versions[pkg_name] = version
-                    logger.info(f"Extracted artifact version for {pkg_name}: {version}")
-                    break
+                    candidates.append((artifact, version))
+                else:
+                    bad_candidates += 1
+            
+            # Log bad candidates if any
+            if bad_candidates > 0:
+                logger.info(f"ARTIFACT_BAD_CANDIDATES pkg={pkg_name} count={bad_candidates}")
+            
+            if candidates:
+                # Choose the newest version using version comparison
+                if len(candidates) == 1:
+                    # Only one candidate
+                    chosen_artifact, chosen_version = candidates[0]
+                else:
+                    # Multiple candidates, find newest
+                    newest_artifact, newest_version = candidates[0]
+                    for artifact, version in candidates[1:]:
+                        if self._version_cmp(version, newest_version) > 0:
+                            newest_artifact, newest_version = artifact, version
+                    chosen_artifact, chosen_version = newest_artifact, newest_version
+                
+                artifact_versions[pkg_name] = chosen_version
+                logger.info(f"ARTIFACT_FROM_OUTPUT_DIR pkg={pkg_name} chosen={chosen_version} candidates={len(candidates)}")
         
         return artifact_versions
+    
+    def _version_cmp(self, v1: str, v2: str) -> int:
+        """
+        Compare two version strings using vercmp.
+        Returns negative if v1 < v2, zero if v1 == v2, positive if v1 > v2.
+        
+        Args:
+            v1: First version string
+            v2: Second version string
+            
+        Returns:
+            Comparison result
+        """
+        try:
+            result = subprocess.run(
+                ['vercmp', v1, v2],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode == 0:
+                return int(result.stdout.strip())
+        except Exception as e:
+            logger.warning(f"vercmp failed: {e}")
+        
+        # Fallback: simple string comparison
+        return 1 if v1 > v2 else -1 if v1 < v2 else 0
     
     def get_artifact_version_from_makepkg(self, makepkg_output: str) -> Optional[str]:
         """
@@ -464,7 +544,7 @@ class VersionManager:
         """
         # Patterns for Arch VCS packages:
         # 1. .g<short_hash> (e.g., 4.3.1711.gcab3e81dc-1)
-        # 2. -g<short_hash> (e.g., r1234-gcab3e81dc-1)
+        # 2. -g<short_hash> (e.g., r1234.gcab3e81dc-1)
         # 3. .r<num>.<short_hash> (e.g., 1.0.r123.abc12345-1)
         
         patterns = [

@@ -158,14 +158,19 @@ class PackageBuilder:
         
         if built_files:
             # Step 5: Extract ACTUAL artifact versions from built files
-            artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+            # NEW: Prefer built_files-based helper first
+            artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
             
-            # Fallback: try to extract from makepkg output if artifact parsing fails
-            if not artifact_versions and build_output:
-                artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
-                if artifact_version:
-                    for pkg_name in pkg_names:
-                        artifact_versions[pkg_name] = artifact_version
+            # Fallback to output_dir scan if built_files didn't yield versions
+            if not artifact_versions:
+                artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+                
+                # Additional fallback: try to extract from makepkg output if artifact parsing fails
+                if not artifact_versions and build_output:
+                    artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                    if artifact_version:
+                        for pkg_name in pkg_names:
+                            artifact_versions[pkg_name] = artifact_version
             
             # Step 6: Determine which version to use (artifact truth vs PKGBUILD)
             actual_version = None
@@ -329,14 +334,19 @@ class PackageBuilder:
             
             if built_files:
                 # Step 6: Extract ACTUAL artifact versions from built files
-                artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+                # NEW: Prefer built_files-based helper first
+                artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
                 
-                # Fallback: try to extract from makepkg output if artifact parsing fails
-                if not artifact_versions and build_output:
-                    artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
-                    if artifact_version:
-                        for pkg_name in pkg_names:
-                            artifact_versions[pkg_name] = artifact_version
+                # Fallback to output_dir scan if built_files didn't yield versions
+                if not artifact_versions:
+                    artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+                    
+                    # Additional fallback: try to extract from makepkg output if artifact parsing fails
+                    if not artifact_versions and build_output:
+                        artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                        if artifact_version:
+                            for pkg_name in pkg_names:
+                                artifact_versions[pkg_name] = artifact_version
                 
                 # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
                 actual_version = None
