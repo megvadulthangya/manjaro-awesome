@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 from modules.common.shell_executor import ShellExecutor
+from modules.build.dependency_installer import DependencyInstaller
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class AURBuilder:
         self.debug_mode = debug_mode
         self._pacman_initialized = False
         self.shell_executor = ShellExecutor(debug_mode=debug_mode)
+        self.dependency_installer = DependencyInstaller(self.shell_executor, debug_mode)
     
     def _initialize_pacman_database(self) -> bool:
         """
@@ -115,7 +117,7 @@ class AURBuilder:
         return deps
     
     def install_dependencies_strict(self, deps: List[str]) -> bool:
-        """STRICT dependency resolution: pacman first, then yay"""
+        """STRICT dependency resolution: pacman first, then yay with conflict resolution"""
         if not deps:
             return True
         
@@ -135,61 +137,16 @@ class AURBuilder:
         if result.returncode != 0:
             logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
         
-        # Clean dependency names
-        clean_deps = []
-        phantom_packages = set()
+        # Load conflict resolution allowlist from config
+        try:
+            import config
+            conflict_allowlist = getattr(config, 'CONFLICT_REMOVE_ALLOWLIST', {})
+        except ImportError:
+            conflict_allowlist = {}
+            logger.warning("Could not load CONFLICT_REMOVE_ALLOWLIST from config")
         
-        for dep in deps:
-            dep_clean = re.sub(r'[<=>].*', '', dep).strip()
-            if dep_clean and dep_clean.strip() and not any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
-                if re.search(r'[a-zA-Z0-9]', dep_clean):
-                    # FIX: Hard-filter out phantom package 'lgi'
-                    if dep_clean == 'lgi':
-                        phantom_packages.add('lgi')
-                        logger.warning(f"⚠️ Found phantom package 'lgi' - will be replaced with 'lua-lgi'")
-                        continue
-                    clean_deps.append(dep_clean)
-        
-        # Remove any duplicate entries
-        clean_deps = list(dict.fromkeys(clean_deps))
-        
-        # FIX: If we removed 'lgi', ensure 'lua-lgi' is present
-        if 'lgi' in phantom_packages and 'lua-lgi' not in clean_deps:
-            logger.info("Adding 'lua-lgi' to replace phantom package 'lgi'")
-            clean_deps.append('lua-lgi')
-        
-        if not clean_deps:
-            logger.info("No valid dependencies to install after cleaning")
-            return True
-        
-        logger.info(f"Valid dependencies to install: {clean_deps}")
-        if phantom_packages:
-            logger.info(f"Phantom packages removed: {', '.join(phantom_packages)}")
-        
-        # REQUIRED POLICY: First try pacman with Sy (not Syy to avoid double refresh)
-        deps_str = ' '.join(clean_deps)
-        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
-        logger.info("SHELL_EXECUTOR_USED=1")
-        result = self.shell_executor.run_command(cmd, log_cmd=True, check=False, timeout=1200)
-        
-        if result.returncode == 0:
-            logger.info("✅ All dependencies installed via pacman")
-            return True
-        
-        logger.warning(f"⚠️ pacman failed for some dependencies (exit code: {result.returncode})")
-        
-        # REQUIRED POLICY: Fallback to AUR (yay) if pacman fails
-        # CRITICAL: This fallback MUST NOT be removed, simplified, or replaced
-        cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
-        logger.info("SHELL_EXECUTOR_USED=1")
-        result = self.shell_executor.run_command(cmd, log_cmd=True, check=False, user="builder", timeout=1800)
-        
-        if result.returncode == 0:
-            logger.info("✅ Dependencies installed via yay")
-            return True
-        
-        logger.error(f"❌ Both pacman and yay failed for dependencies")
-        return False
+        # Use the dependency installer with conflict resolution
+        return self.dependency_installer.install_with_conflict_resolution(deps, conflict_allowlist)
     
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str, 
                           build_flags: str = "-si --noconfirm --clean --nocheck", 

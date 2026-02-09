@@ -75,3 +75,11 @@ GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY")
 
 # Package signing configuration
 SIGN_PACKAGES = True  # Default toggle for individual package signing
+
+# Conflict resolution allowlist
+# Format: {"package-being-installed": ["conflicting-package-to-remove"]}
+# When installing the key package, if conflict suggests removing the value package,
+# it will be auto-removed if allowed by this list.
+CONFLICT_REMOVE_ALLOWLIST = {
+    "i3lock-color": ["i3lock"]
+}
