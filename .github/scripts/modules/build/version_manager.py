@@ -324,6 +324,15 @@ class VersionManager:
         """
         original_url = git_url
         
+        # Strip makepkg-style "name::" prefix first
+        # Example: "${pkgname}::git+https://..." -> "git+https://..."
+        # But preserve "git::" transport prefix which will be handled later
+        if '::' in git_url:
+            prefix, rest = git_url.split('::', 1)
+            # Only strip if prefix is not "git" (special transport prefix)
+            if prefix != 'git':
+                git_url = rest
+        
         # Remove git+ prefix
         if git_url.startswith('git+https://'):
             git_url = git_url[4:]  # Remove 'git+'
@@ -334,7 +343,7 @@ class VersionManager:
         elif git_url.startswith('git+git://'):
             git_url = git_url[4:]
         
-        # Handle makepkg-style prefixes
+        # Handle git:: transport prefix
         if git_url.startswith('git::https://'):
             git_url = git_url[5:]  # Remove 'git::'
         elif git_url.startswith('git::http://'):
@@ -430,6 +439,9 @@ class VersionManager:
                                     short_hash = full_hash[:8]
                                     return full_hash, short_hash
             
+            # Log detailed failure information
+            stderr_snip = result.stderr[:160] if result.stderr else ''
+            logger.warning(f"VCS_GIT_LS_REMOTE_FAIL pkg={pkg_name} rc={result.returncode} stderr_snip={stderr_snip} url={sanitized_url}")
             logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=ls_remote_failed")
             return None, None
             
