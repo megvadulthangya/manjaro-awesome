@@ -312,20 +312,68 @@ class VersionManager:
             logger.warning(f"Error parsing git source from PKGBUILD: {e}")
             return None, None, None
     
-    def _get_upstream_head_commit(self, git_url: str, branch: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    def _normalize_git_url(self, git_url: str) -> str:
+        """
+        Normalize git URL for git commands by stripping known prefixes.
+        
+        Args:
+            git_url: Git repository URL with possible prefixes
+            
+        Returns:
+            Normalized URL suitable for git ls-remote
+        """
+        original_url = git_url
+        
+        # Remove git+ prefix
+        if git_url.startswith('git+https://'):
+            git_url = git_url[4:]  # Remove 'git+'
+        elif git_url.startswith('git+http://'):
+            git_url = git_url[4:]
+        elif git_url.startswith('git+ssh://'):
+            git_url = git_url[4:]
+        elif git_url.startswith('git+git://'):
+            git_url = git_url[4:]
+        
+        # Handle makepkg-style prefixes
+        if git_url.startswith('git::https://'):
+            git_url = git_url[5:]  # Remove 'git::'
+        elif git_url.startswith('git::http://'):
+            git_url = git_url[5:]
+        elif git_url.startswith('git::ssh://'):
+            git_url = git_url[5:]
+        elif git_url.startswith('git::git://'):
+            git_url = git_url[5:]
+        
+        # Remove other VCS prefixes
+        if git_url.startswith('bzr+'):
+            git_url = git_url[4:]
+        elif git_url.startswith('hg+'):
+            git_url = git_url[3:]
+        elif git_url.startswith('svn+'):
+            git_url = git_url[4:]
+        
+        return git_url
+    
+    def _get_upstream_head_commit(self, git_url: str, pkg_name: str, branch: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Get upstream HEAD commit hash using git ls-remote.
         
         Args:
             git_url: Git repository URL
+            pkg_name: Package name for logging
             branch: Optional branch name (defaults to HEAD)
             
         Returns:
             Tuple of (full_commit_hash, short_commit_hash) or (None, None) if failed
         """
         try:
+            # Normalize URL for git commands
+            normalized_url = self._normalize_git_url(git_url)
+            if normalized_url != git_url:
+                logger.info(f"VCS_URL_NORMALIZED=1 pkg={pkg_name} from={self._sanitize_git_url(git_url)} to={self._sanitize_git_url(normalized_url)}")
+            
             # Sanitize URL for logging
-            sanitized_url = self._sanitize_git_url(git_url)
+            sanitized_url = self._sanitize_git_url(normalized_url)
             
             # Determine ref to query
             ref = branch or "HEAD"
@@ -335,10 +383,11 @@ class VersionManager:
                 else:
                     ref = f"refs/heads/{branch}"
             
-            logger.info(f"VCS_UPSTREAM_CHECK=1 pkg=unknown url={sanitized_url} ref={ref}")
+            logger.info(f"VCS_GIT_LS_REMOTE_START pkg={pkg_name} url={sanitized_url} ref={ref}")
+            logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} url={sanitized_url} ref={ref}")
             
             # Run git ls-remote with timeout
-            cmd = ["git", "ls-remote", git_url, ref]
+            cmd = ["git", "ls-remote", normalized_url, ref]
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -360,8 +409,8 @@ class VersionManager:
             
             # If that failed, try without ref to get HEAD
             if ref != "HEAD":
-                logger.info(f"VCS_UPSTREAM_CHECK=1 pkg=unknown url={sanitized_url} ref=HEAD")
-                cmd = ["git", "ls-remote", git_url, "HEAD"]
+                logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} url={sanitized_url} ref=HEAD")
+                cmd = ["git", "ls-remote", normalized_url, "HEAD"]
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -381,14 +430,14 @@ class VersionManager:
                                     short_hash = full_hash[:8]
                                     return full_hash, short_hash
             
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg=unknown url={sanitized_url} reason=ls_remote_failed")
+            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=ls_remote_failed")
             return None, None
             
         except subprocess.TimeoutExpired:
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg=unknown url={sanitized_url} reason=timeout")
+            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=timeout")
             return None, None
         except Exception as e:
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg=unknown url={sanitized_url} reason=exception:{str(e)[:50]}")
+            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=exception:{str(e)[:50]}")
             return None, None
     
     def _extract_git_hash_from_version_string(self, version_string: str) -> Optional[str]:
@@ -490,6 +539,8 @@ class VersionManager:
         Returns:
             Tuple of (should_build: bool, reason: str)
         """
+        pkg_name = pkg_dir.name
+        
         try:
             pkgbuild_path = pkg_dir / "PKGBUILD"
             if not pkgbuild_path.exists():
@@ -504,39 +555,44 @@ class VersionManager:
                 return False, "no_git_source"
             
             # Get upstream HEAD commit
-            upstream_full, upstream_short = self._get_upstream_head_commit(git_url, branch)
+            upstream_full, upstream_short = self._get_upstream_head_commit(git_url, pkg_name, branch)
             if not upstream_short:
+                logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=ls_remote_failed fallback=version_compare")
                 return False, "upstream_check_failed"
             
             # Get pinned hash from PKGBUILD (source URL or pkgver)
             hash_source, pinned_short = self._get_pinned_hash_from_pkgbuild(pkg_dir, pkgver)
-            logger.info(f"VCS_PINNED_SHA={pinned_short or 'none'} pkg={pkg_dir.name} source_version={pkgver} hash_source={hash_source or 'none'}")
+            logger.info(f"VCS_PINNED_SHA={pinned_short or 'none'} pkg={pkg_name} source_version={pkgver} hash_source={hash_source or 'none'}")
             
             # Get hash from remote version
             remote_short = self._extract_git_hash_from_version_string(remote_version)
-            logger.info(f"VCS_REMOTE_SHA={remote_short or 'none'} pkg={pkg_dir.name}")
+            logger.info(f"VCS_REMOTE_SHA={remote_short or 'none'} pkg={pkg_name}")
             
             # If we have a pinned hash in PKGBUILD, compare with upstream
             if pinned_short:
                 if pinned_short != upstream_short:
-                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_dir.name} decision=BUILD reason=head_changed pinned={pinned_short} upstream={upstream_short}")
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed pinned={pinned_short} remote={remote_short or 'none'} upstream={upstream_short}")
                     return True, "head_changed"
                 else:
+                    logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged pinned={pinned_short} upstream={upstream_short}")
                     return False, "upstream_unchanged"
             
             # If no pinned hash but remote has hash, compare remote with upstream
             if remote_short:
                 if remote_short != upstream_short:
-                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_dir.name} decision=BUILD reason=head_changed remote={remote_short} upstream={upstream_short}")
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed remote={remote_short} upstream={upstream_short}")
                     return True, "head_changed"
                 else:
+                    logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged remote={remote_short} upstream={upstream_short}")
                     return False, "upstream_unchanged"
             
             # No hashes to compare
+            logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=no_pinned_sha fallback=version_compare")
             return False, "no_pinned_sha"
             
         except Exception as e:
-            logger.warning(f"VCS upstream check error for {pkg_dir.name}: {e}")
+            logger.warning(f"VCS upstream check error for {pkg_name}: {e}")
+            logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=exception:{str(e)[:50]} fallback=version_compare")
             return False, f"exception:{str(e)[:50]}"
     
     def compare_versions(self, remote_version: Optional[str], pkgver: str, pkgrel: str, epoch: Optional[str], pkg_dir: Optional[Path] = None) -> bool:
