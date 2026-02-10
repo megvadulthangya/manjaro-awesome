@@ -57,10 +57,11 @@ class LocalBuilder:
             mode="build"
         )
     
-    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-si --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
+    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-s --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
         """Run makepkg command with specified flags"""
         cmd = f"makepkg {flags}"
         
+        logger.info("MAKEPKG_INSTALL_DISABLED=1")
         logger.info("SHELL_EXECUTOR_USED=1")
         if self.debug_mode:
             print(f"🔧 [DEBUG] Running makepkg in {pkg_dir}: {cmd}", flush=True)

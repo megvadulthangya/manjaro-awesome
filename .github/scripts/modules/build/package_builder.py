@@ -534,7 +534,7 @@ class PackageBuilder:
             # Build package using LocalBuilder
             logger.info("   Building package...")
             logger.info("LOCAL_BUILDER_USED=1")
-            build_flags = "-si --noconfirm --clean"
+            build_flags = "-s --noconfirm --clean"
             if pkg_dir.name == "gtk2":
                 build_flags += " --nocheck"
                 logger.info("   Skipping check for gtk2 (long)")
@@ -581,7 +581,7 @@ class PackageBuilder:
                 pkg_name=pkg_name,
                 target_dir=pkg_dir,
                 packager_id=self.packager_id,
-                build_flags="-si --noconfirm --clean --nocheck",
+                build_flags="-s --noconfirm --clean --nocheck",
                 timeout=3600
             )
             

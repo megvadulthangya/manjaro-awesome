@@ -90,7 +90,7 @@ class AURBuilder:
         )
     
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str, 
-                          build_flags: str = "-si --noconfirm --clean --nocheck", 
+                          build_flags: str = "-s --noconfirm --clean --nocheck", 
                           timeout: int = 3600) -> List[str]:
         """
         Build AUR package including dependency installation.
@@ -149,6 +149,7 @@ class AURBuilder:
         
         # Build package
         logger.info(f"   Building with flags: {build_flags}")
+        logger.info("MAKEPKG_INSTALL_DISABLED=1")
         logger.info("SHELL_EXECUTOR_USED=1")
         cmd = f"makepkg {build_flags}"
         
