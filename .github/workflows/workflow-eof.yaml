@@ -677,6 +677,77 @@ jobs:
           pacman -Ss gcc14
           echo "CACHYOS: DONE"
 
+      - name: Setup Chaotic-AUR Repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Setting up Chaotic-AUR Repository ==="
+
+          CHAOTIC_KEYID="3056513887B78AEB"
+          PACMAN_CONF="/etc/pacman.conf"
+
+          echo "CHAOTIC: KEYRING_CHECK"
+
+          # Ensure keyring exists
+          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
+            echo "CHAOTIC: KEYRING_INIT (missing keyring dir/files)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          # Ensure secret key exists for lsign
+          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
+            echo "CHAOTIC: KEYRING_INIT (no secret keys found)"
+            pacman-key --init
+            pacman-key --populate archlinux
+          fi
+
+          echo "CHAOTIC: IMPORT_KEY"
+          ok=0
+          for attempt in 1 2; do
+            echo "CHAOTIC: recv-keys attempt=${attempt}"
+            if pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CHAOTIC_KEYID}"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "CHAOTIC: FAIL recv-keys"
+            exit 1
+          fi
+
+          echo "CHAOTIC: LSIGN_KEY"
+          pacman-key --lsign-key "${CHAOTIC_KEYID}"
+
+          echo "CHAOTIC: INSTALL_KEYRING"
+          pacman -U --noconfirm \
+            'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
+            'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
+
+          echo "CHAOTIC: CONFIG_APPEND_CHECK"
+          if grep -qF '[chaotic-aur]' "$PACMAN_CONF"; then
+            echo "CHAOTIC: already present -> skipping"
+          else
+            cp -a "$PACMAN_CONF" "${PACMAN_CONF}.bak.chaotic"
+
+            TMP_CHAOTIC=$(mktemp)
+            cat > "$TMP_CHAOTIC" <<'EOF'
+          
+          [chaotic-aur]
+          Include = /etc/pacman.d/chaotic-mirrorlist
+          EOF
+          
+            cat "$TMP_CHAOTIC" >> "$PACMAN_CONF"
+            rm -f "$TMP_CHAOTIC"
+          fi
+
+          echo "CHAOTIC: SYNC_DB"
+          pacman -Sy --noconfirm
+
+          echo "CHAOTIC: DONE"
+
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
