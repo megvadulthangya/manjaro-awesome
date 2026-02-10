@@ -2,7 +2,7 @@
 # Upstream: https://github.com/sunaku/tamzen-font
 
 pkgname=tamzen-font
-pkgver=1.11.6.r0.g0000000
+pkgver=1.11.6.r1.g3255e82
 pkgrel=1
 epoch=1
 pkgdesc="Bitmapped programming font, based on Tamsyn (powerline, bitmap, ttf, vconsole font)"
