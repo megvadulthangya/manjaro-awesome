@@ -1,4 +1,4 @@
-# Maintainer: <te>
+# Maintainer: <Gyöngyösi Gábor hello at gshoots dot hu>
 # Upstream: https://github.com/sunaku/tamzen-font
 
 pkgname=tamzen-font
@@ -10,21 +10,19 @@ arch=('any')
 url="https://github.com/sunaku/tamzen-font"
 license=('custom')
 
-depends=('fontconfig' 'xorg-fonts-encodings' 'xorg-font-utils')
+# Runtime deps: font packages generally don't need hard deps.
+# Keep fontconfig if you want, but DO NOT include xorg-font-utils (not in repos).
+depends=('fontconfig' 'xorg-fonts-encodings')
 makedepends=('git')
 
 _pkgname="tamzen-font"
 source=("git+${url}.git")
 sha256sums=('SKIP')
 
-# CI override:
-#   export TAMZEN_COMMIT=<hash|tag>
-# or export GIT_COMMIT=<hash|tag>
 _commit="${TAMZEN_COMMIT:-${GIT_COMMIT:-HEAD}}"
 
 prepare() {
   cd "${srcdir}/${_pkgname}"
-
   if [[ "${_commit}" != "HEAD" ]]; then
     git checkout -q "${_commit}"
   fi
@@ -32,11 +30,8 @@ prepare() {
 
 pkgver() {
   cd "${srcdir}/${_pkgname}"
-
-  # Prefer tags like "Tamzen-1.11.6"
   local d
   if d="$(git describe --long --tags --match 'Tamzen-*' 2>/dev/null)"; then
-    # Tamzen-1.11.6-0-g<sha> -> 1.11.6.r0.g<sha>
     printf '%s\n' "${d}" \
       | sed -E 's/^Tamzen-//' \
       | sed -E 's/-([0-9]+)-g/\.r\1\.g/'
@@ -48,30 +43,24 @@ pkgver() {
 package() {
   cd "${srcdir}/${_pkgname}"
 
-  # BDF
   install -Dm644 bdf/*.bdf -t "${pkgdir}/usr/share/fonts/X11/misc/"
 
-  # OTB (ha van)
   if compgen -G "otb/*.otb" > /dev/null; then
     install -Dm644 otb/*.otb -t "${pkgdir}/usr/share/fonts/X11/misc/"
   fi
 
-  # PCF (ha van)
   if compgen -G "pcf/*.pcf" > /dev/null; then
     install -Dm644 pcf/*.pcf -t "${pkgdir}/usr/share/fonts/X11/misc/"
   fi
 
-  # TTF
   install -Dm644 ttf/*.ttf -t "${pkgdir}/usr/share/fonts/TTF/"
 
-  # PSF -> gz (konzol fontok)
   install -dm755 "${pkgdir}/usr/share/kbd/consolefonts/"
   for f in psf/*.psf; do
     [[ -f "${f}" ]] || continue
     gzip -c "${f}" > "${pkgdir}/usr/share/kbd/consolefonts/$(basename "${f}").gz"
   done
 
-  # Docs + license
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
 }
