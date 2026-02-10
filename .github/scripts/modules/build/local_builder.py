@@ -87,7 +87,8 @@ class LocalBuilder:
                 timeout=600,
                 extra_env={"PACKAGER": packager_id},
                 max_retries=5,
-                initial_delay=2.0
+                initial_delay=2.0,
+                user="builder"  # Run as builder user
             )
             
             if download_result.returncode != 0:
@@ -103,8 +104,65 @@ class LocalBuilder:
                 check=False,
                 timeout=timeout,
                 extra_env={"PACKAGER": packager_id},
-                log_cmd=self.debug_mode
+                log_cmd=self.debug_mode,
+                user="builder"  # Run as builder user
             )
+            
+            # Log diagnostic information on failure
+            if result.returncode != 0:
+                logger.error(f"❌ Build failed with exit code: {result.returncode}")
+                
+                # Log diagnostic information
+                logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
+                logger.error(f"Command: {cmd}")
+                logger.error(f"Working directory: {pkg_dir}")
+                
+                # Get user context
+                import subprocess
+                try:
+                    whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current user: {whoami_result.stdout.strip()}")
+                    
+                    id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current UID: {id_result.stdout.strip()}")
+                    
+                    # Check directory permissions
+                    import os
+                    logger.error(f"Directory writable: {os.access(pkg_dir, os.W_OK)}")
+                    logger.error(f"Directory owner: {os.stat(pkg_dir).st_uid}")
+                except Exception as e:
+                    logger.error(f"Error getting user context: {e}")
+                
+                # Log last 200 lines of output
+                if result.stdout:
+                    stdout_lines = result.stdout.split('\n')
+                    last_stdout = stdout_lines[-200:] if len(stdout_lines) > 200 else stdout_lines
+                    logger.error(f"Last {len(last_stdout)} lines of stdout:")
+                    for line in last_stdout:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
+                if result.stderr:
+                    stderr_lines = result.stderr.split('\n')
+                    last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
+                    logger.error(f"Last {len(last_stderr)} lines of stderr:")
+                    for line in last_stderr:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
+                # Don't fail on CMake deprecation warnings
+                if result.returncode != 0 and "CMake Deprecation Warning" in result.stderr:
+                    logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
+                    # If the only error is CMake deprecation, we can treat as success
+                    # We'll still log the warning but return a success result
+                    if result.returncode != 0:
+                        # Check if there are other errors besides CMake warnings
+                        error_lines = [line for line in result.stderr.split('\n') 
+                                      if line and "CMake Deprecation Warning" not in line]
+                        if not any("error" in line.lower() for line in error_lines):
+                            # Only CMake warnings, treat as success
+                            logger.info("Only CMake deprecation warnings found, treating as success")
+                            result.returncode = 0
             
             if self.debug_mode:
                 if result.stdout:
@@ -112,20 +170,6 @@ class LocalBuilder:
                 if result.stderr:
                     print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{result.stderr}", flush=True)
                 print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {result.returncode}", flush=True)
-            
-            # Don't fail on CMake deprecation warnings
-            if result.returncode != 0 and "CMake Deprecation Warning" in result.stderr:
-                logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
-                # If the only error is CMake deprecation, we can treat as success
-                # We'll still log the warning but return a success result
-                if result.returncode != 0:
-                    # Check if there are other errors besides CMake warnings
-                    error_lines = [line for line in result.stderr.split('\n') 
-                                  if line and "CMake Deprecation Warning" not in line]
-                    if not any("error" in line.lower() for line in error_lines):
-                        # Only CMake warnings, treat as success
-                        logger.info("Only CMake deprecation warnings found, treating as success")
-                        result.returncode = 0
             
             return result
         except Exception as e:

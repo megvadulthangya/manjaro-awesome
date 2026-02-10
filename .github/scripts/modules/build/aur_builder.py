@@ -137,7 +137,8 @@ class AURBuilder:
                 timeout=600,
                 extra_env={"PACKAGER": packager_id},
                 max_retries=5,
-                initial_delay=2.0
+                initial_delay=2.0,
+                user="builder"  # Run as builder user
             )
             
             if download_result.returncode != 0:
@@ -173,19 +174,52 @@ class AURBuilder:
                 check=False,
                 timeout=timeout,
                 extra_env={"PACKAGER": packager_id},
-                log_cmd=self.debug_mode
+                log_cmd=self.debug_mode,
+                user="builder"  # Run as builder user
             )
             
-            if self.debug_mode:
-                if build_result.stdout:
-                    print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
-                if build_result.stderr:
-                    print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
-                print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
-            
-            # Check if build failed (non-zero exit code)
+            # Log diagnostic information on failure
             if build_result.returncode != 0:
                 logger.error(f"❌ Build failed with exit code: {build_result.returncode}")
+                
+                # Log diagnostic information
+                logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
+                logger.error(f"Command: {cmd}")
+                logger.error(f"Working directory: {target_dir}")
+                
+                # Get user context
+                import subprocess
+                try:
+                    whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current user: {whoami_result.stdout.strip()}")
+                    
+                    id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current UID: {id_result.stdout.strip()}")
+                    
+                    # Check directory permissions
+                    import os
+                    logger.error(f"Directory writable: {os.access(target_dir, os.W_OK)}")
+                    logger.error(f"Directory owner: {os.stat(target_dir).st_uid}")
+                except Exception as e:
+                    logger.error(f"Error getting user context: {e}")
+                
+                # Log last 200 lines of output
+                if build_result.stdout:
+                    stdout_lines = build_result.stdout.split('\n')
+                    last_stdout = stdout_lines[-200:] if len(stdout_lines) > 200 else stdout_lines
+                    logger.error(f"Last {len(last_stdout)} lines of stdout:")
+                    for line in last_stdout:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
+                if build_result.stderr:
+                    stderr_lines = build_result.stderr.split('\n')
+                    last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
+                    logger.error(f"Last {len(last_stderr)} lines of stderr:")
+                    for line in last_stderr:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
                 # Don't fail on CMake deprecation warnings
                 if "CMake Deprecation Warning" in build_result.stderr:
                     logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
@@ -196,6 +230,13 @@ class AURBuilder:
                 else:
                     # Real error
                     return []
+            
+            if self.debug_mode:
+                if build_result.stdout:
+                    print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
+                if build_result.stderr:
+                    print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
+                print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
             
             # Collect built packages (skip .sig files)
             built_files = []
