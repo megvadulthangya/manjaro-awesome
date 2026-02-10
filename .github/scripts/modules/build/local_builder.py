@@ -69,7 +69,6 @@ class LocalBuilder:
         if not os.access(pkg_dir, os.W_OK):
             logger.warning(f"Build directory not writable: {pkg_dir}")
             # Try to fix permissions
-            import subprocess
             subprocess.run(['chmod', '755', pkg_dir], check=False)
             subprocess.run(['chown', '-R', 'builder:builder', pkg_dir], check=False)
         
@@ -118,7 +117,6 @@ class LocalBuilder:
                 logger.error(f"Working directory: {pkg_dir}")
                 
                 # Get user context
-                import subprocess
                 try:
                     whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
                     logger.error(f"Current user: {whoami_result.stdout.strip()}")
@@ -127,7 +125,6 @@ class LocalBuilder:
                     logger.error(f"Current UID: {id_result.stdout.strip()}")
                     
                     # Check directory permissions
-                    import os
                     logger.error(f"Directory writable: {os.access(pkg_dir, os.W_OK)}")
                     logger.error(f"Directory owner: {os.stat(pkg_dir).st_uid}")
                 except Exception as e:

@@ -108,7 +108,6 @@ class PackageBuilder:
                 logger.error(f"CRITICAL: Output directory is not writable: {self.output_dir}")
                 # Try to fix permissions
                 try:
-                    import subprocess
                     subprocess.run(['chmod', '755', str(self.output_dir)], check=False)
                     subprocess.run(['chown', '-R', 'builder:builder', str(self.output_dir)], check=False)
                     logger.info("Attempted to fix permissions on output directory")

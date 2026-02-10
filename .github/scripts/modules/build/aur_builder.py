@@ -3,6 +3,7 @@ AUR Builder Module - Handles AUR package building logic
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 from modules.common.shell_executor import ShellExecutor
@@ -159,7 +160,6 @@ class AURBuilder:
         
         try:
             # Ensure target directory is writable
-            import os
             if not os.access(target_dir, os.W_OK):
                 logger.warning(f"Target directory not writable: {target_dir}")
                 # Try to fix permissions
@@ -188,8 +188,8 @@ class AURBuilder:
                 logger.error(f"Working directory: {target_dir}")
                 
                 # Get user context
-                import subprocess
                 try:
+                    import subprocess
                     whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
                     logger.error(f"Current user: {whoami_result.stdout.strip()}")
                     
@@ -197,7 +197,6 @@ class AURBuilder:
                     logger.error(f"Current UID: {id_result.stdout.strip()}")
                     
                     # Check directory permissions
-                    import os
                     logger.error(f"Directory writable: {os.access(target_dir, os.W_OK)}")
                     logger.error(f"Directory owner: {os.stat(target_dir).st_uid}")
                 except Exception as e:
