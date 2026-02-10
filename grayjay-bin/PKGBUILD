@@ -73,8 +73,12 @@ source=("${_filename}.zip::https://updater.grayjay.app/Apps/Grayjay.Desktop/${pk
 sha256sums=('SKIP')
 
 prepare() {
+    # CI-ben ne legyen interaktív unzip prompt ("replace?"):
+    # - töröljük a célkönyvtárat, így garantáltan tiszta
+    # - -o: ha mégis lenne ütközés, automatikusan felülír
+    rm -rf "${srcdir}/grayjay"
     mkdir -p "${srcdir}/grayjay"
-    unzip -q "${srcdir}/${_filename}.zip" -d "${srcdir}/grayjay"
+    unzip -q -o "${srcdir}/${_filename}.zip" -d "${srcdir}/grayjay"
 }
 
 package() {
