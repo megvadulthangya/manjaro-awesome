@@ -4,6 +4,7 @@ Local Builder Module - Handles local package building logic
 
 import subprocess
 import logging
+import os
 from modules.common.shell_executor import ShellExecutor
 from modules.common.dependency_installer import DependencyInstaller
 
@@ -63,6 +64,15 @@ class LocalBuilder:
         
         logger.info("MAKEPKG_INSTALL_DISABLED=1")
         logger.info("SHELL_EXECUTOR_USED=1")
+        
+        # Ensure build directory is writable
+        if not os.access(pkg_dir, os.W_OK):
+            logger.warning(f"Build directory not writable: {pkg_dir}")
+            # Try to fix permissions
+            import subprocess
+            subprocess.run(['chmod', '755', pkg_dir], check=False)
+            subprocess.run(['chown', '-R', 'builder:builder', pkg_dir], check=False)
+        
         if self.debug_mode:
             print(f"🔧 [DEBUG] Running makepkg in {pkg_dir}: {cmd}", flush=True)
         

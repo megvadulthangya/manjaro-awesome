@@ -157,6 +157,15 @@ class AURBuilder:
             print(f"🔧 [DEBUG] Running makepkg in {target_dir}: {cmd}", flush=True)
         
         try:
+            # Ensure target directory is writable
+            import os
+            if not os.access(target_dir, os.W_OK):
+                logger.warning(f"Target directory not writable: {target_dir}")
+                # Try to fix permissions
+                import subprocess
+                subprocess.run(['chmod', '755', str(target_dir)], check=False)
+                subprocess.run(['chown', '-R', 'builder:builder', str(target_dir)], check=False)
+            
             build_result = self.shell_executor.run_command(
                 cmd,
                 cwd=target_dir,

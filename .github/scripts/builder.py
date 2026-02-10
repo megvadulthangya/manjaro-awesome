@@ -158,6 +158,9 @@ class PackageBuilderOrchestrator:
         self.shell_executor = ShellExecutor(self.debug_mode)
         
         # Package builder - initialized without vps_files first, will be set in phase_i_vps_sync
+        # Ensure output directory exists with proper ownership before creating package builder
+        self._ensure_output_directory()
+        
         self.package_builder = create_package_builder(
             packager_id=self.packager_id,
             output_dir=self.output_dir,
@@ -173,6 +176,43 @@ class PackageBuilderOrchestrator:
         self.hokibot_runner = HokibotRunner(debug_mode=self.debug_mode)
         
         logger.info("All modules initialized successfully")
+    
+    def _ensure_output_directory(self):
+        """
+        Ensure output directory exists with proper ownership and permissions.
+        This prevents makepkg exit code 8 (E_MISSING_PKGDIR).
+        """
+        try:
+            # Create directory with parents if needed
+            self.output_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Set proper permissions (read/write/execute for owner, read/execute for group/others)
+            self.output_dir.chmod(0o755)
+            
+            # Set ownership to builder user
+            subprocess.run(['chown', '-R', 'builder:builder', str(self.output_dir)], check=False)
+            
+            # Check if we can write to the directory
+            test_file = self.output_dir / ".write_test"
+            try:
+                test_file.touch()
+                test_file.unlink()
+                writable = True
+            except (IOError, OSError):
+                writable = False
+            
+            # Log directory status
+            logger.info(f"OUTPUT_DIR_EXISTS=1 path={self.output_dir} writable={writable}")
+            
+            if not writable:
+                logger.error(f"CRITICAL: Output directory is not writable: {self.output_dir}")
+                # Try to fix permissions again
+                subprocess.run(['chmod', '777', str(self.output_dir)], check=False)
+                subprocess.run(['chown', '-R', 'builder:builder', str(self.output_dir)], check=False)
+                    
+        except Exception as e:
+            logger.error(f"Failed to ensure output directory exists: {e}")
+            raise
     
     def _run_post_repo_enable_pacman_sy(self) -> bool:
         """

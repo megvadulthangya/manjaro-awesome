@@ -71,12 +71,47 @@ class PackageBuilder:
         self.shell_executor = ShellExecutor(debug_mode=debug_mode)
         self.artifact_manager = ArtifactManager()
         
-        # Ensure output directory exists
-        self.output_dir.mkdir(exist_ok=True, parents=True)
+        # Ensure output directory exists with proper ownership and permissions
+        self._ensure_output_directory()
     
-    def set_vps_files(self, vps_files: List[str]):
-        """Set VPS file inventory for completeness checks"""
-        self.vps_files = vps_files
+    def _ensure_output_directory(self):
+        """
+        CRITICAL: Ensure output directory exists and is writable before any makepkg invocation.
+        This prevents makepkg exit code 8 (E_MISSING_PKGDIR).
+        """
+        try:
+            # Create directory with parents if needed
+            self.output_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Set proper permissions (read/write/execute for owner, read/execute for group/others)
+            self.output_dir.chmod(0o755)
+            
+            # Check if we can write to the directory
+            test_file = self.output_dir / ".write_test"
+            try:
+                test_file.touch()
+                test_file.unlink()
+                writable = True
+            except (IOError, OSError):
+                writable = False
+            
+            # Log directory status
+            logger.info(f"OUTPUT_DIR_EXISTS=1 path={self.output_dir} writable={writable}")
+            
+            if not writable:
+                logger.error(f"CRITICAL: Output directory is not writable: {self.output_dir}")
+                # Try to fix permissions
+                try:
+                    import subprocess
+                    subprocess.run(['chmod', '755', str(self.output_dir)], check=False)
+                    subprocess.run(['chown', '-R', 'builder:builder', str(self.output_dir)], check=False)
+                    logger.info("Attempted to fix permissions on output directory")
+                except Exception as e:
+                    logger.error(f"Failed to fix permissions: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to ensure output directory exists: {e}")
+            raise
     
     def audit_and_build_local(
         self,
@@ -529,6 +564,9 @@ class PackageBuilder:
             # Clean workspace using ArtifactManager
             self.artifact_manager.clean_workspace(pkg_dir)
             
+            # Ensure output directory exists before building
+            self._ensure_output_directory()
+            
             # Download sources is now handled inside LocalBuilder.run_makepkg with retry
             
             # Build package using LocalBuilder
@@ -571,6 +609,9 @@ class PackageBuilder:
         try:
             # Clean workspace using ArtifactManager
             self.artifact_manager.clean_workspace(pkg_dir)
+            
+            # Ensure output directory exists before building
+            self._ensure_output_directory()
             
             # Build package using AURBuilder
             logger.info("   Building package...")
