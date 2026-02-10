@@ -4,6 +4,7 @@ Shell Executor Module - Handles shell command execution with comprehensive loggi
 
 import os
 import subprocess
+import time
 import logging
 from pathlib import Path
 
@@ -15,6 +16,92 @@ class ShellExecutor:
     
     def __init__(self, debug_mode: bool = False):
         self.debug_mode = debug_mode
+    
+    def run_command_with_retry(self, cmd, max_retries: int = 5, initial_delay: float = 2.0, 
+                             cwd=None, capture=True, check=True, shell=True, user=None, 
+                             log_cmd=False, timeout=1800, extra_env=None, retry_errors=None):
+        """
+        Run command with retry logic for transient failures
+        
+        Args:
+            cmd: Command to execute
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay between retries (doubles each retry)
+            retry_errors: List of error patterns to retry on (default: internal server errors)
+            Other args: Same as run_command
+        
+        Returns:
+            Command result
+        """
+        if retry_errors is None:
+            retry_errors = ["500 Internal Server Error", "remote: Internal Server Error", 
+                           "fatal: the remote end hung up unexpectedly", "connection timed out"]
+        
+        last_exception = None
+        delay = initial_delay
+        
+        for attempt in range(max_retries):
+            if attempt > 0:
+                logger.info(f"SRC_RETRY attempt={attempt} max={max_retries} delay={delay:.1f}s")
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+            
+            try:
+                result = self.run_command(
+                    cmd=cmd,
+                    cwd=cwd,
+                    capture=capture,
+                    check=False,  # Don't raise on error for retry logic
+                    shell=shell,
+                    user=user,
+                    log_cmd=log_cmd,
+                    timeout=timeout,
+                    extra_env=extra_env
+                )
+                
+                # Check if we should retry based on output
+                should_retry = False
+                retry_reason = ""
+                
+                if result.returncode != 0:
+                    # Check stderr for retryable errors
+                    error_output = (result.stderr or "") + (result.stdout or "")
+                    for error_pattern in retry_errors:
+                        if error_pattern in error_output:
+                            should_retry = True
+                            retry_reason = error_pattern
+                            break
+                
+                if not should_retry:
+                    if check and result.returncode != 0:
+                        # Final failure, raise exception
+                        raise subprocess.CalledProcessError(
+                            result.returncode, cmd, result.stdout, result.stderr
+                        )
+                    return result
+                
+                logger.warning(f"SRC_RETRY_REASON attempt={attempt} reason={retry_reason}")
+                
+            except subprocess.CalledProcessError as e:
+                # Check if this is a retryable error
+                error_output = (e.stderr or "") + (e.stdout or "")
+                should_retry = False
+                retry_reason = ""
+                
+                for error_pattern in retry_errors:
+                    if error_pattern in error_output:
+                        should_retry = True
+                        retry_reason = error_pattern
+                        break
+                
+                if not should_retry or attempt == max_retries - 1:
+                    raise  # Re-raise non-retryable or final failure
+                
+                logger.warning(f"SRC_RETRY_REASON attempt={attempt} reason={retry_reason}")
+                last_exception = e
+        
+        # Should never reach here
+        raise last_exception or RuntimeError("Max retries exceeded")
     
     def run_command(self, cmd, cwd=None, capture=True, check=True, shell=True, user=None, 
                    log_cmd=False, timeout=1800, extra_env=None):

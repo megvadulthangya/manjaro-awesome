@@ -1,205 +1,137 @@
 """
-Dependency Installer Module - Handles dependency installation with conflict resolution
+Dependency Installer Module - CI-safe dependency installation with fallback
 """
 
 import re
+import time
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class DependencyInstaller:
-    """Handles dependency installation with conflict detection and resolution"""
+    """CI-safe dependency installer with pacman -> yay fallback"""
     
     def __init__(self, shell_executor, debug_mode: bool = False):
         self.shell_executor = shell_executor
         self.debug_mode = debug_mode
     
-    def _detect_conflict(self, output: str) -> Tuple[bool, Optional[str], Optional[str]]:
-        """
-        Detect package conflict from pacman/yay output.
+    def _detect_failure_reason(self, output: str) -> str:
+        """Detect the reason for pacman failure"""
+        output_lower = output.lower()
         
-        Args:
-            output: Command stdout/stderr output
-            
-        Returns:
-            Tuple of (is_conflict: bool, conflict_line: str, remove_candidate: str)
-        """
-        lines = output.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Pattern 1: "X and Y are in conflict. Remove Y? [y/N]"
-            conflict_match = re.search(r'(.+?) and (.+?) are in conflict\. Remove (\S+)\? \[y/N\]', line)
-            if conflict_match:
-                pkg1, pkg2, remove_candidate = conflict_match.groups()
-                logger.info(f"CONFLICT_DETECTED=1 pkg1={pkg1} pkg2={pkg2} remove_candidate={remove_candidate}")
-                return True, line, remove_candidate
-            
-            # Pattern 2: "unresolvable package conflicts detected" (no specific candidate)
-            if "unresolvable package conflicts detected" in line:
-                logger.info("CONFLICT_DETECTED=1 type=unresolvable")
-                return True, line, None
-        
-        return False, None, None
+        if "target not found" in output_lower or "could not find" in output_lower:
+            return "target_not_found"
+        elif "could not resolve" in output_lower:
+            return "could_not_resolve"
+        elif "failed to prepare transaction" in output_lower:
+            return "failed_to_prepare_transaction"
+        elif "unresolvable package conflicts detected" in output_lower:
+            return "unresolvable_conflict"
+        elif "are in conflict" in output_lower:
+            return "package_conflict"
+        else:
+            return "unknown"
     
-    def _check_conflict_allowed(self, deps: List[str], remove_candidate: str, allowlist: dict) -> Tuple[bool, Optional[str]]:
-        """
-        Check if a conflict removal is allowed by the allowlist.
+    def _clean_package_names(self, packages: List[str]) -> List[str]:
+        """Clean and validate package names"""
+        clean_deps = []
         
-        Args:
-            deps: List of dependencies being installed
-            remove_candidate: Package suggested for removal
-            allowlist: Conflict resolution allowlist from config
-            
-        Returns:
-            Tuple of (allowed: bool, trigger_pkg: str)
-        """
-        if not allowlist:
-            return False, None
-        
-        # Check if any dependency being installed is a trigger in the allowlist
-        for dep in deps:
-            # Clean dependency name (remove version constraints)
+        for dep in packages:
+            # Remove version constraints
             dep_clean = re.sub(r'[<=>].*', '', dep).strip()
             
-            if dep_clean in allowlist:
-                # Check if the remove candidate is in the allowed list for this trigger
-                if remove_candidate in allowlist[dep_clean]:
-                    logger.info(f"CONFLICT_ALLOWLIST_MATCH=1 trigger={dep_clean} candidate={remove_candidate}")
-                    return True, dep_clean
-        
-        logger.info(f"CONFLICT_ALLOWLIST_MATCH=0 candidate={remove_candidate} reason=not_allowlisted")
-        return False, None
-    
-    def _remove_conflicting_package(self, pkg_name: str) -> bool:
-        """
-        Remove a conflicting package using pacman -R --noconfirm.
-        
-        Args:
-            pkg_name: Package to remove
+            # Skip empty or malformed
+            if not dep_clean or not dep_clean.strip():
+                continue
             
-        Returns:
-            True if removal successful, False otherwise
-        """
-        logger.info(f"CONFLICT_AUTO_REMOVE_START=1 candidate={pkg_name}")
+            # Skip package references with special characters
+            if any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
+                continue
+            
+            # Must contain at least one alphanumeric character
+            if not re.search(r'[a-zA-Z0-9]', dep_clean):
+                continue
+            
+            # Handle known phantom packages
+            if dep_clean == 'lgi':
+                logger.warning("⚠️ Found phantom package 'lgi' - will be replaced with 'lua-lgi'")
+                if 'lua-lgi' not in clean_deps:
+                    clean_deps.append('lua-lgi')
+                continue
+            
+            clean_deps.append(dep_clean)
         
-        cmd = f"sudo LC_ALL=C pacman -R --noconfirm {pkg_name}"
-        result = self.shell_executor.run_command(
-            cmd, 
-            log_cmd=True, 
-            check=False, 
-            timeout=300
-        )
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_deps = []
+        for dep in clean_deps:
+            if dep not in seen:
+                seen.add(dep)
+                unique_deps.append(dep)
         
-        if result.returncode == 0:
-            logger.info(f"CONFLICT_AUTO_REMOVE_SUCCESS=1 candidate={pkg_name}")
-            return True
-        else:
-            logger.error(f"CONFLICT_AUTO_REMOVE_FAILED=1 candidate={pkg_name} exitcode={result.returncode}")
-            return False
+        return unique_deps
     
-    def install_with_conflict_resolution(self, deps: List[str], allowlist: dict) -> bool:
+    def install_packages(self, packages: List[str], allow_aur: bool = True, mode: str = "build") -> bool:
         """
-        Install dependencies with conflict resolution.
+        Install packages with pacman -> yay fallback
         
         Args:
-            deps: List of dependencies to install
-            allowlist: Conflict resolution allowlist from config
+            packages: List of package names to install
+            allow_aur: Whether to allow fallback to AUR (yay)
+            mode: Installation mode ("build" for makedepends/checkdepends, "runtime" for depends)
             
         Returns:
             True if installation successful, False otherwise
         """
-        if not deps:
+        if not packages:
             return True
         
-        # Clean dependency names
-        clean_deps = []
-        for dep in deps:
-            dep_clean = re.sub(r'[<=>].*', '', dep).strip()
-            if dep_clean and dep_clean.strip() and not any(x in dep_clean for x in ['$', '{', '}', '(', ')', '[', ']']):
-                if re.search(r'[a-zA-Z0-9]', dep_clean):
-                    # Filter out phantom package 'lgi'
-                    if dep_clean == 'lgi':
-                        logger.warning("⚠️ Found phantom package 'lgi' - will be replaced with 'lua-lgi'")
-                        continue
-                    clean_deps.append(dep_clean)
+        clean_packages = self._clean_package_names(packages)
         
-        # Ensure 'lua-lgi' is present if we removed 'lgi'
-        if 'lgi' in deps and 'lua-lgi' not in clean_deps:
-            clean_deps.append('lua-lgi')
-        
-        # Remove duplicates
-        clean_deps = list(dict.fromkeys(clean_deps))
-        
-        if not clean_deps:
-            logger.info("No valid dependencies to install after cleaning")
+        if not clean_packages:
+            logger.info("No valid packages to install after cleaning")
             return True
         
-        logger.info(f"Installing {len(clean_deps)} dependencies: {clean_deps}")
+        logger.info(f"DEP_INSTALL_START=1 count={len(clean_packages)} mode={mode}")
         
         # Convert to string for command
-        deps_str = ' '.join(clean_deps)
+        pkgs_str = ' '.join(clean_packages)
         
         # --- FIRST ATTEMPT: Try pacman ---
-        logger.info("CONFLICT_RESOLUTION_ATTEMPT=1 manager=pacman")
-        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
+        logger.info(f"DEP_INSTALL_ATTEMPT=1 manager=pacman")
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {pkgs_str}"
+        
         result = self.shell_executor.run_command(
-            cmd, 
-            log_cmd=True, 
-            check=False, 
+            cmd,
+            log_cmd=True,
+            check=False,
             timeout=1200
         )
         
         if result.returncode == 0:
-            logger.info("✅ All dependencies installed via pacman")
+            logger.info(f"DEP_INSTALL_OK=1 manager=pacman count={len(clean_packages)}")
             return True
         
-        # Check if this is a conflict failure
+        # Analyze failure
         combined_output = result.stdout + "\n" + result.stderr
-        is_conflict, conflict_line, remove_candidate = self._detect_conflict(combined_output)
+        failure_reason = self._detect_failure_reason(combined_output)
         
-        if is_conflict and remove_candidate:
-            # Check if this conflict is allowed
-            allowed, trigger_pkg = self._check_conflict_allowed(clean_deps, remove_candidate, allowlist)
-            
-            if allowed:
-                # Auto-remove the conflicting package and retry
-                if self._remove_conflicting_package(remove_candidate):
-                    logger.info("CONFLICT_RETRY_INSTALL=1 manager=pacman")
-                    
-                    # Retry pacman installation
-                    cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {deps_str}"
-                    retry_result = self.shell_executor.run_command(
-                        cmd,
-                        log_cmd=True,
-                        check=False,
-                        timeout=1200
-                    )
-                    
-                    if retry_result.returncode == 0:
-                        logger.info("✅ Dependencies installed via pacman after conflict resolution")
-                        return True
-                    else:
-                        logger.warning(f"⚠️ Pacman still failed after conflict resolution: {retry_result.returncode}")
-                        # Fall through to yay
-                else:
-                    logger.error("❌ Failed to auto-remove conflicting package")
-                    # Fall through to yay
-            else:
-                logger.info(f"CONFLICT_BLOCKED=1 candidate={remove_candidate} reason=not_allowlisted")
-                # Don't attempt auto-removal, fall through to yay
-        else:
-            # Not a conflict or no specific candidate
-            logger.warning(f"⚠️ Pacman failed (not a conflict or no candidate): exit code {result.returncode}")
+        logger.warning(f"DEP_INSTALL_PACMAN_FAIL=1 reason={failure_reason} exitcode={result.returncode}")
+        
+        # Don't fallback to yay if AUR not allowed
+        if not allow_aur:
+            logger.error("DEP_INSTALL_YAY_SKIP=1 reason=aur_not_allowed")
+            return False
         
         # --- SECOND ATTEMPT: Fallback to yay ---
-        logger.info("CONFLICT_RESOLUTION_ATTEMPT=2 manager=yay")
-        cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
+        logger.info(f"DEP_INSTALL_ATTEMPT=2 manager=yay")
+        
+        # Use yay with --noconfirm to avoid prompts
+        cmd = f"LC_ALL=C yay -S --needed --noconfirm {pkgs_str}"
+        
         result = self.shell_executor.run_command(
             cmd,
             log_cmd=True,
@@ -209,45 +141,84 @@ class DependencyInstaller:
         )
         
         if result.returncode == 0:
-            logger.info("✅ Dependencies installed via yay")
+            logger.info(f"DEP_INSTALL_OK=1 manager=yay count={len(clean_packages)}")
             return True
         
-        # Check if yay also has a conflict
-        combined_output = result.stdout + "\n" + result.stderr
-        is_conflict, conflict_line, remove_candidate = self._detect_conflict(combined_output)
+        # Analyze yay failure
+        yay_output = result.stdout + "\n" + result.stderr
+        yay_failure_reason = self._detect_failure_reason(yay_output)
         
-        if is_conflict and remove_candidate:
-            # Check if this conflict is allowed (same allowlist applies)
-            allowed, trigger_pkg = self._check_conflict_allowed(clean_deps, remove_candidate, allowlist)
-            
-            if allowed:
-                # Auto-remove the conflicting package and retry yay
-                if self._remove_conflicting_package(remove_candidate):
-                    logger.info("CONFLICT_RETRY_INSTALL=1 manager=yay")
-                    
-                    # Retry yay installation
-                    cmd = f"LC_ALL=C yay -S --needed --noconfirm {deps_str}"
-                    retry_result = self.shell_executor.run_command(
-                        cmd,
-                        log_cmd=True,
-                        check=False,
-                        user="builder",
-                        timeout=1800
-                    )
-                    
-                    if retry_result.returncode == 0:
-                        logger.info("✅ Dependencies installed via yay after conflict resolution")
-                        return True
-                    else:
-                        logger.error("❌ Yay failed after conflict resolution")
-                        return False
-                else:
-                    logger.error("❌ Failed to auto-remove conflicting package for yay")
-                    return False
-            else:
-                logger.info(f"CONFLICT_BLOCKED=1 candidate={remove_candidate} reason=not_allowlisted")
-                return False
-        
-        # Final failure
-        logger.error("❌ Both pacman and yay failed for dependencies")
+        logger.error(f"DEP_INSTALL_YAY_FAIL=1 reason={yay_failure_reason} exitcode={result.returncode}")
         return False
+    
+    def extract_dependencies(self, pkg_dir: Path) -> Tuple[List[str], List[str], List[str]]:
+        """
+        Extract dependencies from .SRCINFO or PKGBUILD
+        
+        Args:
+            pkg_dir: Path to package directory
+            
+        Returns:
+            Tuple of (makedepends, checkdepends, depends)
+        """
+        srcinfo_path = pkg_dir / ".SRCINFO"
+        srcinfo_content = None
+        
+        # First try to read existing .SRCINFO
+        if srcinfo_path.exists():
+            try:
+                with open(srcinfo_path, 'r') as f:
+                    srcinfo_content = f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read existing .SRCINFO: {e}")
+        
+        # Generate .SRCINFO if not available
+        if not srcinfo_content:
+            try:
+                result = self.shell_executor.run_command(
+                    'makepkg --printsrcinfo',
+                    cwd=pkg_dir,
+                    capture=True,
+                    check=False,
+                    timeout=60
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    srcinfo_content = result.stdout
+                    # Also write to .SRCINFO for future use
+                    with open(srcinfo_path, 'w') as f:
+                        f.write(srcinfo_content)
+                else:
+                    logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
+                    return [], [], []
+            except Exception as e:
+                logger.warning(f"Error running makepkg --printsrcinfo: {e}")
+                return [], [], []
+        
+        # Parse dependencies from SRCINFO content
+        lines = srcinfo_content.strip().split('\n')
+        
+        makedepends = []
+        checkdepends = []
+        depends = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Look for dependency fields
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Extract all types of dependencies
+                if key == 'makedepends':
+                    makedepends.append(value)
+                elif key == 'checkdepends':
+                    checkdepends.append(value)
+                elif key == 'depends':
+                    depends.append(value)
+        
+        return makedepends, checkdepends, depends

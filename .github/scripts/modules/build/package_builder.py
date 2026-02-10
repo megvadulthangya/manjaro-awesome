@@ -151,13 +151,19 @@ class PackageBuilder:
                         "pkgnames": pkg_names
                     }, None
         
-        # Step 4: Build package
+        # Step 4: Install build dependencies only (CI-safe)
+        logger.info(f"🔧 Installing build dependencies for {pkg_dir.name}...")
+        if not self.local_builder.install_build_dependencies(str(pkg_dir)):
+            logger.error(f"❌ Failed to install build dependencies for {pkg_dir.name}")
+            return False, source_version, None, None
+        
+        # Step 5: Build package
         logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
         logger.info("LOCAL_BUILDER_USED=1")
         built_files, build_output = self._build_local_package(pkg_dir, source_version)
         
         if built_files:
-            # Step 5: Extract ACTUAL artifact versions from built files
+            # Step 6: Extract ACTUAL artifact versions from built files
             # NEW: Prefer built_files-based helper first
             artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
             
@@ -172,7 +178,7 @@ class PackageBuilder:
                         for pkg_name in pkg_names:
                             artifact_versions[pkg_name] = artifact_version
             
-            # Step 6: Determine which version to use (artifact truth vs PKGBUILD)
+            # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
             actual_version = None
             if artifact_versions:
                 # Use artifact version for the main package
@@ -211,7 +217,7 @@ class PackageBuilder:
                 actual_version = source_version
                 logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
             
-            # Step 7: Sign ALL built package files (including split packages)
+            # Step 8: Sign ALL built package files (including split packages)
             self._sign_built_packages(built_files, actual_version)
             
             # NEW: Register target version for ALL pkgname entries using ACTUAL version
@@ -327,7 +333,7 @@ class PackageBuilder:
                             "pkgnames": pkg_names
                         }, None
             
-            # Step 5: Build package
+            # Step 5: Build package (dependencies are installed inside build_aur_package)
             logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
             logger.info("AUR_BUILDER_USED=1")
             built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version)
@@ -523,21 +529,7 @@ class PackageBuilder:
             # Clean workspace using ArtifactManager
             self.artifact_manager.clean_workspace(pkg_dir)
             
-            # Download sources using ShellExecutor
-            logger.info("   Downloading sources...")
-            logger.info("SHELL_EXECUTOR_USED=1")
-            download_result = self.shell_executor.run_command(
-                "makepkg -od --noconfirm",
-                cwd=pkg_dir,
-                capture=True,
-                check=False,
-                timeout=600,
-                extra_env={"PACKAGER": self.packager_id}
-            )
-            
-            if download_result.returncode != 0:
-                logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                return [], ""
+            # Download sources is now handled inside LocalBuilder.run_makepkg with retry
             
             # Build package using LocalBuilder
             logger.info("   Building package...")

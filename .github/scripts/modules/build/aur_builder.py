@@ -2,12 +2,11 @@
 AUR Builder Module - Handles AUR package building logic
 """
 
-import re
 import logging
 from pathlib import Path
 from typing import List, Optional
 from modules.common.shell_executor import ShellExecutor
-from modules.build.dependency_installer import DependencyInstaller
+from modules.common.dependency_installer import DependencyInstaller
 
 logger = logging.getLogger(__name__)
 
@@ -49,80 +48,26 @@ class AURBuilder:
             self._pacman_initialized = True
             return True
     
-    def _extract_dependencies_from_srcinfo(self, pkg_dir: Path) -> List[str]:
+    def install_dependencies_strict(self, makedepends: List[str], checkdepends: List[str]) -> bool:
         """
-        Extract dependencies from .SRCINFO or PKGBUILD.
+        CI-safe dependency resolution: Install only makedepends and checkdepends
         
         Args:
-            pkg_dir: Path to package directory
+            makedepends: List of makedepends packages
+            checkdepends: List of checkdepends packages
             
         Returns:
-            List of dependency strings
+            True if installation successful, False otherwise
         """
-        deps = []
+        # Combine makedepends and checkdepends (build-time dependencies only)
+        build_deps = makedepends + checkdepends
         
-        # First try to read existing .SRCINFO
-        srcinfo_path = pkg_dir / ".SRCINFO"
-        srcinfo_content = None
-        
-        if srcinfo_path.exists():
-            try:
-                with open(srcinfo_path, 'r') as f:
-                    srcinfo_content = f.read()
-            except Exception as e:
-                logger.warning(f"Failed to read existing .SRCINFO: {e}")
-        
-        # Generate .SRCINFO if not available
-        if not srcinfo_content:
-            try:
-                logger.info("SHELL_EXECUTOR_USED=1")
-                result = self.shell_executor.run_command(
-                    'makepkg --printsrcinfo',
-                    cwd=pkg_dir,
-                    capture=True,
-                    check=False,
-                    timeout=60
-                )
-                
-                if result.returncode == 0 and result.stdout:
-                    srcinfo_content = result.stdout
-                    # Also write to .SRCINFO for future use
-                    with open(srcinfo_path, 'w') as f:
-                        f.write(srcinfo_content)
-                else:
-                    logger.warning(f"makepkg --printsrcinfo failed: {result.stderr}")
-                    return []
-            except Exception as e:
-                logger.warning(f"Error running makepkg --printsrcinfo: {e}")
-                return []
-        
-        # Parse dependencies from SRCINFO content
-        lines = srcinfo_content.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Look for dependency fields
-            if '=' in line:
-                key, value = line.split('=', 1)
-                key = key.strip()
-                value = value.strip()
-                
-                # Extract all types of dependencies
-                if key in ['depends', 'makedepends', 'checkdepends']:
-                    deps.append(value)
-        
-        return deps
-    
-    def install_dependencies_strict(self, deps: List[str]) -> bool:
-        """STRICT dependency resolution: pacman first, then yay with conflict resolution"""
-        if not deps:
+        if not build_deps:
             return True
         
-        print(f"\nInstalling {len(deps)} dependencies...")
-        logger.info(f"Dependencies to install: {deps}")
+        logger.info(f"Installing {len(build_deps)} build dependencies...")
+        logger.info(f"Makedepends: {makedepends}")
+        logger.info(f"Checkdepends: {checkdepends}")
         
         # REQUIRED PRECONDITION: Initialize pacman database FIRST
         if not self._initialize_pacman_database():
@@ -137,16 +82,12 @@ class AURBuilder:
         if result.returncode != 0:
             logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
         
-        # Load conflict resolution allowlist from config
-        try:
-            import config
-            conflict_allowlist = getattr(config, 'CONFLICT_REMOVE_ALLOWLIST', {})
-        except ImportError:
-            conflict_allowlist = {}
-            logger.warning("Could not load CONFLICT_REMOVE_ALLOWLIST from config")
-        
-        # Use the dependency installer with conflict resolution
-        return self.dependency_installer.install_with_conflict_resolution(deps, conflict_allowlist)
+        # Install build dependencies with AUR fallback enabled
+        return self.dependency_installer.install_packages(
+            packages=build_deps,
+            allow_aur=True,
+            mode="build"
+        )
     
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str, 
                           build_flags: str = "-si --noconfirm --clean --nocheck", 
@@ -166,33 +107,44 @@ class AURBuilder:
         """
         logger.info(f"🔨 Building AUR package {pkg_name}...")
         
-        # Extract dependencies from PKGBUILD/.SRCINFO
-        logger.info(f"📦 Extracting dependencies for {pkg_name}...")
-        deps = self._extract_dependencies_from_srcinfo(target_dir)
+        # Extract build dependencies from PKGBUILD/.SRCINFO (makedepends + checkdepends only)
+        logger.info(f"📦 Extracting build dependencies for {pkg_name}...")
+        makedepends, checkdepends, runtime_depends = self.dependency_installer.extract_dependencies(target_dir)
         
-        if deps:
-            logger.info(f"📦 Found {len(deps)} dependencies for {pkg_name}")
-            # Install dependencies
-            if not self.install_dependencies_strict(deps):
-                logger.error(f"❌ Failed to install dependencies for {pkg_name}")
+        # Log runtime depends but don't install them (CI-safe)
+        if runtime_depends:
+            logger.info(f"📦 Runtime depends (NOT installed in CI): {runtime_depends}")
+        
+        if makedepends or checkdepends:
+            logger.info(f"📦 Found {len(makedepends) + len(checkdepends)} build dependencies for {pkg_name}")
+            # Install build dependencies only
+            if not self.install_dependencies_strict(makedepends, checkdepends):
+                logger.error(f"❌ Failed to install build dependencies for {pkg_name}")
                 return []
         else:
-            logger.info(f"📦 No dependencies found for {pkg_name}")
+            logger.info(f"📦 No build dependencies found for {pkg_name}")
         
-        # Download sources
-        logger.info("   Downloading sources...")
+        # Download sources with retry for transient errors
+        logger.info("   Downloading sources (with retry)...")
         logger.info("SHELL_EXECUTOR_USED=1")
-        download_result = self.shell_executor.run_command(
-            "makepkg -od --noconfirm",
-            cwd=target_dir,
-            capture=True,
-            check=False,
-            timeout=600,
-            extra_env={"PACKAGER": packager_id}
-        )
         
-        if download_result.returncode != 0:
-            logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
+        try:
+            download_result = self.shell_executor.run_command_with_retry(
+                "makepkg -od --noconfirm",
+                cwd=target_dir,
+                capture=True,
+                check=False,
+                timeout=600,
+                extra_env={"PACKAGER": packager_id},
+                max_retries=5,
+                initial_delay=2.0
+            )
+            
+            if download_result.returncode != 0:
+                logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
+                return []
+        except Exception as e:
+            logger.error(f"❌ Error downloading sources: {e}")
             return []
         
         # Build package
@@ -221,9 +173,19 @@ class AURBuilder:
                     print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
                 print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
             
+            # Check if build failed (non-zero exit code)
             if build_result.returncode != 0:
-                logger.error(f"❌ Build failed: {build_result.stderr[:500]}")
-                return []
+                logger.error(f"❌ Build failed with exit code: {build_result.returncode}")
+                # Don't fail on CMake deprecation warnings
+                if "CMake Deprecation Warning" in build_result.stderr:
+                    logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
+                    # If the only error is CMake deprecation, we can continue
+                    if build_result.returncode != 0:
+                        # Still a real error
+                        return []
+                else:
+                    # Real error
+                    return []
             
             # Collect built packages (skip .sig files)
             built_files = []
