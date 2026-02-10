@@ -16,6 +16,7 @@ LOCAL_PACKAGES = [
     "awesome-copycats-manjaro",
     "i3lock-fancy-git",
     "ttf-font-awesome-5",
+    "tamzen-font",
     "nvidia-driver-assistant",
     "grayjay-bin"
 ]
@@ -29,7 +30,6 @@ AUR_PACKAGES = [
     "i3lock-color",
     "raw-thumbnailer",
     "gsconnect",
-    "tamzen-font",
     "betterlockscreen",
     "nordic-theme",
     #"nordic-darker-theme",
