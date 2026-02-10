@@ -74,6 +74,12 @@ class PackageBuilder:
         # Ensure output directory exists with proper ownership and permissions
         self._ensure_output_directory()
     
+    def set_vps_files(self, vps_files: List[str]):
+        """Set VPS file inventory for completeness check."""
+        self.vps_files = vps_files or []
+        count = len(self.vps_files)
+        logger.info(f"VPS_FILES_SET=1 count={count}")
+    
     def _ensure_output_directory(self):
         """
         CRITICAL: Ensure output directory exists and is writable before any makepkg invocation.
