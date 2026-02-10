@@ -1,31 +1,29 @@
-# Maintainer: Jah Way <jahway603 at protonmail dot com>
-# Previous Maintainer: Tun Win Naing <tunwn.mdy@gmail.com>
-# Contributor: Andrew Rabert <draje@nullsum.net>
+# Maintainer: <te>
+# Upstream: https://github.com/sunaku/tamzen-font
 
 pkgname=tamzen-font
-pkgver=r0.g0000000
+pkgver=1.11.6.r0.g0000000
 pkgrel=1
+epoch=1
 pkgdesc="Bitmapped programming font, based on Tamsyn (powerline, bitmap, ttf, vconsole font)"
 arch=('any')
 url="https://github.com/sunaku/tamzen-font"
 license=('custom')
+
 depends=('fontconfig' 'xorg-fonts-encodings' 'xorg-font-utils')
 makedepends=('git')
-install=tamzen-font.install
 
-_giturl="https://github.com/sunaku/tamzen-font.git"
-_gitname="tamzen-font"
-
-# CI/build override:
-# - export TAMZEN_COMMIT=<full/short hash or tag>  (preferred)
-# - or export GIT_COMMIT=<hash>
-_commit="${TAMZEN_COMMIT:-${GIT_COMMIT:-HEAD}}"
-
-source=("git+${_giturl}")
+_pkgname="tamzen-font"
+source=("git+${url}.git")
 sha256sums=('SKIP')
 
+# CI override:
+#   export TAMZEN_COMMIT=<hash|tag>
+# or export GIT_COMMIT=<hash|tag>
+_commit="${TAMZEN_COMMIT:-${GIT_COMMIT:-HEAD}}"
+
 prepare() {
-  cd "${srcdir}/${_gitname}"
+  cd "${srcdir}/${_pkgname}"
 
   if [[ "${_commit}" != "HEAD" ]]; then
     git checkout -q "${_commit}"
@@ -33,34 +31,47 @@ prepare() {
 }
 
 pkgver() {
-  cd "${srcdir}/${_gitname}"
+  cd "${srcdir}/${_pkgname}"
 
-  # Prefer tag-based versioning if tags exist like "Tamzen-1.11.6"
-  local desc
-  if desc="$(git describe --long --tags --match 'Tamzen-*' 2>/dev/null)"; then
-    # Tamzen-1.11.6-0-g<sha>  ->  1.11.6.r0.g<sha>
-    printf '%s\n' "${desc}" \
+  # Prefer tags like "Tamzen-1.11.6"
+  local d
+  if d="$(git describe --long --tags --match 'Tamzen-*' 2>/dev/null)"; then
+    # Tamzen-1.11.6-0-g<sha> -> 1.11.6.r0.g<sha>
+    printf '%s\n' "${d}" \
       | sed -E 's/^Tamzen-//' \
       | sed -E 's/-([0-9]+)-g/\.r\1\.g/'
   else
-    # Fallback: r<revcount>.g<shortsha>
     printf 'r%s.g%s\n' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
   fi
 }
 
 package() {
-  cd "${srcdir}/${_gitname}"
+  cd "${srcdir}/${_pkgname}"
 
-  install -d "${pkgdir}/usr/share/fonts/local"
-  install -m644 bdf/*.bdf "${pkgdir}/usr/share/fonts/local/"
+  # BDF
+  install -Dm644 bdf/*.bdf -t "${pkgdir}/usr/share/fonts/X11/misc/"
 
-  install -d "${pkgdir}/usr/share/fonts/TTF"
-  install -m644 ttf/*.ttf "${pkgdir}/usr/share/fonts/TTF/"
+  # OTB (ha van)
+  if compgen -G "otb/*.otb" > /dev/null; then
+    install -Dm644 otb/*.otb -t "${pkgdir}/usr/share/fonts/X11/misc/"
+  fi
 
-  install -d "${pkgdir}/usr/share/kbd/consolefonts"
-  gzip -f psf/*.psf
-  install -m644 psf/*.psf.gz "${pkgdir}/usr/share/kbd/consolefonts/"
+  # PCF (ha van)
+  if compgen -G "pcf/*.pcf" > /dev/null; then
+    install -Dm644 pcf/*.pcf -t "${pkgdir}/usr/share/fonts/X11/misc/"
+  fi
 
+  # TTF
+  install -Dm644 ttf/*.ttf -t "${pkgdir}/usr/share/fonts/TTF/"
+
+  # PSF -> gz (konzol fontok)
+  install -dm755 "${pkgdir}/usr/share/kbd/consolefonts/"
+  for f in psf/*.psf; do
+    [[ -f "${f}" ]] || continue
+    gzip -c "${f}" > "${pkgdir}/usr/share/kbd/consolefonts/$(basename "${f}").gz"
+  done
+
+  # Docs + license
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
 }
