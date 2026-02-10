@@ -7,12 +7,12 @@ arch=('x86_64')
 url="https://grayjay.app/desktop/"
 license=('Source First License 1.1')
 depends=('gtk3' 'unzip' 'libnotify' 'nss' 'libxss' 'libxtst' 'xdg-utils' 'at-spi2-core' 'libsecret' 'libappindicator-gtk3')
-makedepends=('curl')
+makedepends=('curl' 'unzip')
 provides=('grayjay')
 conflicts=('grayjay-git')
 options=(!strip)
 
-_max_probe=999
+_probe_max=50
 
 _url_for_ver() {
   local v="$1"
@@ -21,14 +21,31 @@ _url_for_ver() {
 
 _exists_ver() {
   local v="$1"
-  local u
-  u="$(_url_for_ver "$v")"
-  curl -fsI --max-time 10 "$u" >/dev/null
+  local u="$(_url_for_ver "$v")"
+  curl -fsSL \
+    --retry 2 --retry-delay 1 \
+    --connect-timeout 10 --max-time 20 \
+    --range 0-0 \
+    -o /dev/null \
+    "$u" >/dev/null
 }
 
-_find_latest_from_scratch() {
+_latest_ver_from_brew_api() {
+  local api="https://formulae.brew.sh/api/cask/grayjay.json"
+  local ver
+
+  ver="$(
+    curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 10 --max-time 20 "$api" \
+      | tr -d '\n' \
+      | sed -n 's/.*"version":"\([0-9]\+\)".*/\1/p'
+  )"
+
+  [[ "$ver" =~ ^[0-9]+$ ]] && echo "$ver"
+}
+
+_latest_ver_probe_desc() {
   local v
-  for ((v=_max_probe; v>=1; v--)); do
+  for ((v=_probe_max; v>=1; v--)); do
     if _exists_ver "$v"; then
       echo "$v"
       return 0
@@ -37,34 +54,26 @@ _find_latest_from_scratch() {
   return 1
 }
 
-_bump_from_current() {
-  local v="$1"
-  local next
-  while true; do
-    next=$((v+1))
-    if _exists_ver "$next"; then
-      v="$next"
-      continue
-    fi
-    echo "$v"
-    return 0
-  done
-}
-
 _resolve_pkgver() {
-  # ha pkgver már értelmes (>0), akkor csak "következőt" csekkoljuk felfelé
+  local v
+
   if [[ "$pkgver" =~ ^[0-9]+$ ]] && (( pkgver > 0 )); then
-    _bump_from_current "$pkgver"
+    echo "$pkgver"
     return 0
   fi
 
-  # első build / ismeretlen: keressük meg a legújabbat
-  _find_latest_from_scratch
+  v="$(_latest_ver_from_brew_api)"
+  if [[ -n "$v" ]]; then
+    echo "$v"
+    return 0
+  fi
+
+  _latest_ver_probe_desc
 }
 
-# IMPORTANT: pkgver-t még a source=() előtt állítjuk be, különben 0-s URL-re menne.
 pkgver="$(_resolve_pkgver)" || {
-  echo "ERROR: Could not determine latest Grayjay version from updater server." >&2
+  echo "ERROR: Could not determine latest Grayjay version." >&2
+  echo "       Tried: brew API, then probe ${_probe_max}..1 on updater.grayjay.app" >&2
   exit 1
 }
 
@@ -72,24 +81,25 @@ _filename="Grayjay.Desktop-linux-x64-v${pkgver}"
 source=("${_filename}.zip::https://updater.grayjay.app/Apps/Grayjay.Desktop/${pkgver}/${_filename}.zip")
 sha256sums=('SKIP')
 
+# FONTOS: ezzel megakadályozzuk, hogy makepkg automatikusan kibontsa bsdtar-ral
+# (különben a prepare() is kibontja -> duplázás).
+noextract=("${_filename}.zip")
+
 prepare() {
-    # CI-ben ne legyen interaktív unzip prompt ("replace?"):
-    # - töröljük a célkönyvtárat, így garantáltan tiszta
-    # - -o: ha mégis lenne ütközés, automatikusan felülír
-    rm -rf "${srcdir}/grayjay"
-    mkdir -p "${srcdir}/grayjay"
-    unzip -q -o "${srcdir}/${_filename}.zip" -d "${srcdir}/grayjay"
+  rm -rf "${srcdir}/grayjay"
+  mkdir -p "${srcdir}/grayjay"
+  unzip -q -o "${srcdir}/${_filename}.zip" -d "${srcdir}/grayjay"
 }
 
 package() {
-    cd "${srcdir}/grayjay/${_filename}"
+  cd "${srcdir}/grayjay/${_filename}"
 
-    install -dm755 "${pkgdir}/usr/share/grayjay"
-    install -dm755 "${pkgdir}/usr/bin"
-    install -dm755 "${pkgdir}/usr/share/applications"
-    install -dm755 "${pkgdir}/usr/share/icons/hicolor/512x512/apps"
+  install -dm755 "${pkgdir}/usr/share/grayjay"
+  install -dm755 "${pkgdir}/usr/bin"
+  install -dm755 "${pkgdir}/usr/share/applications"
+  install -dm755 "${pkgdir}/usr/share/icons/hicolor/512x512/apps"
 
-    cat > "${pkgdir}/usr/bin/grayjay" << 'EOF'
+  cat > "${pkgdir}/usr/bin/grayjay" << 'EOF'
 #!/bin/sh
 APP_DIR="$HOME/.local/share/grayjay"
 
@@ -102,11 +112,11 @@ fi
 
 exec sh -c "cd '$APP_DIR' && exec ./Grayjay \"\$@\"" -- "$@"
 EOF
-    chmod 755 "${pkgdir}/usr/bin/grayjay"
+  chmod 755 "${pkgdir}/usr/bin/grayjay"
 
-    cp -r ./* "${pkgdir}/usr/share/grayjay/"
+  cp -r ./* "${pkgdir}/usr/share/grayjay/"
 
-    cat > "${pkgdir}/usr/share/applications/grayjay.desktop" << EOF
+  cat > "${pkgdir}/usr/share/applications/grayjay.desktop" << EOF
 [Desktop Entry]
 Name=Grayjay
 Comment=Privacy-respecting client for YouTube, Rumble, Twitch, Spotify etc
@@ -117,6 +127,6 @@ Type=Application
 Categories=Network;Video;AudioVideo;
 EOF
 
-    install -Dm644 "grayjay.png" \
-        "${pkgdir}/usr/share/icons/hicolor/512x512/apps/grayjay.png"
+  install -Dm644 "grayjay.png" \
+    "${pkgdir}/usr/share/icons/hicolor/512x512/apps/grayjay.png"
 }
