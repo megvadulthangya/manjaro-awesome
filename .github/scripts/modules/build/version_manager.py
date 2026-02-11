@@ -535,12 +535,13 @@ class VersionManager:
     def _extract_git_hash_from_version_string(self, version_string: str) -> Optional[str]:
         """
         Extract git hash from Arch VCS package version string.
+        Returns the full hash string (7-40 hex characters) as found, without truncation.
         
         Args:
             version_string: Version string (e.g., "4.3.1711.gcab3e81dc-1")
             
         Returns:
-            Short git hash (8 chars) or None if not found
+            Full git hash string or None if not found
         """
         # Patterns for Arch VCS packages:
         # 1. .g<short_hash> (e.g., 4.3.1711.gcab3e81dc-1)
@@ -557,21 +558,23 @@ class VersionManager:
         for pattern in patterns:
             match = re.search(pattern, version_string)
             if match:
-                hash_str = match.group(1)
-                return hash_str[:8]  # Standard Arch short hash length
+                # Return full matched hash (no truncation)
+                return match.group(1)
         
         return None
     
     def _get_pinned_hash_from_pkgbuild(self, pkg_dir: Path, pkgver: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Get pinned hash from PKGBUILD (from source URL or pkgver).
+        Returns the exact hash string as found, without truncation.
         
         Args:
             pkg_dir: Package directory
             pkgver: Package version from PKGBUILD
             
         Returns:
-            Tuple of (hash_source, short_hash)
+            Tuple of (hash_source, full_hash) where full_hash is the exact
+            hash string (7-40 hex characters) from the PKGBUILD.
         """
         pkgbuild_path = pkg_dir / "PKGBUILD"
         if not pkgbuild_path.exists():
@@ -584,8 +587,8 @@ class VersionManager:
             # First, check source URL for commit hash
             git_url, branch, commit_hash = self._parse_git_source_from_pkgbuild(pkgbuild_content)
             if commit_hash:
-                short_hash = commit_hash[:8] if len(commit_hash) >= 7 else commit_hash
-                return "source_url", short_hash
+                # Return full commit hash as found
+                return "source_url", commit_hash
             
             # Next, check if pkgver contains a git hash
             pkgver_hash = self._extract_git_hash_from_version_string(pkgver)
@@ -622,6 +625,7 @@ class VersionManager:
     def _check_vcs_upstream_for_identical_versions(self, pkg_dir: Path, pkgver: str, remote_version: str) -> Tuple[bool, str]:
         """
         Check if upstream has changed for VCS packages with identical versions.
+        Uses strict prefix matching: if upstream_full.startswith(pinned_hash) -> SAME commit.
         
         Args:
             pkg_dir: Package directory
@@ -646,37 +650,43 @@ class VersionManager:
             if not git_url:
                 return False, "no_git_source"
             
-            # Get upstream HEAD commit
+            # Get upstream HEAD commit (full 40-char SHA)
             upstream_full, upstream_short = self._get_upstream_head_commit(git_url, pkg_name, branch)
-            if not upstream_short:
+            if not upstream_full:
                 logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=ls_remote_failed fallback=version_compare")
                 return False, "upstream_check_failed"
             
-            # Get pinned hash from PKGBUILD (source URL or pkgver)
-            hash_source, pinned_short = self._get_pinned_hash_from_pkgbuild(pkg_dir, pkgver)
-            logger.info(f"VCS_PINNED_SHA={pinned_short or 'none'} pkg={pkg_name} source_version={pkgver} hash_source={hash_source or 'none'}")
+            # Get pinned hash from PKGBUILD (source URL or pkgver) - full, not truncated
+            hash_source, pinned_hash = self._get_pinned_hash_from_pkgbuild(pkg_dir, pkgver)
+            logger.info(f"VCS_PINNED_SHA={pinned_hash or 'none'} pkg={pkg_name} source_version={pkgver} hash_source={hash_source or 'none'}")
             
-            # Get hash from remote version
-            remote_short = self._extract_git_hash_from_version_string(remote_version)
-            logger.info(f"VCS_REMOTE_SHA={remote_short or 'none'} pkg={pkg_name}")
+            # Get hash from remote version (full hash, no truncation)
+            remote_full = self._extract_git_hash_from_version_string(remote_version)
+            logger.info(f"VCS_REMOTE_SHA={remote_full or 'none'} pkg={pkg_name}")
+            logger.info(f"VCS_UPSTREAM_SHA={upstream_full} pkg={pkg_name}")  # log full 40-char SHA
             
-            # If we have a pinned hash in PKGBUILD, compare with upstream
-            if pinned_short:
-                if pinned_short != upstream_short:
-                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed pinned={pinned_short} remote={remote_short or 'none'} upstream={upstream_short}")
-                    return True, "head_changed"
-                else:
-                    logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged pinned={pinned_short} upstream={upstream_short}")
+            # --- Prefix matching logic ---
+            if pinned_hash:
+                # Compare pinned hash against upstream full SHA using startswith
+                if upstream_full.startswith(pinned_hash):
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged_prefix "
+                              f"pinned={pinned_hash} upstream={upstream_full}")
                     return False, "upstream_unchanged"
-            
-            # If no pinned hash but remote has hash, compare remote with upstream
-            if remote_short:
-                if remote_short != upstream_short:
-                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed remote={remote_short} upstream={upstream_short}")
-                    return True, "head_changed"
                 else:
-                    logger.info(f"VCS_UPSTREAM_CHECK=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged remote={remote_short} upstream={upstream_short}")
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed_prefix "
+                              f"pinned={pinned_hash} upstream={upstream_full}")
+                    return True, "head_changed"
+            
+            # If no pinned hash but remote version has hash, compare remote hash
+            if remote_full:
+                if upstream_full.startswith(remote_full):
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=SKIP reason=upstream_unchanged_prefix "
+                              f"remote={remote_full} upstream={upstream_full}")
                     return False, "upstream_unchanged"
+                else:
+                    logger.info(f"VCS_UPSTREAM_OVERRIDE=1 pkg={pkg_name} decision=BUILD reason=head_changed_prefix "
+                              f"remote={remote_full} upstream={upstream_full}")
+                    return True, "head_changed"
             
             # No hashes to compare
             logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=no_pinned_sha fallback=version_compare")
