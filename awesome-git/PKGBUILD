@@ -14,7 +14,7 @@ optdepends=('rlwrap: readline support for awesome-client' 'dex: autostart your d
 provides=('notification-daemon' 'awesome')
 conflicts=('awesome')
 backup=('etc/xdg/awesome/rc.lua')
-source=("${pkgname}::git+https://github.com/awesomeWM/awesome.git")
+source=("git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
 _LUA_VER=5.4
 
