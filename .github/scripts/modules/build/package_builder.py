@@ -126,6 +126,7 @@ class PackageBuilder:
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[Dict[str, str]]]:
         """
         Audit and build local package.
+        Implements per-package dependency session and cleanup.
         
         Args:
             pkg_dir: Path to local package directory
@@ -191,103 +192,126 @@ class PackageBuilder:
                         "pkgnames": pkg_names
                     }, None
         
-        # Step 4: Install build dependencies only (CI-safe)
-        logger.info(f"🔧 Installing build dependencies for {pkg_dir.name}...")
-        if not self.local_builder.install_build_dependencies(str(pkg_dir)):
-            logger.error(f"❌ Failed to install build dependencies for {pkg_dir.name}")
-            return False, source_version, None, None
+        # --- We have decided to build ---
         
-        # Step 5: Build package
-        logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
-        logger.info("LOCAL_BUILDER_USED=1")
-        built_files, build_output = self._build_local_package(pkg_dir, source_version)
+        # Get dependency installer from local builder
+        dep_installer = self.local_builder.dependency_installer
         
-        if built_files:
-            # Step 6: Extract ACTUAL artifact versions from built files
-            # NEW: Prefer built_files-based helper first
-            artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
+        # Extract dependencies (makedepends, checkdepends, runtime_depends)
+        makedepends, checkdepends, runtime_depends = dep_installer.extract_dependencies(pkg_dir)
+        
+        # Log runtime depends - they may be installed depending on config
+        if runtime_depends:
+            logger.info(f"📦 Runtime depends (will be installed if config flag is True): {runtime_depends}")
+        
+        # Start dependency session for this package
+        dep_installer.begin_session(pkg_dir.name)
+        try:
+            # Step 4: Install build dependencies (with configurable runtime deps)
+            logger.info(f"🔧 Installing dependencies for {pkg_dir.name}...")
+            if not self.local_builder.install_build_dependencies(
+                str(pkg_dir),
+                makedepends,
+                checkdepends,
+                runtime_depends
+            ):
+                logger.error(f"❌ Failed to install dependencies for {pkg_dir.name}")
+                return False, source_version, None, None
             
-            # Fallback to output_dir scan if built_files didn't yield versions
-            if not artifact_versions:
-                artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+            # Step 5: Build package
+            logger.info(f"🔨 Building {pkg_dir.name} ({source_version})...")
+            logger.info("LOCAL_BUILDER_USED=1")
+            built_files, build_output = self._build_local_package(pkg_dir, source_version)
+            
+            if built_files:
+                # Step 6: Extract ACTUAL artifact versions from built files
+                # NEW: Prefer built_files-based helper first
+                artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
                 
-                # Additional fallback: try to extract from makepkg output if artifact parsing fails
-                if not artifact_versions and build_output:
-                    artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
-                    if artifact_version:
-                        for pkg_name in pkg_names:
-                            artifact_versions[pkg_name] = artifact_version
-            
-            # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
-            actual_version = None
-            if artifact_versions:
-                # Use artifact version for the main package
-                main_pkg = pkg_dir.name
-                if main_pkg in artifact_versions:
-                    actual_version = artifact_versions[main_pkg]
-                    logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
+                # Fallback to output_dir scan if built_files didn't yield versions
+                if not artifact_versions:
+                    artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
                     
-                    # For VCS packages, update the source version with artifact truth
-                    if actual_version != source_version:
-                        logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
-                        # Parse the artifact version to update pkgver/pkgrel/epoch
-                        if ':' in actual_version:
-                            epoch_part, rest = actual_version.split(':', 1)
-                            if '-' in rest:
-                                pkgver_actual, pkgrel_actual = rest.split('-', 1)
-                            else:
-                                pkgver_actual = rest
-                                pkgrel_actual = "1"
-                        else:
-                            epoch_part = "0"
-                            if '-' in actual_version:
-                                pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
-                            else:
-                                pkgver_actual = actual_version
-                                pkgrel_actual = "1"
+                    # Additional fallback: try to extract from makepkg output if artifact parsing fails
+                    if not artifact_versions and build_output:
+                        artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                        if artifact_version:
+                            for pkg_name in pkg_names:
+                                artifact_versions[pkg_name] = artifact_version
+                
+                # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
+                actual_version = None
+                if artifact_versions:
+                    # Use artifact version for the main package
+                    main_pkg = pkg_dir.name
+                    if main_pkg in artifact_versions:
+                        actual_version = artifact_versions[main_pkg]
+                        logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
                         
-                        # Update metadata with artifact truth
-                        pkgver = pkgver_actual
-                        pkgrel = pkgrel_actual
-                        epoch = epoch_part if epoch_part != "0" else epoch
-                        source_version = actual_version
+                        # For VCS packages, update the source version with artifact truth
+                        if actual_version != source_version:
+                            logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
+                            # Parse the artifact version to update pkgver/pkgrel/epoch
+                            if ':' in actual_version:
+                                epoch_part, rest = actual_version.split(':', 1)
+                                if '-' in rest:
+                                    pkgver_actual, pkgrel_actual = rest.split('-', 1)
+                                else:
+                                    pkgver_actual = rest
+                                    pkgrel_actual = "1"
+                            else:
+                                epoch_part = "0"
+                                if '-' in actual_version:
+                                    pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
+                                else:
+                                    pkgver_actual = actual_version
+                                    pkgrel_actual = "1"
+                            
+                            # Update metadata with artifact truth
+                            pkgver = pkgver_actual
+                            pkgrel = pkgrel_actual
+                            epoch = epoch_part if epoch_part != "0" else epoch
+                            source_version = actual_version
+                
+                # Use PKGBUILD version if no artifact version found
+                if not actual_version:
+                    actual_version = source_version
+                    logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
+                
+                # Step 8: Sign ALL built package files (including split packages)
+                self._sign_built_packages(built_files, actual_version)
+                
+                # NEW: Register target version for ALL pkgname entries using ACTUAL version
+                self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
+                
+                # NEW: Record hokibot data for local package with ACTUAL version
+                if self.build_tracker:
+                    self.build_tracker.add_hokibot_data(
+                        pkg_name=pkg_dir.name,
+                        pkgver=pkgver,
+                        pkgrel=pkgrel,
+                        epoch=epoch,
+                        old_version=remote_version,
+                        new_version=actual_version
+                    )
+                
+                # Log version truth chain
+                logger.info(f"[VERSION_TRUTH_CHAIN] Package: {pkg_dir.name}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
+                logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
+                
+                return True, actual_version, {
+                    "pkgver": pkgver,
+                    "pkgrel": pkgrel,
+                    "epoch": epoch,
+                    "pkgnames": pkg_names
+                }, artifact_versions
             
-            # Use PKGBUILD version if no artifact version found
-            if not actual_version:
-                actual_version = source_version
-                logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
-            
-            # Step 8: Sign ALL built package files (including split packages)
-            self._sign_built_packages(built_files, actual_version)
-            
-            # NEW: Register target version for ALL pkgname entries using ACTUAL version
-            self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
-            
-            # NEW: Record hokibot data for local package with ACTUAL version
-            if self.build_tracker:
-                self.build_tracker.add_hokibot_data(
-                    pkg_name=pkg_dir.name,
-                    pkgver=pkgver,
-                    pkgrel=pkgrel,
-                    epoch=epoch,
-                    old_version=remote_version,
-                    new_version=actual_version
-                )
-            
-            # Log version truth chain
-            logger.info(f"[VERSION_TRUTH_CHAIN] Package: {pkg_dir.name}")
-            logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
-            logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
-            logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
-            
-            return True, actual_version, {
-                "pkgver": pkgver,
-                "pkgrel": pkgrel,
-                "epoch": epoch,
-                "pkgnames": pkg_names
-            }, artifact_versions
-        
-        return False, source_version, None, None
+            return False, source_version, None, None
+        finally:
+            # Always clean up dependencies added during this session
+            dep_installer.end_session()
     
     def audit_and_build_aur(
         self,
@@ -298,6 +322,7 @@ class PackageBuilder:
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, str]], Optional[Dict[str, str]]]:
         """
         Audit and build AUR package.
+        Implements per-package dependency session and cleanup.
         
         Args:
             aur_package_name: AUR package name
@@ -373,87 +398,98 @@ class PackageBuilder:
                             "pkgnames": pkg_names
                         }, None
             
-            # Step 5: Build package (dependencies are installed inside build_aur_package)
-            logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
-            logger.info("AUR_BUILDER_USED=1")
-            built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version)
+            # --- We have decided to build ---
             
-            if built_files:
-                # Step 6: Extract ACTUAL artifact versions from built files
-                # NEW: Prefer built_files-based helper first
-                artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
+            # Get dependency installer from aur builder
+            dep_installer = self.aur_builder.dependency_installer
+            
+            # Start dependency session for this package
+            dep_installer.begin_session(aur_package_name)
+            try:
+                # Step 5: Build package (dependencies are installed inside build_aur_package)
+                logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
+                logger.info("AUR_BUILDER_USED=1")
+                built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version)
                 
-                # Fallback to output_dir scan if built_files didn't yield versions
-                if not artifact_versions:
-                    artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
+                if built_files:
+                    # Step 6: Extract ACTUAL artifact versions from built files
+                    # NEW: Prefer built_files-based helper first
+                    artifact_versions = self.version_manager.extract_artifact_versions_from_files(built_files, pkg_names)
                     
-                    # Additional fallback: try to extract from makepkg output if artifact parsing fails
-                    if not artifact_versions and build_output:
-                        artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
-                        if artifact_version:
-                            for pkg_name in pkg_names:
-                                artifact_versions[pkg_name] = artifact_version
-                
-                # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
-                actual_version = None
-                if artifact_versions:
-                    # Use artifact version for the main package
-                    if aur_package_name in artifact_versions:
-                        actual_version = artifact_versions[aur_package_name]
-                        logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
+                    # Fallback to output_dir scan if built_files didn't yield versions
+                    if not artifact_versions:
+                        artifact_versions = self.version_manager.extract_artifact_versions(self.output_dir, pkg_names)
                         
-                        # For VCS packages, update the source version with artifact truth
-                        if actual_version != source_version:
-                            logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
-                            # Parse the artifact version to update pkgver/pkgrel/epoch
-                            if ':' in actual_version:
-                                epoch_part, rest = actual_version.split(':', 1)
-                                if '-' in rest:
-                                    pkgver_actual, pkgrel_actual = rest.split('-', 1)
-                                else:
-                                    pkgver_actual = rest
-                                    pkgrel_actual = "1"
-                            else:
-                                epoch_part = "0"
-                                if '-' in actual_version:
-                                    pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
-                                else:
-                                    pkgver_actual = actual_version
-                                    pkgrel_actual = "1"
+                        # Additional fallback: try to extract from makepkg output if artifact parsing fails
+                        if not artifact_versions and build_output:
+                            artifact_version = self.version_manager.get_artifact_version_from_makepkg(build_output)
+                            if artifact_version:
+                                for pkg_name in pkg_names:
+                                    artifact_versions[pkg_name] = artifact_version
+                    
+                    # Step 7: Determine which version to use (artifact truth vs PKGBUILD)
+                    actual_version = None
+                    if artifact_versions:
+                        # Use artifact version for the main package
+                        if aur_package_name in artifact_versions:
+                            actual_version = artifact_versions[aur_package_name]
+                            logger.info(f"[VERSION_TRUTH] PKGBUILD: {source_version}, Artifact: {actual_version}")
                             
-                            # Update metadata with artifact truth
-                            pkgver = pkgver_actual
-                            pkgrel = pkgrel_actual
-                            epoch = epoch_part if epoch_part != "0" else epoch
-                            source_version = actual_version
+                            # For VCS packages, update the source version with artifact truth
+                            if actual_version != source_version:
+                                logger.info(f"[VERSION_TRUTH] Using artifact version for VCS package: {actual_version}")
+                                # Parse the artifact version to update pkgver/pkgrel/epoch
+                                if ':' in actual_version:
+                                    epoch_part, rest = actual_version.split(':', 1)
+                                    if '-' in rest:
+                                        pkgver_actual, pkgrel_actual = rest.split('-', 1)
+                                    else:
+                                        pkgver_actual = rest
+                                        pkgrel_actual = "1"
+                                else:
+                                    epoch_part = "0"
+                                    if '-' in actual_version:
+                                        pkgver_actual, pkgrel_actual = actual_version.split('-', 1)
+                                    else:
+                                        pkgver_actual = actual_version
+                                        pkgrel_actual = "1"
+                                
+                                # Update metadata with artifact truth
+                                pkgver = pkgver_actual
+                                pkgrel = pkgrel_actual
+                                epoch = epoch_part if epoch_part != "0" else epoch
+                                source_version = actual_version
+                    
+                    # Use PKGBUILD version if no artifact version found
+                    if not actual_version:
+                        actual_version = source_version
+                        logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
+                    
+                    # Step 8: Sign ALL built package files (including split packages)
+                    self._sign_built_packages(built_files, actual_version)
+                    
+                    # NEW: Register target version for ALL pkgname entries using ACTUAL version
+                    self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
+                    
+                    # Note: AUR packages do NOT record hokibot data per requirements
+                    
+                    # Log version truth chain
+                    logger.info(f"[VERSION_TRUTH_CHAIN] Package: {aur_package_name}")
+                    logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
+                    logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
+                    logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
+                    
+                    return True, actual_version, {
+                        "pkgver": pkgver,
+                        "pkgrel": pkgrel,
+                        "epoch": epoch,
+                        "pkgnames": pkg_names
+                    }, artifact_versions
                 
-                # Use PKGBUILD version if no artifact version found
-                if not actual_version:
-                    actual_version = source_version
-                    logger.info(f"[VERSION_TRUTH] Using PKGBUILD version (no artifact found): {actual_version}")
-                
-                # Step 8: Sign ALL built package files (including split packages)
-                self._sign_built_packages(built_files, actual_version)
-                
-                # NEW: Register target version for ALL pkgname entries using ACTUAL version
-                self.version_tracker.register_split_packages(pkg_names, actual_version, is_built=True)
-                
-                # Note: AUR packages do NOT record hokibot data per requirements
-                
-                # Log version truth chain
-                logger.info(f"[VERSION_TRUTH_CHAIN] Package: {aur_package_name}")
-                logger.info(f"[VERSION_TRUTH_CHAIN] PKGBUILD/.SRCINFO: {source_version}")
-                logger.info(f"[VERSION_TRUTH_CHAIN] Artifact-derived: {actual_version}")
-                logger.info(f"[VERSION_TRUTH_CHAIN] Registered for prune/hokibot: {actual_version}")
-                
-                return True, actual_version, {
-                    "pkgver": pkgver,
-                    "pkgrel": pkgrel,
-                    "epoch": epoch,
-                    "pkgnames": pkg_names
-                }, artifact_versions
-            
-            return False, source_version, None, None
+                return False, source_version, None, None
+            finally:
+                # Always clean up dependencies added during this session
+                dep_installer.end_session()
             
         except Exception as e:
             logger.error(f"❌ Error building AUR package {aur_package_name}: {e}")

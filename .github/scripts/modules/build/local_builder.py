@@ -5,6 +5,9 @@ Local Builder Module - Handles local package building logic
 import subprocess
 import logging
 import os
+from typing import List
+
+import config
 from modules.common.shell_executor import ShellExecutor
 from modules.common.dependency_installer import DependencyInstaller
 
@@ -19,38 +22,41 @@ class LocalBuilder:
         self.shell_executor = ShellExecutor(debug_mode=debug_mode)
         self.dependency_installer = DependencyInstaller(self.shell_executor, debug_mode)
     
-    def _extract_build_dependencies(self, pkg_dir: str):
-        """Extract makedepends and checkdepends from package"""
-        from pathlib import Path
-        pkg_path = Path(pkg_dir)
-        
-        makedepends, checkdepends, runtime_depends = self.dependency_installer.extract_dependencies(pkg_path)
-        
-        # Log runtime depends but don't install them (CI-safe)
-        if runtime_depends:
-            logger.info(f"📦 Runtime depends (NOT installed in CI): {runtime_depends}")
-        
-        return makedepends, checkdepends
-    
-    def install_build_dependencies(self, pkg_dir: str) -> bool:
+    def install_build_dependencies(self,
+                                  pkg_dir: str,
+                                  makedepends: List[str],
+                                  checkdepends: List[str],
+                                  runtime_depends: List[str]) -> bool:
         """
-        Install build dependencies for local package (makedepends + checkdepends only)
+        Install dependencies for local package.
+        - Default: install makedepends + checkdepends + depends (runtime)
+        - Configurable via INSTALL_RUNTIME_DEPS_IN_CI flag.
         
         Args:
-            pkg_dir: Package directory path
+            pkg_dir: Package directory path (for logging only)
+            makedepends: List of makedepends packages
+            checkdepends: List of checkdepends packages
+            runtime_depends: List of runtime depends packages
             
         Returns:
             True if successful, False otherwise
         """
-        makedepends, checkdepends = self._extract_build_dependencies(pkg_dir)
+        # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
+        if config.INSTALL_RUNTIME_DEPS_IN_CI:
+            build_deps += runtime_depends
+            logger.info("Runtime depends are INCLUDED in build deps (INSTALL_RUNTIME_DEPS_IN_CI=True)")
+        else:
+            logger.info("Runtime depends are EXCLUDED from build deps (INSTALL_RUNTIME_DEPS_IN_CI=False)")
         
         if not build_deps:
             return True
         
-        logger.info(f"Installing {len(build_deps)} build dependencies for {pkg_dir}...")
+        logger.info(f"Installing {len(build_deps)} dependencies for {pkg_dir}...")
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
+        if runtime_depends:
+            logger.info(f"Runtime depends: {runtime_depends} (will be installed)")
         
         return self.dependency_installer.install_packages(
             packages=build_deps,
@@ -92,7 +98,7 @@ class LocalBuilder:
             
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                raise subprocess.CalledProcessError(download_result.returncode, "makepkg -od", 
+                raise subprocess.CalledProcessError(download_result.returncode, "makepkg -od",
                                                    download_result.stdout, download_result.stderr)
             
             # Then run the actual build
@@ -155,7 +161,7 @@ class LocalBuilder:
                     # We'll still log the warning but return a success result
                     if result.returncode != 0:
                         # Check if there are other errors besides CMake warnings
-                        error_lines = [line for line in result.stderr.split('\n') 
+                        error_lines = [line for line in result.stderr.split('\n')
                                       if line and "CMake Deprecation Warning" not in line]
                         if not any("error" in line.lower() for line in error_lines):
                             # Only CMake warnings, treat as success
