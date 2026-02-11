@@ -65,7 +65,7 @@ class LocalBuilder:
         )
     
     def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-d --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
-        """Run makepkg command with specified flags"""
+        """Run makepkg command with specified flags, with retry for missing yasm"""
         cmd = f"makepkg {flags}"
         
         logger.info("MAKEPKG_INSTALL_DISABLED=1")
@@ -101,18 +101,36 @@ class LocalBuilder:
                 raise subprocess.CalledProcessError(download_result.returncode, "makepkg -od",
                                                    download_result.stdout, download_result.stderr)
             
-            # Then run the actual build
+            # Then run the actual build (with possible retry)
             logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
-            result = self.shell_executor.run_command(
-                cmd,
-                cwd=pkg_dir,
-                capture=True,
-                check=False,
-                timeout=timeout,
-                extra_env={"PACKAGER": packager_id},
-                log_cmd=self.debug_mode,
-                user="builder"  # Run as builder user
-            )
+            
+            def run_build():
+                return self.shell_executor.run_command(
+                    cmd,
+                    cwd=pkg_dir,
+                    capture=True,
+                    check=False,
+                    timeout=timeout,
+                    extra_env={"PACKAGER": packager_id},
+                    log_cmd=self.debug_mode,
+                    user="builder"
+                )
+            
+            # First attempt
+            result = run_build()
+            
+            # Retry logic for missing yasm
+            if result.returncode != 0:
+                error_output = (result.stderr or "") + "\n" + (result.stdout or "")
+                if "yasm: No such file or directory" in error_output:
+                    logger.info(f"BUILD_TOOL_AUTOINSTALL=1 tool=yasm reason=missing_binary")
+                    # Install yasm via dependency installer
+                    if self.dependency_installer.install_packages(["yasm"], allow_aur=True, mode="build"):
+                        logger.info("Retrying makepkg after installing yasm...")
+                        # Retry build ONCE
+                        result = run_build()
+                    else:
+                        logger.error("Failed to install yasm, cannot retry build")
             
             # Log diagnostic information on failure
             if result.returncode != 0:

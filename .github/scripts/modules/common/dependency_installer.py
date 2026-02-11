@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 class DependencyInstaller:
     """CI-safe dependency installer with pacman -> yay fallback and session cleanup"""
     
+    # Hardcoded provider map for deterministic resolution
+    PROVIDER_MAP = {
+        "sdl2": "sdl2-compat"
+    }
+    
     def __init__(self, shell_executor, debug_mode: bool = False):
         self.shell_executor = shell_executor
         self.debug_mode = debug_mode
@@ -234,6 +239,19 @@ class DependencyInstaller:
             logger.info("No valid packages to install after cleaning")
             return True
         
+        # --- Deterministic provider resolution ---
+        # Replace any exact match from PROVIDER_MAP
+        resolved_packages = []
+        for pkg in clean_packages:
+            if pkg in self.PROVIDER_MAP:
+                replacement = self.PROVIDER_MAP[pkg]
+                logger.info(f"PROVIDER_RESOLVE: replacing {pkg} with {replacement}")
+                resolved_packages.append(replacement)
+            else:
+                resolved_packages.append(pkg)
+        clean_packages = resolved_packages
+        # -----------------------------------------
+        
         # --- Conflict resolution ---
         if not self._handle_conflicts(clean_packages):
             logger.error("Conflict resolution failed, aborting installation")
@@ -246,7 +264,7 @@ class DependencyInstaller:
         
         # --- FIRST ATTEMPT: Try pacman ---
         logger.info(f"DEP_INSTALL_ATTEMPT=1 manager=pacman")
-        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {pkgs_str}"
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm --ask=4 {pkgs_str}"
         
         result = self.shell_executor.run_command(
             cmd,

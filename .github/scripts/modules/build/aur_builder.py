@@ -110,7 +110,7 @@ class AURBuilder:
                           timeout: int = 3600) -> List[str]:
         """
         Build AUR package including dependency installation.
-        Implements per-package dependency session and cleanup.
+        Per-package dependency session is managed by the caller (PackageBuilder).
         
         Args:
             pkg_name: AUR package name
@@ -128,149 +128,166 @@ class AURBuilder:
         logger.info(f"📦 Extracting build dependencies for {pkg_name}...")
         makedepends, checkdepends, runtime_depends = self.dependency_installer.extract_dependencies(target_dir)
         
-        # Start dependency session
-        self.dependency_installer.begin_session(pkg_name)
-        try:
-            # Install dependencies (with configurable runtime depends)
-            if makedepends or checkdepends or runtime_depends:
-                logger.info(f"📦 Found {len(makedepends) + len(checkdepends) + len(runtime_depends)} total dependencies for {pkg_name}")
-                if not self.install_dependencies(makedepends, checkdepends, runtime_depends):
-                    logger.error(f"❌ Failed to install dependencies for {pkg_name}")
-                    return []
-            else:
-                logger.info(f"📦 No dependencies found for {pkg_name}")
-            
-            # Download sources with retry for transient errors
-            logger.info("   Downloading sources (with retry)...")
-            logger.info("SHELL_EXECUTOR_USED=1")
-            
-            try:
-                download_result = self.shell_executor.run_command_with_retry(
-                    "makepkg -od --noconfirm",
-                    cwd=target_dir,
-                    capture=True,
-                    check=False,
-                    timeout=600,
-                    extra_env={"PACKAGER": packager_id},
-                    max_retries=5,
-                    initial_delay=2.0,
-                    user="builder"  # Run as builder user
-                )
-                
-                if download_result.returncode != 0:
-                    logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
-                    return []
-            except Exception as e:
-                logger.error(f"❌ Error downloading sources: {e}")
+        # Install dependencies (with configurable runtime depends)
+        if makedepends or checkdepends or runtime_depends:
+            logger.info(f"📦 Found {len(makedepends) + len(checkdepends) + len(runtime_depends)} total dependencies for {pkg_name}")
+            if not self.install_dependencies(makedepends, checkdepends, runtime_depends):
+                logger.error(f"❌ Failed to install dependencies for {pkg_name}")
                 return []
+        else:
+            logger.info(f"📦 No dependencies found for {pkg_name}")
+        
+        # Download sources with retry for transient errors
+        logger.info("   Downloading sources (with retry)...")
+        logger.info("SHELL_EXECUTOR_USED=1")
+        
+        try:
+            download_result = self.shell_executor.run_command_with_retry(
+                "makepkg -od --noconfirm",
+                cwd=target_dir,
+                capture=True,
+                check=False,
+                timeout=600,
+                extra_env={"PACKAGER": packager_id},
+                max_retries=5,
+                initial_delay=2.0,
+                user="builder"  # Run as builder user
+            )
             
-            # Build package
-            logger.info(f"   Building with flags: {build_flags}")
-            logger.info("MAKEPKG_INSTALL_DISABLED=1")
-            logger.info("SHELL_EXECUTOR_USED=1")
-            logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
-            cmd = f"makepkg {build_flags}"
+            if download_result.returncode != 0:
+                logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
+                return []
+        except Exception as e:
+            logger.error(f"❌ Error downloading sources: {e}")
+            return []
+        
+        # Build package (with possible retry on missing yasm)
+        logger.info(f"   Building with flags: {build_flags}")
+        logger.info("MAKEPKG_INSTALL_DISABLED=1")
+        logger.info("SHELL_EXECUTOR_USED=1")
+        logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
+        cmd = f"makepkg {build_flags}"
+        
+        if self.debug_mode:
+            print(f"🔧 [DEBUG] Running makepkg in {target_dir}: {cmd}", flush=True)
+        
+        try:
+            # Ensure target directory is writable
+            if not os.access(target_dir, os.W_OK):
+                logger.warning(f"Target directory not writable: {target_dir}")
+                # Try to fix permissions
+                import subprocess
+                subprocess.run(['chmod', '755', str(target_dir)], check=False)
+                subprocess.run(['chown', '-R', 'builder:builder', str(target_dir)], check=False)
+            
+            # First build attempt
+            build_result = self.shell_executor.run_command(
+                cmd,
+                cwd=target_dir,
+                capture=True,
+                check=False,
+                timeout=timeout,
+                extra_env={"PACKAGER": packager_id},
+                log_cmd=self.debug_mode,
+                user="builder"  # Run as builder user
+            )
+            
+            # Retry logic for missing yasm
+            if build_result.returncode != 0:
+                error_output = (build_result.stderr or "") + "\n" + (build_result.stdout or "")
+                if "yasm: No such file or directory" in error_output:
+                    logger.info(f"BUILD_TOOL_AUTOINSTALL=1 tool=yasm reason=missing_binary")
+                    # Install yasm via dependency installer
+                    if self.dependency_installer.install_packages(["yasm"], allow_aur=True, mode="build"):
+                        logger.info("Retrying makepkg after installing yasm...")
+                        # Retry build ONCE
+                        build_result = self.shell_executor.run_command(
+                            cmd,
+                            cwd=target_dir,
+                            capture=True,
+                            check=False,
+                            timeout=timeout,
+                            extra_env={"PACKAGER": packager_id},
+                            log_cmd=self.debug_mode,
+                            user="builder"
+                        )
+                    else:
+                        logger.error("Failed to install yasm, cannot retry build")
+            
+            # Log diagnostic information on failure
+            if build_result.returncode != 0:
+                logger.error(f"❌ Build failed with exit code: {build_result.returncode}")
+                
+                # Log diagnostic information
+                logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
+                logger.error(f"Command: {cmd}")
+                logger.error(f"Working directory: {target_dir}")
+                
+                # Get user context
+                try:
+                    import subprocess
+                    whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current user: {whoami_result.stdout.strip()}")
+                    
+                    id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
+                    logger.error(f"Current UID: {id_result.stdout.strip()}")
+                    
+                    # Check directory permissions
+                    logger.error(f"Directory writable: {os.access(target_dir, os.W_OK)}")
+                    logger.error(f"Directory owner: {os.stat(target_dir).st_uid}")
+                except Exception as e:
+                    logger.error(f"Error getting user context: {e}")
+                
+                # Log last 200 lines of output
+                if build_result.stdout:
+                    stdout_lines = build_result.stdout.split('\n')
+                    last_stdout = stdout_lines[-200:] if len(stdout_lines) > 200 else stdout_lines
+                    logger.error(f"Last {len(last_stdout)} lines of stdout:")
+                    for line in last_stdout:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
+                if build_result.stderr:
+                    stderr_lines = build_result.stderr.split('\n')
+                    last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
+                    logger.error(f"Last {len(last_stderr)} lines of stderr:")
+                    for line in last_stderr:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
+                # Don't fail on CMake deprecation warnings
+                if "CMake Deprecation Warning" in build_result.stderr:
+                    logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
+                    # If the only error is CMake deprecation, we can continue
+                    if build_result.returncode != 0:
+                        # Still a real error
+                        return []
+                else:
+                    # Real error
+                    return []
             
             if self.debug_mode:
-                print(f"🔧 [DEBUG] Running makepkg in {target_dir}: {cmd}", flush=True)
+                if build_result.stdout:
+                    print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
+                if build_result.stderr:
+                    print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
+                print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
             
-            try:
-                # Ensure target directory is writable
-                if not os.access(target_dir, os.W_OK):
-                    logger.warning(f"Target directory not writable: {target_dir}")
-                    # Try to fix permissions
-                    import subprocess
-                    subprocess.run(['chmod', '755', str(target_dir)], check=False)
-                    subprocess.run(['chown', '-R', 'builder:builder', str(target_dir)], check=False)
-                
-                build_result = self.shell_executor.run_command(
-                    cmd,
-                    cwd=target_dir,
-                    capture=True,
-                    check=False,
-                    timeout=timeout,
-                    extra_env={"PACKAGER": packager_id},
-                    log_cmd=self.debug_mode,
-                    user="builder"  # Run as builder user
-                )
-                
-                # Log diagnostic information on failure
-                if build_result.returncode != 0:
-                    logger.error(f"❌ Build failed with exit code: {build_result.returncode}")
-                    
-                    # Log diagnostic information
-                    logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
-                    logger.error(f"Command: {cmd}")
-                    logger.error(f"Working directory: {target_dir}")
-                    
-                    # Get user context
-                    try:
-                        import subprocess
-                        whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
-                        logger.error(f"Current user: {whoami_result.stdout.strip()}")
-                        
-                        id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
-                        logger.error(f"Current UID: {id_result.stdout.strip()}")
-                        
-                        # Check directory permissions
-                        logger.error(f"Directory writable: {os.access(target_dir, os.W_OK)}")
-                        logger.error(f"Directory owner: {os.stat(target_dir).st_uid}")
-                    except Exception as e:
-                        logger.error(f"Error getting user context: {e}")
-                    
-                    # Log last 200 lines of output
-                    if build_result.stdout:
-                        stdout_lines = build_result.stdout.split('\n')
-                        last_stdout = stdout_lines[-200:] if len(stdout_lines) > 200 else stdout_lines
-                        logger.error(f"Last {len(last_stdout)} lines of stdout:")
-                        for line in last_stdout:
-                            if line.strip():
-                                logger.error(f"  {line}")
-                    
-                    if build_result.stderr:
-                        stderr_lines = build_result.stderr.split('\n')
-                        last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
-                        logger.error(f"Last {len(last_stderr)} lines of stderr:")
-                        for line in last_stderr:
-                            if line.strip():
-                                logger.error(f"  {line}")
-                    
-                    # Don't fail on CMake deprecation warnings
-                    if "CMake Deprecation Warning" in build_result.stderr:
-                        logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
-                        # If the only error is CMake deprecation, we can continue
-                        if build_result.returncode != 0:
-                            # Still a real error
-                            return []
-                    else:
-                        # Real error
-                        return []
-                
-                if self.debug_mode:
-                    if build_result.stdout:
-                        print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
-                    if build_result.stderr:
-                        print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
-                    print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
-                
-                # Collect built packages (skip .sig files)
-                built_files = []
-                for pkg_file in target_dir.glob("*.pkg.tar.*"):
-                    # Skip signature files
-                    if pkg_file.name.endswith(".sig"):
-                        continue
-                    built_files.append(pkg_file.name)
-                
-                if built_files:
-                    logger.info(f"✅ Successfully built {pkg_name}: {len(built_files)} package(s)")
-                    return built_files
-                else:
-                    logger.error(f"❌ No package files created for {pkg_name}")
-                    return []
-                    
-            except Exception as e:
-                logger.error(f"❌ Error building {pkg_name}: {e}")
+            # Collect built packages (skip .sig files)
+            built_files = []
+            for pkg_file in target_dir.glob("*.pkg.tar.*"):
+                # Skip signature files
+                if pkg_file.name.endswith(".sig"):
+                    continue
+                built_files.append(pkg_file.name)
+            
+            if built_files:
+                logger.info(f"✅ Successfully built {pkg_name}: {len(built_files)} package(s)")
+                return built_files
+            else:
+                logger.error(f"❌ No package files created for {pkg_name}")
                 return []
-        finally:
-            # Always run session cleanup, even if build fails
-            self.dependency_installer.end_session()
+                
+        except Exception as e:
+            logger.error(f"❌ Error building {pkg_name}: {e}")
+            return []
