@@ -58,7 +58,7 @@ class LocalBuilder:
             mode="build"
         )
     
-    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-s --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
+    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-d --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
         """Run makepkg command with specified flags"""
         cmd = f"makepkg {flags}"
         
@@ -96,6 +96,7 @@ class LocalBuilder:
                                                    download_result.stdout, download_result.stderr)
             
             # Then run the actual build
+            logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
             result = self.shell_executor.run_command(
                 cmd,
                 cwd=pkg_dir,
