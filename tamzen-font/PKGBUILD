@@ -16,7 +16,7 @@ depends=('fontconfig' 'xorg-fonts-encodings')
 makedepends=('git')
 
 _pkgname="tamzen-font"
-source=("git+${url}.git")
+source=("git+https://github.com/sunaku/tamzen-font.git")
 sha256sums=('SKIP')
 
 _commit="${TAMZEN_COMMIT:-${GIT_COMMIT:-HEAD}}"
