@@ -1,13 +1,17 @@
 """
-SSH Client Module - Handles SSH connections and remote operations
+SSH Client Module - Handles SSH connections and remote VPS operations
+WITH STAGING SUPPORT FOR ATOMIC PUBLISH
 """
 
 import os
 import subprocess
 import shutil
 import logging
+import random
+import string
+import datetime
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,201 @@ class SSHClient:
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
         
+    def generate_run_id(self) -> str:
+        """
+        Generate a unique run ID for staging directory.
+        Uses GITHUB_RUN_ID environment variable if available, otherwise timestamp + random.
+        
+        Returns:
+            String identifier for the CI run
+        """
+        github_run_id = os.getenv('GITHUB_RUN_ID')
+        if github_run_id:
+            return f"run_{github_run_id}"
+        else:
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+            return f"{timestamp}_{suffix}"
+    
+    def ensure_staging_dir(self, run_id: str) -> bool:
+        """
+        Create staging directory on VPS under REMOTE_DIR/.staging/<run_id>/
+        Ensures parent .staging exists and has correct permissions.
+        
+        Args:
+            run_id: Unique run identifier
+            
+        Returns:
+            True if directory exists/was created, False on failure
+        """
+        staging_parent = f"{self.remote_dir}/.staging"
+        staging_dir = f"{staging_parent}/{run_id}"
+        
+        remote_cmd = f"""
+        # Create staging parent if not exists
+        if [ ! -d "{staging_parent}" ]; then
+            mkdir -p "{staging_parent}"
+            chmod 755 "{staging_parent}"
+        fi
+        # Create staging directory
+        mkdir -p "{staging_dir}"
+        chmod 755 "{staging_dir}"
+        """
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
+            if result.returncode == 0:
+                logger.info(f"STAGING_DIR_CREATED=1 path={staging_dir}")
+                return True
+            else:
+                logger.error(f"STAGING_DIR_CREATE_FAIL path={staging_dir} error={result.stderr[:200]}")
+                return False
+        except Exception as e:
+            logger.error(f"STAGING_DIR_CREATE_EXCEPTION path={staging_dir} error={str(e)[:200]}")
+            return False
+    
+    def promote_staging(self, run_id: str) -> bool:
+        """
+        Atomically promote staging directory to live REMOTE_DIR.
+        Moves all files from staging dir to remote_dir, then removes staging dir.
+        
+        Args:
+            run_id: Unique run identifier (staging dir name)
+            
+        Returns:
+            True if promotion succeeded, False otherwise.
+            On failure, staging dir is left intact for debugging.
+        """
+        staging_dir = f"{self.remote_dir}/.staging/{run_id}"
+        
+        # Move all files from staging to remote_dir
+        # Use mv -f to overwrite existing files, but only if they are from this run
+        remote_cmd = f"""
+        if [ ! -d "{staging_dir}" ]; then
+            echo "STAGING_MISSING"
+            exit 1
+        fi
+        # Move files (including hidden) but not directories
+        for f in "{staging_dir}"/* "{staging_dir}"/.[!.]*; do
+            [ -f "$f" ] || [ -L "$f" ] || continue
+            mv -f "$f" "{self.remote_dir}/" 2>/dev/null || true
+        done
+        # Check if any files remain (move failures)
+        remaining=$(ls -A "{staging_dir}" 2>/dev/null | wc -l)
+        if [ "$remaining" -gt 0 ]; then
+            echo "PROMOTE_PARTIAL remaining=$remaining"
+            exit 1
+        fi
+        # Remove empty staging dir
+        rmdir "{staging_dir}" 2>/dev/null || true
+        # Remove parent .staging if empty (best effort)
+        rmdir "{self.remote_dir}/.staging" 2>/dev/null || true
+        echo "PROMOTE_SUCCESS"
+        """
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and "PROMOTE_SUCCESS" in result.stdout:
+                logger.info(f"STAGING_PROMOTE_OK run_id={run_id}")
+                return True
+            else:
+                error_snip = result.stderr[:200] if result.stderr else "unknown"
+                logger.error(f"STAGING_PROMOTE_FAIL run_id={run_id} error={error_snip}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"STAGING_PROMOTE_EXCEPTION run_id={run_id} error={str(e)[:200]}")
+            return False
+    
+    def list_remote_files(self, remote_path: Optional[str] = None) -> List[str]:
+        """
+        List all files (regular files and symlinks) in remote_path.
+        Returns basenames only.
+        
+        Args:
+            remote_path: Remote directory to list (defaults to self.remote_dir)
+            
+        Returns:
+            List of filenames (basenames) or empty list on failure
+        """
+        target = remote_path if remote_path is not None else self.remote_dir
+        
+        ssh_cmd = [
+            "ssh",
+            *self.ssh_options,
+            f"{self.vps_user}@{self.vps_host}",
+            rf'find "{target}" -maxdepth 1 \( -type f -o -type l \) -printf "%f\\n" 2>/dev/null || echo "NO_FILES"'
+        ]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.split('\n') 
+                         if f.strip() and f.strip() != 'NO_FILES']
+                logger.info(f"REMOTE_FILE_LIST path={target} count={len(files)}")
+                return files
+            else:
+                logger.warning(f"REMOTE_FILE_LIST_FAIL path={target}")
+                return []
+                
+        except Exception as e:
+            logger.warning(f"REMOTE_FILE_LIST_EXCEPTION path={target} error={str(e)[:200]}")
+            return []
+    
+    def verify_upload(self, expected_basenames: Set[str], remote_path: Optional[str] = None) -> Tuple[bool, List[str]]:
+        """
+        Verify that all expected files exist on remote server.
+        
+        Args:
+            expected_basenames: Set of filenames that should be present
+            remote_path: Remote directory to check (defaults to self.remote_dir)
+            
+        Returns:
+            Tuple of (success: bool, missing_files: List[str])
+        """
+        target = remote_path if remote_path is not None else self.remote_dir
+        remote_files = set(self.list_remote_files(target))
+        
+        missing = list(expected_basenames - remote_files)
+        extra = list(remote_files - expected_basenames)
+        
+        # Log summary
+        logger.info(f"VERIFY_REMOTE: target={target}")
+        logger.info(f"VERIFY_REMOTE: expected={len(expected_basenames)} remote={len(remote_files)}")
+        logger.info(f"VERIFY_REMOTE: missing={len(missing)} extra={len(extra)}")
+        
+        if missing:
+            logger.error(f"VERIFY_REMOTE: MISSING_FILES (first 20): {missing[:20]}")
+        if extra:
+            logger.info(f"VERIFY_REMOTE: EXTRA_FILES (first 20): {extra[:20]}")
+        
+        success = len(missing) == 0
+        return success, missing
+    
     def setup_ssh_config(self, ssh_key: Optional[str] = None):
         """Setup SSH config file for builder user - container invariant"""
         ssh_dir = Path("/home/builder/.ssh")
@@ -76,6 +275,7 @@ class SSHClient:
         
         ssh_test_cmd = [
             "ssh",
+            *self.ssh_options,
             f"{self.vps_user}@{self.vps_host}",
             "echo SSH_TEST_SUCCESS"
         ]

@@ -1,6 +1,6 @@
 """
 Rsync Client Module - Handles file transfers using Rsync
-WITH UP3 POST-UPLOAD VERIFICATION
+WITH STAGING UPLOAD SUPPORT FOR ATOMIC PUBLISH
 """
 
 import os
@@ -9,7 +9,7 @@ import shutil
 import time
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -222,17 +222,18 @@ class RsyncClient:
         
         return True
     
-    def upload_files(self, files_to_upload: List[str], output_dir: Path, cleanup_manager=None) -> bool:
+    def upload_files(self, files_to_upload: List[str], output_dir: Path, cleanup_manager=None, remote_path: Optional[str] = None) -> bool:
         """
-        Upload files to server using RSYNC WITHOUT --delete flag (transport-only)
+        Upload files to remote server using RSYNC.
         
-        CRITICAL: This is now a transport-only function. Deletions are handled
-        separately via CleanupManager over SSH (outside this module).
+        CRITICAL: This is transport-only. Deletions are handled separately.
+        Supports staging by specifying remote_path (e.g., staging directory).
         
         Args:
             files_to_upload: List of file paths to upload
             output_dir: Output directory (unused, kept for backward compatibility)
             cleanup_manager: Ignored (kept for backward compatibility only)
+            remote_path: Remote destination path (defaults to self.remote_dir)
             
         Returns:
             True if rsync transport succeeded, False otherwise
@@ -241,8 +242,11 @@ class RsyncClient:
             logger.warning("No files to upload")
             return False
         
+        # Determine remote destination
+        dest_path = remote_path if remote_path is not None else self.remote_dir
+        
         # Log files to upload (safe - only filenames, not paths)
-        logger.info(f"Files to upload ({len(files_to_upload)}):")
+        logger.info(f"Files to upload ({len(files_to_upload)}) to {dest_path}:")
         for f in files_to_upload:
             try:
                 size_mb = os.path.getsize(f) / (1024 * 1024)
@@ -260,7 +264,7 @@ class RsyncClient:
           --progress \
           --stats \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+          '{self.vps_user}@{self.vps_host}:{dest_path}/'
         """
         
         logger.info(f"RUNNING RSYNC COMMAND (NO --delete)")
@@ -309,7 +313,7 @@ class RsyncClient:
           --stats \
           -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
           {" ".join(f"'{f}'" for f in files_to_upload)} \
-          '{self.vps_user}@{self.vps_host}:{self.remote_dir}/'
+          '{self.vps_user}@{self.vps_host}:{dest_path}/'
         """
         
         logger.info(f"RUNNING RSYNC RETRY COMMAND (NO --delete)")
