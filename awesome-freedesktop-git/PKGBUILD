@@ -4,7 +4,7 @@
 _pkgname=awesome-freedesktop
 pkgname=$_pkgname-git
 pkgver=118.c82ad29
-pkgrel=6
+pkgrel=1
 # EPOCH ELTÁVOLÍTVA: mert okozza a : karaktert a fájlnévben
 # epoch=1
 pkgdesc="Freedesktop.org compliant desktop entries and menu for Awesome WM"
