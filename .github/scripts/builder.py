@@ -1,6 +1,6 @@
 """
 Main Orchestration Script for Arch Linux Package Builder
-WITH NON-BLOCKING HOKIBOT AND STAGING PUBLISH
+WITH NON-BLOCKING HOKIBOT AND STAGING PUBLISH + SAFETY UPGRADES
 """
 
 import os
@@ -57,7 +57,7 @@ except ImportError as e:
 
 
 class PackageBuilderOrchestrator:
-    """Main orchestrator coordinating all phases WITH NON-BLOCKING HOKIBOT AND STAGING PUBLISH"""
+    """Main orchestrator coordinating all phases WITH NON-BLOCKING HOKIBOT AND STAGING PUBLISH + SAFETY UPGRADES"""
     
     def __init__(self):
         """Initialize orchestrator with all modules"""
@@ -488,9 +488,17 @@ class PackageBuilderOrchestrator:
     
     def phase_v_sign_and_update(self) -> bool:
         """
-        Phase V: Sign and Update WITH STAGING PUBLISH AND ATOMIC PROMOTION
+        Phase V: Sign and Update WITH STAGING PUBLISH, ATOMIC PROMOTION,
+        PRE‑PROMOTE VERIFICATION AND STALE STAGING CLEANUP.
         """
-        logger.info("PHASE V: Sign and Update WITH STAGING PUBLISH")
+        logger.info("PHASE V: Sign and Update WITH STAGING PUBLISH + SAFETY UPGRADES")
+        
+        # ------------------------------------------------------------
+        # P1) Best‑effort cleanup of stale staging directories (≥24h)
+        # ------------------------------------------------------------
+        logger.info("Cleaning up stale staging directories older than 24 hours...")
+        self.ssh_client.cleanup_old_staging(max_age_hours=24)
+        # ------------------------------------------------------------
         
         local_packages = list(self.output_dir.glob("*.pkg.tar.*"))
         if not local_packages:
@@ -560,10 +568,23 @@ class PackageBuilderOrchestrator:
             remote_path=staging_path
         )
         
-        # 5e: If upload succeeded, promote staging to live
+        # 5e: PRE‑PROMOTE VERIFICATION (P0)
         promotion_success = False
         if upload_success:
-            logger.info(f"Upload to staging succeeded. Promoting staging -> live...")
+            expected_basenames = {f.name for f in files_to_upload}
+            verify_ok, missing_files = self.ssh_client.verify_upload(expected_basenames, remote_path=staging_path)
+            
+            if not verify_ok:
+                logger.error(f"STAGING_VERIFY_FAIL: missing {len(missing_files)} files, promotion aborted. Staging left for debugging.")
+                self.gate_state['upload_success'] = False
+                self.gate_state['up3_success'] = False
+                self._run_safe_operations_only()
+                return False
+            
+            logger.info(f"Upload to staging verified. All {len(expected_basenames)} files present.")
+            
+            # 5f: Promote staging to live (with remote lock)
+            logger.info(f"Promoting staging -> live...")
             promotion_success = self.ssh_client.promote_staging(run_id)
             self.gate_state['promotion_success'] = promotion_success
             
@@ -573,11 +594,11 @@ class PackageBuilderOrchestrator:
         else:
             logger.error("Upload to staging failed. Promotion aborted.")
         
-        # 5f: Overall upload success = upload succeeded AND promotion succeeded
+        # 5g: Overall upload success = upload succeeded AND promotion succeeded
         overall_upload_success = upload_success and promotion_success
         self.gate_state['upload_success'] = overall_upload_success
         
-        # 5g: Post-promotion verification
+        # 5h: Post‑promotion verification (UP3)
         up3_success = False
         if overall_upload_success:
             # Verify that all expected files are now present in live remote_dir
@@ -588,11 +609,11 @@ class PackageBuilderOrchestrator:
             
             if not up3_success:
                 logger.error("UP3 POST-UPLOAD VERIFICATION FAILED: missing files after promotion")
-                # Exit with error later; but keep staging already removed
+                # Exit with error later; staging dir already removed
         else:
             logger.error("Overall upload/promotion failed; skipping UP3 verification")
         
-        # 5h: Permission normalization (only if overall success)
+        # 5i: Permission normalization (only if overall success)
         if overall_upload_success and up3_success:
             if not self.ssh_client.normalize_permissions():
                 logger.error("VPS permission normalization failed, aborting pipeline")
@@ -638,8 +659,8 @@ class PackageBuilderOrchestrator:
         logger.info(f"Safe operations complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
     
     def run(self) -> int:
-        """Main execution flow WITH STAGING PUBLISH AND NON-BLOCKING HOKIBOT"""
-        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH STAGING PUBLISH")
+        """Main execution flow WITH STAGING PUBLISH AND NON-BLOCKING HOKIBOT + SAFETY UPGRADES"""
+        logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH STAGING PUBLISH + SAFETY UPGRADES")
         
         try:
             # Import GPG key if enabled

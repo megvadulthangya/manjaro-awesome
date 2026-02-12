@@ -1,6 +1,6 @@
 """
 SSH Client Module - Handles SSH connections and remote VPS operations
-WITH STAGING SUPPORT FOR ATOMIC PUBLISH
+WITH STAGING SUPPORT FOR ATOMIC PUBLISH AND PROMOTION LOCK
 """
 
 import os
@@ -101,6 +101,7 @@ class SSHClient:
     def promote_staging(self, run_id: str) -> bool:
         """
         Atomically promote staging directory to live REMOTE_DIR.
+        Acquires a remote lock before moving files to prevent concurrent promotions.
         Moves all files from staging dir to remote_dir, then removes staging dir.
         
         Args:
@@ -111,31 +112,39 @@ class SSHClient:
             On failure, staging dir is left intact for debugging.
         """
         staging_dir = f"{self.remote_dir}/.staging/{run_id}"
+        lock_dir = f"{self.remote_dir}/.staging/.promote.lock"
         
-        # Move all files from staging to remote_dir
-        # Use mv -f to overwrite existing files, but only if they are from this run
+        # Remote script with set -e for fail-fast, lock acquisition and trap cleanup
         remote_cmd = f"""
-        if [ ! -d "{staging_dir}" ]; then
-            echo "STAGING_MISSING"
-            exit 1
-        fi
-        # Move files (including hidden) but not directories
-        for f in "{staging_dir}"/* "{staging_dir}"/.[!.]*; do
-            [ -f "$f" ] || [ -L "$f" ] || continue
-            mv -f "$f" "{self.remote_dir}/" 2>/dev/null || true
-        done
-        # Check if any files remain (move failures)
-        remaining=$(ls -A "{staging_dir}" 2>/dev/null | wc -l)
-        if [ "$remaining" -gt 0 ]; then
-            echo "PROMOTE_PARTIAL remaining=$remaining"
-            exit 1
-        fi
-        # Remove empty staging dir
-        rmdir "{staging_dir}" 2>/dev/null || true
-        # Remove parent .staging if empty (best effort)
-        rmdir "{self.remote_dir}/.staging" 2>/dev/null || true
-        echo "PROMOTE_SUCCESS"
-        """
+set -e
+lock_dir="{lock_dir}"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+    echo "LOCK_ACQUIRE_FAIL"
+    exit 1
+fi
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+
+if [ ! -d "{staging_dir}" ]; then
+    echo "STAGING_MISSING"
+    exit 1
+fi
+# Move files (including hidden) but not directories
+for f in "{staging_dir}"/* "{staging_dir}"/.[!.]*; do
+    [ -f "$f" ] || [ -L "$f" ] || continue
+    mv -f "$f" "{self.remote_dir}/"
+done
+# Check if any files remain (move failures)
+remaining=$(ls -A "{staging_dir}" 2>/dev/null | wc -l)
+if [ "$remaining" -gt 0 ]; then
+    echo "PROMOTE_PARTIAL remaining=$remaining"
+    exit 1
+fi
+# Remove empty staging dir
+rmdir "{staging_dir}" 2>/dev/null
+# Remove parent .staging if empty (best effort)
+rmdir "{self.remote_dir}/.staging" 2>/dev/null || true
+echo "PROMOTE_SUCCESS"
+"""
         
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
@@ -153,11 +162,61 @@ class SSHClient:
                 return True
             else:
                 error_snip = result.stderr[:200] if result.stderr else "unknown"
-                logger.error(f"STAGING_PROMOTE_FAIL run_id={run_id} error={error_snip}")
+                if "LOCK_ACQUIRE_FAIL" in result.stdout:
+                    logger.error(f"STAGING_PROMOTE_LOCK_BUSY run_id={run_id}")
+                else:
+                    logger.error(f"STAGING_PROMOTE_FAIL run_id={run_id} error={error_snip}")
                 return False
                 
         except Exception as e:
             logger.error(f"STAGING_PROMOTE_EXCEPTION run_id={run_id} error={str(e)[:200]}")
+            return False
+    
+    def cleanup_old_staging(self, max_age_hours: int = 24) -> bool:
+        """
+        Delete staging directories older than max_age_hours under REMOTE_DIR/.staging/.
+        The lock directory (.promote.lock) is never deleted by this operation.
+        Safe, best‑effort cleanup – failures are logged but do not abort the pipeline.
+        
+        Args:
+            max_age_hours: Age threshold in hours (default 24)
+            
+        Returns:
+            True if the remote command executed without fatal errors, else False.
+            Does not indicate whether any directories were actually deleted.
+        """
+        staging_parent = f"{self.remote_dir}/.staging"
+        minutes = max_age_hours * 60
+        
+        remote_cmd = f"""
+if [ -d "{staging_parent}" ]; then
+    find "{staging_parent}" -maxdepth 1 -type d \
+        -not -name ".staging" \
+        -not -name ".promote.lock" \
+        -mmin +{minutes} -exec rm -rf {{}} \\; 2>/dev/null || true
+    echo "CLEANUP_OK"
+else
+    echo "NO_STAGING_DIR"
+fi
+"""
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60
+            )
+            if result.returncode == 0 and "CLEANUP_OK" in result.stdout:
+                logger.info(f"STALE_STAGING_CLEANUP: removed directories older than {max_age_hours}h")
+                return True
+            else:
+                logger.warning(f"STALE_STAGING_CLEANUP_FAIL: {result.stderr[:200]}")
+                return False
+        except Exception as e:
+            logger.error(f"STALE_STAGING_CLEANUP_EXCEPTION: {e}")
             return False
     
     def list_remote_files(self, remote_path: Optional[str] = None) -> List[str]:
