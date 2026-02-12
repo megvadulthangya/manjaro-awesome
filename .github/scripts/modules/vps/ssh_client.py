@@ -127,6 +127,57 @@ class SSHClient:
         except Exception as e:
             logger.warning(f"Could not ensure remote directory: {e}")
     
+    def normalize_permissions(self, remote_dir: Optional[str] = None) -> bool:
+        """
+        Normalize permissions on remote repository directory:
+        - All directories: chmod 755
+        - All files: chmod 644
+        
+        Args:
+            remote_dir: Remote directory path (defaults to self.remote_dir)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        target_dir = remote_dir or self.remote_dir
+        
+        logger.info(f"VPS_PERMS_NORMALIZE_START dir={target_dir}")
+        
+        # Build remote command to set directory and file permissions
+        # Use find with -type d for directories, -type f for regular files
+        remote_cmd = f"""
+        # Set directory permissions to 755
+        find "{target_dir}" -type d -exec chmod 755 {{}} \\; 2>/dev/null || true
+        # Set file permissions to 644 for all regular files
+        find "{target_dir}" -type f -exec chmod 644 {{}} \\; 2>/dev/null || true
+        """
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60
+            )
+            
+            if result.returncode == 0:
+                logger.info("VPS_PERMS_NORMALIZE_OK")
+                return True
+            else:
+                stderr_snippet = result.stderr[:200] if result.stderr else "No stderr"
+                logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={stderr_snippet}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("VPS_PERMS_NORMALIZE_FAIL stderr_snippet=Timeout after 60 seconds")
+            return False
+        except Exception as e:
+            logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={str(e)[:200]}")
+            return False
+    
     def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
         """Check if repository exists on VPS via SSH"""
         logger.info("Checking if repository exists on VPS...")

@@ -562,6 +562,7 @@ class PackageBuilderOrchestrator:
         - Sign new packages
         - Update repository database
         - Upload to VPS with proper cleanup
+        - Normalize VPS permissions immediately after upload
         """
         logger.info("PHASE V: Sign and Update WITH FAIL-SAFE GATES")
         
@@ -625,6 +626,16 @@ class PackageBuilderOrchestrator:
             self.output_dir,
             self.cleanup_manager
         )
+        
+        # --- VPS PERMISSION NORMALIZATION ---
+        # Immediately after upload, normalize permissions on VPS repository directory
+        if upload_success:
+            if not self.ssh_client.normalize_permissions():
+                logger.error("VPS permission normalization failed, aborting pipeline")
+                self.gate_state['upload_success'] = False
+                self._run_safe_operations_only()
+                return False
+        # -------------------------------------
         
         # NEW: UP3 POST-UPLOAD VERIFICATION
         up3_success = False
