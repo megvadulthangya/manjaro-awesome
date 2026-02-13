@@ -1,6 +1,7 @@
 """
 Main Orchestration Script for Arch Linux Package Builder
 WITH NON-BLOCKING HOKIBOT AND STAGING PUBLISH + SAFETY UPGRADES
+AND VPS HYGIENE EXTRAS CLASSIFICATION
 """
 
 import os
@@ -48,6 +49,9 @@ try:
     from modules.gpg.gpg_handler import GPGHandler
     
     from modules.hokibot.hokibot import HokibotRunner
+    
+    # Import config for VPS hygiene flags
+    import config
     
     MODULES_LOADED = True
 except ImportError as e:
@@ -499,12 +503,42 @@ class PackageBuilderOrchestrator:
         
         return built_packages, skipped_packages
     
+    def _classify_extra_files(self, extra_filenames: Set[str]) -> Dict[str, int]:
+        """
+        Classify extra files found on VPS after upload into categories.
+        Categories:
+          - db_files: repo_name.db*, repo_name.files* and their .sig
+          - metadata: *.pub, *.key, etc.
+          - package_artifacts: *.pkg.tar.*, *.sig (for packages, not db)
+          - unknown: everything else
+        """
+        categories = {'db_files': 0, 'metadata': 0, 'package_artifacts': 0, 'unknown': 0}
+        for fn in extra_filenames:
+            # Database/files artifacts
+            if (fn.startswith(f"{self.repo_name}.db") or 
+                fn.startswith(f"{self.repo_name}.files")):
+                categories['db_files'] += 1
+                continue
+            # Metadata files (public keys, etc.)
+            if fn.endswith(('.pub', '.key')):
+                categories['metadata'] += 1
+                continue
+            # Package artifacts (packages and their signatures)
+            if fn.endswith(('.pkg.tar.zst', '.pkg.tar.xz', '.sig')):
+                # For .sig, check if it's a database signature (already caught above)
+                # So any .sig reaching here is for a package (since db sigs were caught)
+                categories['package_artifacts'] += 1
+                continue
+            categories['unknown'] += 1
+        return categories
+    
     def phase_v_sign_and_update(self) -> bool:
         """
         Phase V: Sign and Update WITH STAGING PUBLISH, ATOMIC PROMOTION,
-        PRE‑PROMOTE VERIFICATION AND STALE STAGING CLEANUP.
+        PRE‑PROMOTE VERIFICATION, STALE STAGING CLEANUP,
+        AND VPS HYGIENE (extras classification + safe deletions)
         """
-        logger.info("PHASE V: Sign and Update WITH STAGING PUBLISH + SAFETY UPGRADES")
+        logger.info("PHASE V: Sign and Update WITH STAGING PUBLISH + SAFETY UPGRADES + VPS HYGIENE")
         
         # ------------------------------------------------------------
         # SAFETY NET: Ensure GPG is initialized before any signing
@@ -649,6 +683,18 @@ class PackageBuilderOrchestrator:
         else:
             logger.warning("Skipping permission normalization due to upload/promotion failure")
         
+        # ------------------ VPS HYGIENE: EXTRAS CLASSIFICATION ------------------
+        if overall_upload_success and up3_success:
+            logger.info("Running VPS extras classification...")
+            remote_files = self.ssh_client.list_remote_files(self.remote_dir)
+            expected_basenames = {f.name for f in files_to_upload}
+            extra_files = set(remote_files) - expected_basenames
+            classified = self._classify_extra_files(extra_files)
+            logger.info(f"VPS_EXTRAS_CLASSIFICATION: {classified}")
+        else:
+            logger.info("Skipping extras classification due to upload/promotion failure")
+        # ----------------------------------------------------------------------
+        
         # Step 6: VPS orphan signature sweep (ALWAYS RUN - SAFE)
         logger.info("Running VPS orphan signature sweep (safe operation)...")
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
@@ -663,7 +709,18 @@ class PackageBuilderOrchestrator:
         else:
             logger.info("Gates blocked VPS version prune")
         
-        # Step 8: Run Hokibot action (non-blocking)
+        # Step 8: VPS hygiene (safe deletions) if enabled
+        if config.ENABLE_VPS_HYGIENE:
+            logger.info("Running VPS hygiene (safe deletions)...")
+            success, stats = self.cleanup_manager.run_vps_hygiene(
+                desired_inventory=self.desired_inventory,
+                keep_latest=config.KEEP_LATEST_VERSIONS,
+                dry_run=config.VPS_HYGIENE_DRY_RUN,
+                keep_extra_metadata=config.KEEP_VPS_EXTRA_METADATA
+            )
+            logger.info(f"VPS hygiene stats: {stats}")
+        
+        # Step 9: Run Hokibot action (non-blocking)
         if self.build_tracker.hokibot_data:
             logger.info("Running Hokibot action phase (non-blocking)...")
             try:

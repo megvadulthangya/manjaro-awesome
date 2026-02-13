@@ -14,6 +14,7 @@ import re
 import logging
 from pathlib import Path
 from typing import List, Set, Tuple, Optional, Dict
+from functools import cmp_to_key
 
 logger = logging.getLogger(__name__)
 
@@ -42,82 +43,54 @@ class SmartCleanup:
         self.output_dir = output_dir
     
     @staticmethod
+    def parse_package_filename(filename: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse package name and full version (epoch:pkgver-pkgrel) from filename.
+        Returns (pkgname, version) or (None, None) on failure.
+        """
+        # Remove .pkg.tar.* suffix
+        for ext in ['.pkg.tar.zst', '.pkg.tar.xz', '.pkg.tar.gz', '.pkg.tar.bz2', '.pkg.tar.lzo']:
+            if filename.endswith(ext):
+                base = filename[:-len(ext)]
+                break
+        else:
+            return None, None
+
+        # Remove architecture suffix
+        arch_suffixes = ['-x86_64', '-any', '-i686', '-aarch64', '-armv7h', '-armv6h']
+        for arch in arch_suffixes:
+            if base.endswith(arch):
+                base = base[:-len(arch)]
+                break
+
+        # Now split by hyphen; last part is pkgrel, second last is pkgver (may contain colon), rest is pkgname
+        parts = base.split('-')
+        if len(parts) < 3:
+            return None, None
+
+        pkgrel = parts[-1]
+        pkgver = parts[-2]
+        pkgname = '-'.join(parts[:-2])
+
+        # pkgver may contain epoch, e.g., "2:1.0". That's fine.
+        version = f"{pkgver}-{pkgrel}"
+        return pkgname, version
+
+    @staticmethod
     def extract_package_name_from_filename(filename: str) -> Optional[str]:
-        """
-        Extract package name from package filename.
-        
-        Args:
-            filename: Package filename (e.g., 'package-1.0-1-x86_64.pkg.tar.zst')
-            
-        Returns:
-            Package name or None if cannot parse
-        """
-        try:
-            # Remove extensions
-            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-            parts = base.split('-')
-            
-            # Package name is everything before version-release-arch
-            # Handle both standard and epoch formats
-            for i in range(len(parts) - 3, 0, -1):
-                potential_name = '-'.join(parts[:i])
-                
-                # Check if remaining parts look like version-release-arch
-                remaining = parts[i:]
-                if len(remaining) >= 3:
-                    # Check for epoch format (e.g., "2-26.1.9-1")
-                    if remaining[0].isdigit() and '-' in '-'.join(remaining[1:]):
-                        # Valid epoch format
-                        return potential_name
-                    # Standard format (e.g., "26.1.9-1")
-                    elif any(c.isdigit() for c in remaining[0]) and remaining[1].isdigit():
-                        # Valid standard format
-                        return potential_name
-        
-        except Exception as e:
-            logger.debug(f"Could not parse filename {filename}: {e}")
-        
-        return None
-    
+        """Extract package name from package filename."""
+        pkgname, _ = SmartCleanup.parse_package_filename(filename)
+        return pkgname
+
     @staticmethod
     def extract_version_from_filename(filename: str, pkg_name: str) -> Optional[str]:
         """
         Extract version from package filename.
-        
-        Args:
-            filename: Package filename (e.g., 'qownnotes-26.1.9-1-x86_64.pkg.tar.zst')
-            pkg_name: Package name (e.g., 'qownnotes')
-            
-        Returns:
-            Version string (e.g., '26.1.9-1') or None if cannot parse
+        (pkg_name is ignored, kept for backward compatibility)
         """
-        try:
-            # Remove extensions
-            base = filename.replace('.pkg.tar.zst', '').replace('.pkg.tar.xz', '')
-            parts = base.split('-')
-            
-            # Find where package name ends
-            for i in range(len(parts) - 2, 0, -1):
-                possible_name = '-'.join(parts[:i])
-                if possible_name == pkg_name or possible_name.startswith(pkg_name + '-'):
-                    # Remaining parts: version-release-architecture
-                    if len(parts) >= i + 3:
-                        version_part = parts[i]
-                        release_part = parts[i+1]
-                        
-                        # Check for epoch (e.g., "2-26.1.9-1" -> "2:26.1.9-1")
-                        if i + 2 < len(parts) and parts[i].isdigit():
-                            epoch_part = parts[i]
-                            version_part = parts[i+1]
-                            release_part = parts[i+2]
-                            return f"{epoch_part}:{version_part}-{release_part}"
-                        else:
-                            return f"{version_part}-{release_part}"
-        except Exception as e:
-            logger.debug(f"Could not extract version from {filename}: {e}")
-        
-        return None
-    
+        _, version = SmartCleanup.parse_package_filename(filename)
+        return version
+
     def _compare_versions(self, version1: str, version2: str) -> int:
         """
         Compare two version strings using vercmp.
@@ -145,7 +118,7 @@ class SmartCleanup:
         
         # Fallback: string comparison (less accurate)
         return 1 if version1 > version2 else -1 if version1 < version2 else 0
-    
+
     def remove_old_package_versions(self):
         """
         🚨 AUTHORITATIVE VERSION CLEANUP: Keep only newest version per package
@@ -165,11 +138,10 @@ class SmartCleanup:
         # Remove signature files from the list (we'll handle them separately)
         package_files = [f for f in package_files if not f.name.endswith('.sig')]
         
-        # Group files by package name
+        # Group files by package name using robust parser
         packages_dict: Dict[str, List[Tuple[str, Path]]] = {}
         
         for pkg_file in package_files:
-            # Extract package name and version
             pkg_name = self.extract_package_name_from_filename(pkg_file.name)
             if not pkg_name:
                 logger.warning(f"Could not parse package name from {pkg_file.name}")
@@ -194,34 +166,32 @@ class SmartCleanup:
             
             logger.info(f"Found {len(files)} versions for {pkg_name}: {[v[0] for v in files]}")
             
-            # Find the newest version
-            newest_version = files[0][0]
-            newest_file = files[0][1]
-            
-            for version, pkg_file in files[1:]:
-                if self._compare_versions(version, newest_version) > 0:
-                    newest_version = version
-                    newest_file = pkg_file
+            # Find the newest version using version comparison
+            # We need to sort by version descending
+            def version_cmp(a, b):
+                return self._compare_versions(b[0], a[0])  # descending
+            files_sorted = sorted(files, key=cmp_to_key(version_cmp))
+            newest_version, newest_file = files_sorted[0]
+            older_files = files_sorted[1:]
             
             logger.info(f"Keeping newest version for {pkg_name}: {newest_version}")
             
             # Delete older versions
-            for version, pkg_file in files:
-                if pkg_file != newest_file:
-                    try:
-                        # Delete package file
-                        pkg_file.unlink()
-                        logger.info(f"Removed old version: {pkg_file.name}")
-                        
-                        # Delete signature file if exists
-                        sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
-                        if sig_file.exists():
-                            sig_file.unlink()
-                            logger.info(f"Removed signature: {sig_file.name}")
-                        
-                        total_deleted += 1
-                    except Exception as e:
-                        logger.warning(f"Could not delete {pkg_file}: {e}")
+            for version, pkg_file in older_files:
+                try:
+                    # Delete package file
+                    pkg_file.unlink()
+                    logger.info(f"Removed old version: {pkg_file.name}")
+                    
+                    # Delete signature file if exists
+                    sig_file = pkg_file.with_suffix(pkg_file.suffix + '.sig')
+                    if sig_file.exists():
+                        sig_file.unlink()
+                        logger.info(f"Removed signature: {sig_file.name}")
+                    
+                    total_deleted += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete {pkg_file}: {e}")
         
         if total_deleted > 0:
             logger.info(f"✅ Version cleanup: Removed {total_deleted} old package versions")
