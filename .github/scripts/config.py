@@ -6,7 +6,7 @@ OUTPUT_DIR = "built_packages"     # Local output directory
 BUILD_TRACKING_DIR = ".buildtracking"  # Build tracking directory
 
 # PACKAGER identity from environment variable (secure via GitHub Secrets)
-PACKAGER_ID = os.getenv("PACKAGER_ENV", "Maintainer <no-reply@gshoots.hu>")
+PACKAGER_ID = os.getenv("PACKAGER_ENV")
 
 # Hokibot Git identity for commits
 HOKIBOT_GIT_USER_NAME = "hokibot"
