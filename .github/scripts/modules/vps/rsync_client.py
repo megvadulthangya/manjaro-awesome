@@ -1,6 +1,7 @@
 """
 Rsync Client Module - Handles file transfers using Rsync
 WITH STAGING UPLOAD SUPPORT FOR ATOMIC PUBLISH
+AND DELTA-EFFICIENT STAGING USING --link-dest
 """
 
 import os
@@ -34,6 +35,20 @@ class RsyncClient:
         self.remote_dir = config['remote_dir']
         self.ssh_options = config.get('ssh_options', [])
         self.repo_name = config.get('repo_name', '')
+    
+    def _is_staging_path(self, remote_path: Optional[str]) -> bool:
+        """
+        Determine if the remote_path points to a staging directory under
+        the main remote_dir, i.e. contains '/.staging/' after the base.
+        """
+        if remote_path is None:
+            return False
+        # remote_path must start with self.remote_dir to be under it
+        if not remote_path.startswith(self.remote_dir):
+            return False
+        suffix = remote_path[len(self.remote_dir):]
+        # After the base, there should be exactly '/.staging/' followed by something
+        return suffix.startswith('/.staging/')
     
     def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path, vps_package_files: List[str]) -> bool:
         """
@@ -228,6 +243,8 @@ class RsyncClient:
         
         CRITICAL: This is transport-only. Deletions are handled separately.
         Supports staging by specifying remote_path (e.g., staging directory).
+        For staging uploads (remote_path under .staging/), adds --link-dest
+        to avoid re‑uploading files already present in the live REMOTE_DIR.
         
         Args:
             files_to_upload: List of file paths to upload
@@ -258,97 +275,83 @@ class RsyncClient:
             except Exception:
                 logger.info(f"  - {os.path.basename(f)} [UNKNOWN SIZE]")
         
-        # Build RSYNC command WITHOUT --delete (transport-only)
-        rsync_cmd = f"""
-        rsync -avz \
-          --progress \
-          --stats \
-          {" ".join(f"'{f}'" for f in files_to_upload)} \
-          '{self.vps_user}@{self.vps_host}:{dest_path}/'
-        """
+        # Check if this is a staging upload (target is under .staging/)
+        is_staging = self._is_staging_path(dest_path)
         
-        logger.info(f"RUNNING RSYNC COMMAND (NO --delete)")
+        # Build the rsync command base (without --delete)
+        def build_cmd(extra_ssh_options: str = "", use_link_dest: bool = False) -> str:
+            ssh_part = f"-e \"ssh {extra_ssh_options}\"" if extra_ssh_options else ""
+            link_dest_part = f"--link-dest='{self.remote_dir}'" if use_link_dest else ""
+            return f"""
+            rsync -avz \
+              --progress \
+              --stats \
+              {link_dest_part} \
+              {ssh_part} \
+              {" ".join(f"'{f}'" for f in files_to_upload)} \
+              '{self.vps_user}@{self.vps_host}:{dest_path}/'
+            """
         
-        # FIRST ATTEMPT
-        start_time = time.time()
-        
-        try:
-            result = subprocess.run(
-                rsync_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            end_time = time.time()
-            duration = int(end_time - start_time)
-            
-            logger.info(f"EXIT CODE (attempt 1): {result.returncode}")
-            if result.stdout:
-                for line in result.stdout.splitlines():
-                    if line.strip():
-                        logger.info(f"RSYNC: {line}")
-            if result.stderr:
-                for line in result.stderr.splitlines():
-                    if line.strip() and "No such file or directory" not in line:
-                        logger.error(f"RSYNC ERR: {line}")
-            
-            if result.returncode == 0:
-                logger.info(f"RSYNC upload successful! ({duration} seconds)")
-                return True
-            else:
-                logger.warning(f"First RSYNC attempt failed (code: {result.returncode})")
+        # Helper to run a command and return success/failure
+        def run_rsync(cmd_str: str, attempt_label: str) -> bool:
+            logger.info(f"RUNNING RSYNC COMMAND {attempt_label}")
+            start_time = time.time()
+            try:
+                result = subprocess.run(
+                    cmd_str,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                end_time = time.time()
+                duration = int(end_time - start_time)
                 
-        except Exception as e:
-            logger.error(f"RSYNC execution error: {e}")
+                logger.info(f"EXIT CODE {attempt_label}: {result.returncode}")
+                if result.stdout:
+                    for line in result.stdout.splitlines():
+                        if line.strip():
+                            logger.info(f"RSYNC {attempt_label}: {line}")
+                if result.stderr:
+                    for line in result.stderr.splitlines():
+                        if line.strip() and "No such file or directory" not in line:
+                            logger.error(f"RSYNC ERR {attempt_label}: {line}")
+                
+                if result.returncode == 0:
+                    logger.info(f"RSYNC upload successful {attempt_label}! ({duration} seconds)")
+                    return True
+                else:
+                    logger.warning(f"RSYNC attempt {attempt_label} failed (code: {result.returncode})")
+                    return False
+            except Exception as e:
+                logger.error(f"RSYNC execution error {attempt_label}: {e}")
+                return False
+        
+        # If this is a staging upload, try once with --link-dest (using default SSH options)
+        if is_staging:
+            logger.info("STAGING_UPLOAD: using --link-dest to avoid re‑uploading unchanged files")
+            cmd_link = build_cmd(extra_ssh_options="", use_link_dest=True)
+            if run_rsync(cmd_link, "STAGING (with --link-dest)"):
+                return True
+            # --link-dest attempt failed, fall back to original method (without link-dest)
+            logger.warning("STAGING_UPLOAD: --link-dest attempt failed, falling back to full upload")
+        # (If not staging, or fallback needed, proceed with original two‑attempt logic)
+        
+        # Original two‑attempt logic (no --link-dest)
+        # FIRST ATTEMPT (default SSH options)
+        cmd1 = build_cmd(extra_ssh_options="", use_link_dest=False)
+        if run_rsync(cmd1, "ATTEMPT 1"):
+            return True
         
         # SECOND ATTEMPT (with different SSH options)
         logger.info("Retrying with different SSH options...")
         time.sleep(5)
+        cmd2 = build_cmd(
+            extra_ssh_options="-o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3",
+            use_link_dest=False
+        )
+        if run_rsync(cmd2, "ATTEMPT 2"):
+            return True
         
-        rsync_cmd_retry = f"""
-        rsync -avz \
-          --progress \
-          --stats \
-          -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3" \
-          {" ".join(f"'{f}'" for f in files_to_upload)} \
-          '{self.vps_user}@{self.vps_host}:{dest_path}/'
-        """
-        
-        logger.info(f"RUNNING RSYNC RETRY COMMAND (NO --delete)")
-        
-        start_time = time.time()
-        
-        try:
-            result = subprocess.run(
-                rsync_cmd_retry,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            end_time = time.time()
-            duration = int(end_time - start_time)
-            
-            logger.info(f"EXIT CODE (attempt 2): {result.returncode}")
-            if result.stdout:
-                for line in result.stdout.splitlines():
-                    if line.strip():
-                        logger.info(f"RSYNC RETRY: {line}")
-            if result.stderr:
-                for line in result.stderr.splitlines():
-                    if line.strip() and "No such file or directory" not in line:
-                        logger.error(f"RSYNC RETRY ERR: {line}")
-            
-            if result.returncode == 0:
-                logger.info(f"RSYNC upload successful on retry! ({duration} seconds)")
-                return True
-            else:
-                logger.error(f"RSYNC upload failed on both attempts!")
-                return False
-                
-        except Exception as e:
-            logger.error(f"RSYNC retry execution error: {e}")
-            return False
+        logger.error("RSYNC upload failed on both attempts!")
+        return False
