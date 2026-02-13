@@ -104,6 +104,9 @@ class SSHClient:
         Acquires a remote lock before moving files to prevent concurrent promotions.
         Moves all files from staging dir to remote_dir, then removes staging dir.
         
+        If mv fails with "are the same file" (due to --link-dest hardlinks),
+        the file is skipped, the staging copy is removed, and promotion continues.
+        
         Args:
             run_id: Unique run identifier (staging dir name)
             
@@ -131,7 +134,17 @@ fi
 # Move files (including hidden) but not directories
 for f in "{staging_dir}"/* "{staging_dir}"/.[!.]*; do
     [ -f "$f" ] || [ -L "$f" ] || continue
-    mv -f "$f" "{self.remote_dir}/"
+    # Attempt move, capture stderr on failure
+    if ! output=$(mv -f "$f" "{self.remote_dir}/" 2>&1); then
+        # Check if error is due to source and destination being the same file
+        if echo "$output" | grep -q "are the same file"; then
+            echo "STAGING_PROMOTE_SKIP_SAME_FILE file=$(basename "$f")"
+            rm -f "$f"
+        else
+            echo "mv failed for $(basename "$f"): $output"
+            exit 1
+        fi
+    fi
 done
 # Check if any files remain (move failures)
 remaining=$(ls -A "{staging_dir}" 2>/dev/null | wc -l)
