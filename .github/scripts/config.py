@@ -104,3 +104,12 @@ KEEP_LATEST_VERSIONS = 1
 # If True, never delete public key / metadata files (*.pub, *.key, etc.) on VPS.
 # If False, they will be considered for deletion (subject to other rules).
 KEEP_VPS_EXTRA_METADATA = True
+
+# ----------------------------------------------------------------------
+# VPS HYGIENE 2‑PHASE SAFETY SWITCH
+# ----------------------------------------------------------------------
+# When False, even if VPS_HYGIENE_DRY_RUN=False, orphan signature deletions
+# are still blocked (only logged). When True, orphan signature deletions
+# are allowed when dry_run=False. Old‑version pruning remains dry‑run only
+# regardless of this flag.
+ENABLE_VPS_ORPHAN_SIG_DELETE = False

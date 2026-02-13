@@ -657,7 +657,7 @@ class CleanupManager:
     
     def run_vps_hygiene(self, remote_dir: str, repo_name: str, desired_inventory: Set[str],
                         keep_latest_versions: int = 1, dry_run: bool = True,
-                        keep_extra_metadata: bool = True):
+                        keep_extra_metadata: bool = True, enable_orphan_sig_delete: bool = False):
         """
         Perform safe VPS hygiene cleanup:
           - Never delete DB/files artifacts or their signatures.
@@ -666,6 +666,8 @@ class CleanupManager:
           - For packages NOT in desired_inventory: only log, never delete.
           - If keep_extra_metadata is True, do not delete *.pub, *.key, etc.
           - Log all deletion candidates with reason.
+          - 2‑phase safety switch: orphan sig deletion only if enable_orphan_sig_delete is True
+            and dry_run is False. Old‑version pruning remains dry‑run only.
         
         Args:
             remote_dir: Remote directory on VPS.
@@ -674,8 +676,9 @@ class CleanupManager:
             keep_latest_versions: Number of latest versions to keep per package.
             dry_run: If True, only log what would be deleted, do not actually delete.
             keep_extra_metadata: If True, never delete public key/metadata files.
+            enable_orphan_sig_delete: If False, orphan sig deletion is blocked (only logged).
         """
-        logger.info(f"VPS_HYGIENE: starting (dry_run={dry_run}, keep_latest={keep_latest_versions}, keep_metadata={keep_extra_metadata})")
+        logger.info(f"VPS_HYGIENE: starting (dry_run={dry_run}, keep_latest={keep_latest_versions}, keep_metadata={keep_extra_metadata}, enable_orphan_sig_delete={enable_orphan_sig_delete})")
         
         # Get all remote files
         remote_files = self._get_vps_file_inventory()
@@ -717,7 +720,8 @@ class CleanupManager:
         
         # 2. Metadata files: delete only if keep_extra_metadata is False
         if keep_extra_metadata:
-            logger.info(f"VPS_HYGIENE: keeping {len(metadata_files)} metadata files (keep_extra_metadata=True)")
+            if metadata_files:
+                logger.info(f"VPS_HYGIENE: keeping {len(metadata_files)} metadata files (keep_extra_metadata=True)")
         else:
             if metadata_files:
                 logger.info(f"VPS_HYGIENE: would delete {len(metadata_files)} metadata files (dry_run={dry_run})")
@@ -726,7 +730,7 @@ class CleanupManager:
                 if not dry_run:
                     self._delete_files_remote(list(metadata_files))
         
-        # 3. Orphan signatures: delete signatures whose base package file is missing
+        # 3. Orphan signatures: collect candidates and log report
         base_pkg_filenames = {fname for (_, fname, _, _) in package_files}
         orphan_sigs = []
         for sig_fname, sig_fpath in signature_map.items():
@@ -735,12 +739,12 @@ class CleanupManager:
             if base_fname not in base_pkg_filenames:
                 orphan_sigs.append(sig_fpath)
         
+        # Log structured report for orphan signatures
         if orphan_sigs:
-            logger.info(f"VPS_HYGIENE: found {len(orphan_sigs)} orphan signatures")
-            for fpath in orphan_sigs:
-                logger.info(f"VPS_HYGIENE_DELETE candidate={Path(fpath).name} reason=orphan_sig dry_run={1 if dry_run else 0}")
-            if not dry_run:
-                self._delete_files_remote(orphan_sigs)
+            orphan_basenames = [Path(f).name for f in orphan_sigs]
+            logger.info(f"ORPHAN_SIG_CANDIDATES count={len(orphan_sigs)} sample={orphan_basenames[:20]}")
+        else:
+            logger.info("ORPHAN_SIG_CANDIDATES count=0 sample=")
         
         # 4. Package version pruning for desired inventory only
         # Group packages by pkgname (only those in desired_inventory)
@@ -755,17 +759,13 @@ class CleanupManager:
                 logger.info(f"VPS_HYGIENE: package {pkgname} not in desired inventory, keeping {fname}")
         
         # For each pkgname in desired_inventory, keep only the newest keep_latest_versions
-        pkgs_to_delete = []
+        old_version_candidates = []   # list of full paths to delete
         for pkgname, pkg_entries in packages_by_name.items():
             if len(pkg_entries) <= keep_latest_versions:
                 continue
-            # Sort by version (using vercmp). We'll use subprocess for comparison.
-            # Create list of (version, fpath, fname)
+            # We'll use vercmp to sort versions descending (newest first)
             entries_with_version = [(v, fp, fn) for (fp, v, fn) in pkg_entries]
-            # Sort descending (newest first)
-            sorted_entries = sorted(entries_with_version, key=lambda x: x[0], reverse=False)  # Placeholder, we'll actually compare with vercmp
-            
-            # Custom sort with vercmp
+            # Custom sort with vercmp (descending)
             import functools
             def vercmp_key(a, b):
                 # a and b are (version, ...) tuples
@@ -777,7 +777,6 @@ class CleanupManager:
                     pass
                 # fallback: string compare
                 return (a[0] > b[0]) - (a[0] < b[0])
-            
             # Sort descending (newest first)
             sorted_entries = sorted(entries_with_version, key=functools.cmp_to_key(lambda x,y: -vercmp_key(x,y)))
             
@@ -785,21 +784,44 @@ class CleanupManager:
             delete_candidates = sorted_entries[keep_latest_versions:]
             
             for (version, fpath, fname) in delete_candidates:
-                pkgs_to_delete.append(fpath)
-                logger.info(f"VPS_HYGIENE_DELETE candidate={fname} reason=old_version (keeping newest {keep_latest_versions}) dry_run={1 if dry_run else 0}")
-                # Also delete corresponding signature if exists
+                old_version_candidates.append(fpath)
+                # Also add signature if present
                 sig_fname = fname + '.sig'
                 if sig_fname in signature_map:
-                    pkgs_to_delete.append(signature_map[sig_fname])
-                    logger.info(f"VPS_HYGIENE_DELETE candidate={sig_fname} reason=old_version_signature dry_run={1 if dry_run else 0}")
+                    old_version_candidates.append(signature_map[sig_fname])
         
-        # Execute deletions for package pruning
-        if pkgs_to_delete:
-            logger.info(f"VPS_HYGIENE: would delete {len(pkgs_to_delete)} files from version pruning (dry_run={dry_run})")
-            if not dry_run:
-                self._delete_files_remote(pkgs_to_delete)
+        # Log structured report for old version candidates
+        if old_version_candidates:
+            old_basenames = [Path(f).name for f in old_version_candidates]
+            logger.info(f"OLD_VERSION_CANDIDATES count={len(old_version_candidates)} sample={old_basenames[:20]}")
+        else:
+            logger.info("OLD_VERSION_CANDIDATES count=0 sample=")
         
-        # 5. Unknown files: log them but do not delete by default (could be added later)
+        # 5. Log per‑candidate deletion lines with effective dry_run flag
+        all_candidates = []  # for logging only
+        for fpath in orphan_sigs:
+            effective_dry_run = 1 if (dry_run or not enable_orphan_sig_delete) else 0
+            logger.info(f"VPS_HYGIENE_DELETE candidate={Path(fpath).name} reason=orphan_sig dry_run={effective_dry_run}")
+            all_candidates.append((fpath, effective_dry_run, 'orphan_sig'))
+        for fpath in old_version_candidates:
+            # Old version pruning remains dry‑run only regardless of enable_orphan_sig_delete
+            effective_dry_run = 1 if dry_run else 1   # forced to 1 because we never delete old versions yet
+            logger.info(f"VPS_HYGIENE_DELETE candidate={Path(fpath).name} reason=old_version dry_run={effective_dry_run}")
+            all_candidates.append((fpath, effective_dry_run, 'old_version'))
+        
+        # 6. Execute deletions only for files where effective_dry_run == 0
+        files_to_delete = [fpath for fpath, eff_dry, reason in all_candidates if eff_dry == 0]
+        if files_to_delete:
+            logger.info(f"VPS_HYGIENE: actually deleting {len(files_to_delete)} files (dry_run=False and safety checks passed)")
+            # Delete in batches
+            batch_size = 50
+            for i in range(0, len(files_to_delete), batch_size):
+                batch = files_to_delete[i:i + batch_size]
+                self._delete_files_remote(batch)
+        else:
+            logger.info("VPS_HYGIENE: no files will be deleted (dry_run or safety block)")
+        
+        # 7. Unknown files: log them but do not delete by default
         if unknown:
             logger.info(f"VPS_HYGIENE: found {len(unknown)} unknown files (not classified)")
             for fpath in unknown:

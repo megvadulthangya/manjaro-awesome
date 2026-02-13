@@ -695,6 +695,8 @@ class PackageBuilderOrchestrator:
                 dry_run = getattr(config, 'VPS_HYGIENE_DRY_RUN', True)
                 keep_latest = getattr(config, 'KEEP_LATEST_VERSIONS', 1)
                 keep_meta = getattr(config, 'KEEP_VPS_EXTRA_METADATA', True)
+                # New safety flag
+                enable_orphan_sig_delete = getattr(config, 'ENABLE_VPS_ORPHAN_SIG_DELETE', False)
                 
                 self.cleanup_manager.run_vps_hygiene(
                     remote_dir=self.remote_dir,
@@ -702,7 +704,8 @@ class PackageBuilderOrchestrator:
                     desired_inventory=self.desired_inventory,
                     keep_latest_versions=keep_latest,
                     dry_run=dry_run,
-                    keep_extra_metadata=keep_meta
+                    keep_extra_metadata=keep_meta,
+                    enable_orphan_sig_delete=enable_orphan_sig_delete   # NEW
                 )
             else:
                 logger.info("VPS_HYGIENE: disabled by config")
