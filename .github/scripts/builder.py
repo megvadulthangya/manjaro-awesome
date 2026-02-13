@@ -649,6 +649,66 @@ class PackageBuilderOrchestrator:
         else:
             logger.warning("Skipping permission normalization due to upload/promotion failure")
         
+        # 5j: EXTRAS CLASSIFICATION (P0) - Log detailed summary of remote files not expected
+        # Get current remote files list after promotion (or after upload if promotion failed)
+        remote_files_after = self.ssh_client.list_remote_files(self.remote_dir)
+        expected_basenames = {f.name for f in files_to_upload}
+        extra_files = [f for f in remote_files_after if f not in expected_basenames]
+        
+        if extra_files:
+            logger.info(f"EXTRAS_CLASSIFICATION: found {len(extra_files)} extra files on VPS")
+            # Classify extras
+            db_artifacts = []
+            meta_files = []
+            pkg_artifacts = []
+            unknown = []
+            
+            repo_prefix = self.repo_name
+            for fname in extra_files:
+                if fname.startswith(f"{repo_prefix}.db") or fname.startswith(f"{repo_prefix}.files"):
+                    db_artifacts.append(fname)
+                elif fname.endswith(('.pub', '.key')):
+                    meta_files.append(fname)
+                elif fname.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
+                    pkg_artifacts.append(fname)
+                else:
+                    unknown.append(fname)
+            
+            # Log counts and samples
+            logger.info(f"EXTRAS_CATEGORIES: DB/FILES={len(db_artifacts)}, METADATA={len(meta_files)}, PACKAGES={len(pkg_artifacts)}, UNKNOWN={len(unknown)}")
+            if db_artifacts:
+                logger.info(f"EXTRAS_DB_SAMPLE: {db_artifacts[:5]}")
+            if meta_files:
+                logger.info(f"EXTRAS_METADATA_SAMPLE: {meta_files[:5]}")
+            if pkg_artifacts:
+                logger.info(f"EXTRAS_PKG_SAMPLE: {pkg_artifacts[:5]}")
+            if unknown:
+                logger.info(f"EXTRAS_UNKNOWN_SAMPLE: {unknown[:5]}")
+        else:
+            logger.info("EXTRAS_CLASSIFICATION: no extra files found on VPS")
+        
+        # 5k: VPS HYGIENE (if enabled)
+        try:
+            import config
+            if getattr(config, 'ENABLE_VPS_HYGIENE', False):
+                logger.info("VPS_HYGIENE: starting safe VPS cleanup...")
+                dry_run = getattr(config, 'VPS_HYGIENE_DRY_RUN', True)
+                keep_latest = getattr(config, 'KEEP_LATEST_VERSIONS', 1)
+                keep_meta = getattr(config, 'KEEP_VPS_EXTRA_METADATA', True)
+                
+                self.cleanup_manager.run_vps_hygiene(
+                    remote_dir=self.remote_dir,
+                    repo_name=self.repo_name,
+                    desired_inventory=self.desired_inventory,
+                    keep_latest_versions=keep_latest,
+                    dry_run=dry_run,
+                    keep_extra_metadata=keep_meta
+                )
+            else:
+                logger.info("VPS_HYGIENE: disabled by config")
+        except Exception as e:
+            logger.warning(f"VPS_HYGIENE: exception during cleanup (non-fatal): {e}")
+        
         # Step 6: VPS orphan signature sweep (ALWAYS RUN - SAFE)
         logger.info("Running VPS orphan signature sweep (safe operation)...")
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()

@@ -87,3 +87,20 @@ INSTALL_RUNTIME_DEPS_IN_CI = True
 CONFLICT_REMOVE_ALLOWLIST = {
     "i3lock-color": ["i3lock"]
 }
+
+# ----------------------------------------------------------------------
+# VPS HYGIENE CONFIGURATION (P0)
+# ----------------------------------------------------------------------
+# Enable/disable automatic cleanup of extra files on the VPS after publish.
+ENABLE_VPS_HYGIENE = True
+
+# When True, only log what would be deleted; no actual deletions.
+VPS_HYGIENE_DRY_RUN = True
+
+# Number of latest versions to keep per package on the VPS.
+# Only applies to packages present in the desired inventory.
+KEEP_LATEST_VERSIONS = 1
+
+# If True, never delete public key / metadata files (*.pub, *.key, etc.) on VPS.
+# If False, they will be considered for deletion (subject to other rules).
+KEEP_VPS_EXTRA_METADATA = True
