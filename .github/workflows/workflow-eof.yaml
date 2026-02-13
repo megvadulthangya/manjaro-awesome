@@ -828,8 +828,7 @@ jobs:
           
           # Run as builder user with PYTHONPATH set for modular imports
           #su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
-          su -m builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
-
+          su -m builder -c "cd '$PWD' && env PACKAGER_ENV='$PACKAGER_ENV' PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
           
           BUILD_STATUS=$?
           echo ""
