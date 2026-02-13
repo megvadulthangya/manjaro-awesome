@@ -112,11 +112,11 @@ class ConfigLoader:
                 'output_dir': getattr(config_module, 'OUTPUT_DIR', 'built_packages'),
                 'build_tracking_dir': getattr(config_module, 'BUILD_TRACKING_DIR', '.build_tracking'),
                 'mirror_temp_dir': getattr(config_module, 'MIRROR_TEMP_DIR', '/tmp/repo_mirror'),
-                'sync_clone_dir': getattr(config_module, 'SYNC_CLONE_DIR', '/tmp/repo-gitclone'),  # neutral default
+                'sync_clone_dir': getattr(config_module, 'SYNC_CLONE_DIR', '/tmp/repo-builder-gitclone'),  # FIX: generic default
                 'aur_urls': getattr(config_module, 'AUR_URLS', ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"]),
                 'aur_build_dir': getattr(config_module, 'AUR_BUILD_DIR', 'build_aur'),
                 'ssh_options': getattr(config_module, 'SSH_OPTIONS', ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"]),
-                'github_repo': os.getenv('GITHUB_REPOSITORY', getattr(config_module, 'GITHUB_REPO', '')),  # no hardcoded default
+                'github_repo': os.getenv('GITHUB_REPOSITORY', getattr(config_module, 'GITHUB_REPO', '')),  # already generic
                 'packager_id': getattr(config_module, 'PACKAGER_ID', 'Arch Repo Builder <builder@localhost>'),  # neutral placeholder
                 'debug_mode': getattr(config_module, 'DEBUG_MODE', False),
                 'sign_packages': getattr(config_module, 'SIGN_PACKAGES', True),
@@ -126,11 +126,11 @@ class ConfigLoader:
                 'output_dir': 'built_packages',
                 'build_tracking_dir': '.build_tracking',
                 'mirror_temp_dir': '/tmp/repo_mirror',
-                'sync_clone_dir': '/tmp/repo-gitclone',  # neutral default
+                'sync_clone_dir': '/tmp/repo-builder-gitclone',  # FIX: generic default
                 'aur_urls': ["https://aur.archlinux.org/{pkg_name}.git", "git://aur.archlinux.org/{pkg_name}.git"],
                 'aur_build_dir': 'build_aur',
                 'ssh_options': ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes"],
-                'github_repo': os.getenv('GITHUB_REPOSITORY', ''),  # no hardcoded default
+                'github_repo': os.getenv('GITHUB_REPOSITORY', ''),  # already generic
                 'packager_id': 'Arch Repo Builder <builder@localhost>',  # neutral placeholder
                 'debug_mode': False,
                 'sign_packages': True,

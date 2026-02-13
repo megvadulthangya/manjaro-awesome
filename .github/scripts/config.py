@@ -6,7 +6,7 @@ OUTPUT_DIR = "built_packages"     # Local output directory
 BUILD_TRACKING_DIR = ".buildtracking"  # Build tracking directory
 
 # PACKAGER identity from environment variable (secure via GitHub Secrets)
-PACKAGER_ID = os.getenv("PACKAGER_ENV")
+PACKAGER_ID = os.getenv("PACKAGER_ENV", "")  # FIX: default to empty string
 
 # Hokibot Git identity for commits
 HOKIBOT_GIT_USER_NAME = "hokibot"
@@ -44,7 +44,7 @@ REQUIRED_BUILD_TOOLS = [
 
 # Temporary directories (runtime-required, /tmp is POSIX invariant)
 MIRROR_TEMP_DIR = "/tmp/repo_mirror"
-SYNC_CLONE_DIR = "/tmp/manjaro-awesome-gitclone"
+SYNC_CLONE_DIR = "/tmp/repo-builder-gitclone"  # FIX: generic, no repo name
 
 # AUR configuration
 AUR_URLS = [
@@ -55,8 +55,8 @@ AUR_URLS = [
 # Build directory names
 AUR_BUILD_DIR = "build_aur"
 
-# GitHub repository for synchronization
-GITHUB_REPO = "megvadulthangya/manjaro-awesome.git"
+# GitHub repository for synchronization (fork‑safe, fallback to env)
+GITHUB_REPO = os.getenv("GITHUB_REPOSITORY", "")  # FIX: no hardcoded owner/repo
 
 # Debug mode configuration - when True, bypass logger for critical build output
 DEBUG_MODE = True

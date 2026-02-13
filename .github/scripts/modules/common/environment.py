@@ -26,13 +26,13 @@ class EnvironmentValidator:
             'VPS_USER',
             'VPS_SSH_KEY',
             'REMOTE_DIR',
+            'PACKAGER_ENV',          # FIX: moved from optional to required, fail fast if missing
         ]
         
         optional_but_recommended = [
             'REPO_SERVER_URL',
             'GPG_KEY_ID',
             'GPG_PRIVATE_KEY',
-            'PACKAGER_ENV',
         ]
         
         # Check required variables
