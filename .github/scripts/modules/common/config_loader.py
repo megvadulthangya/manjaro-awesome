@@ -4,32 +4,90 @@ Config Loader Module - Handles configuration loading and validation
 
 import os
 import sys
+import logging
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigLoader:
     """Handles configuration loading and validation"""
     
     @staticmethod
+    def _is_valid_repo_root(path: Path) -> bool:
+        """
+        Validate candidate repository root by checking for expected project markers.
+        Conservative validation – at least one of the following must exist:
+          - .github/scripts/builder.py
+          - .github/scripts/packages.py
+          - .git
+        """
+        if not path or not path.is_dir():
+            return False
+        
+        # Prefer the explicit .github/scripts markers because the pipeline depends on that layout
+        if (path / ".github" / "scripts" / "builder.py").exists():
+            return True
+        if (path / ".github" / "scripts" / "packages.py").exists():
+            return True
+        if (path / ".git").exists():
+            return True
+        
+        return False
+    
+    @staticmethod
     def get_repo_root():
-        """Get the repository root directory reliably"""
+        """
+        Get the repository root directory using a robust, validated resolution order.
+        
+        Resolution order:
+        1. GITHUB_WORKSPACE environment variable (if set and path exists and passes validation)
+        2. Current working directory (if it passes validation)
+        3. Derive from __file__ location (4 levels up) (if it passes validation)
+        4. Raise RuntimeError if no valid root found
+        
+        Returns:
+            Path object representing the validated repository root.
+        
+        Raises:
+            RuntimeError: if no valid repository root can be determined.
+        """
+        # --- 1) GITHUB_WORKSPACE ---
         github_workspace = os.getenv('GITHUB_WORKSPACE')
         if github_workspace:
-            workspace_path = Path(github_workspace)
-            if workspace_path.exists():
-                return workspace_path
+            candidate = Path(github_workspace)
+            if ConfigLoader._is_valid_repo_root(candidate):
+                logger.info(f"REPO_ROOT_RESOLVED method=GITHUB_WORKSPACE path={candidate}")
+                return candidate
+            else:
+                logger.debug(f"REPO_ROOT_REJECTED method=GITHUB_WORKSPACE path={candidate}")
         
-        container_workspace = Path('/__w/manjaro-awesome/manjaro-awesome')
-        if container_workspace.exists():
-            return container_workspace
+        # --- 2) Current working directory ---
+        candidate = Path.cwd()
+        if ConfigLoader._is_valid_repo_root(candidate):
+            logger.info(f"REPO_ROOT_RESOLVED method=CWD path={candidate}")
+            return candidate
+        else:
+            logger.debug(f"REPO_ROOT_REJECTED method=CWD path={candidate}")
         
-        # Get script directory and go up to repo root
+        # --- 3) Derive from script location (4 levels up) ---
         script_path = Path(__file__).resolve()
-        repo_root = script_path.parent.parent.parent.parent
-        if repo_root.exists():
-            return repo_root
+        candidate = script_path.parent.parent.parent.parent
+        if ConfigLoader._is_valid_repo_root(candidate):
+            logger.info(f"REPO_ROOT_RESOLVED method=SCRIPT_DERIVE path={candidate}")
+            return candidate
+        else:
+            logger.debug(f"REPO_ROOT_REJECTED method=SCRIPT_DERIVE path={candidate}")
         
-        return Path.cwd()
+        # --- 4) No valid root found ---
+        raise RuntimeError(
+            "Cannot determine repository root. "
+            "Please either:\n"
+            "  - Set the GITHUB_WORKSPACE environment variable to the repository path, or\n"
+            "  - Run the script from within the repository root (or a subdirectory).\n"
+            "No candidate path passed validation checks (missing .github/scripts markers or .git)."
+        )
     
     @staticmethod
     def load_environment_config():
