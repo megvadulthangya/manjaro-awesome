@@ -155,6 +155,15 @@ class PackageBuilderOrchestrator:
         # GPG Handler
         self.gpg_handler = GPGHandler(self.sign_packages)
         
+        # EARLY GPG INIT: Import key immediately if GPG is enabled.
+        # This ensures builder environment is ready before any signing attempts.
+        if self.gpg_handler.gpg_enabled:
+            logger.info("Initializing GPG early...")
+            if not self.gpg_handler.import_gpg_key():
+                logger.warning("GPG key import failed, continuing without package signing")
+        else:
+            logger.info("GPG signing disabled (no key configured)")
+        
         # Shell executor
         self.shell_executor = ShellExecutor(self.debug_mode)
         
@@ -663,12 +672,6 @@ class PackageBuilderOrchestrator:
         logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH STAGING PUBLISH + SAFETY UPGRADES")
         
         try:
-            # Import GPG key if enabled
-            if self.gpg_handler.gpg_enabled:
-                logger.info("Initializing GPG...")
-                if not self.gpg_handler.import_gpg_key():
-                    logger.warning("GPG key import failed, continuing without signing")
-            
             # Phase I: VPS Sync
             if not self.phase_i_vps_sync():
                 logger.error("Phase I failed")

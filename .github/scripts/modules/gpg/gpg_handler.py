@@ -311,6 +311,9 @@ class GPGHandler:
             
         except Exception as e:
             logger.error(f"Error importing GPG key: {e}")
+            # Disable signing on any unexpected failure
+            self.gpg_enabled = False
+            self.sign_packages_enabled = False
             if 'temp_gpg_home' in locals():
                 shutil.rmtree(temp_gpg_home, ignore_errors=True)
             return False
