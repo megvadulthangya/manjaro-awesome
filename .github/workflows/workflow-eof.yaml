@@ -827,7 +827,9 @@ jobs:
           echo "=== Running Builder Script with Cache Support ==="
           
           # Run as builder user with PYTHONPATH set for modular imports
-          su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
+          #su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
+          su -m builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
+
           
           BUILD_STATUS=$?
           echo ""
