@@ -87,11 +87,3 @@ INSTALL_RUNTIME_DEPS_IN_CI = True
 CONFLICT_REMOVE_ALLOWLIST = {
     "i3lock-color": ["i3lock"]
 }
-
-# ------------------------------------------------------------
-# VPS hygiene settings (safe cleanup of orphaned/old files)
-# ------------------------------------------------------------
-ENABLE_VPS_HYGIENE = True               # Master switch
-VPS_HYGIENE_DRY_RUN = True               # Log deletions only, do not execute
-KEEP_LATEST_VERSIONS = 1                 # Number of package versions to keep
-KEEP_VPS_EXTRA_METADATA = True            # Keep *.pub, *.key, etc.

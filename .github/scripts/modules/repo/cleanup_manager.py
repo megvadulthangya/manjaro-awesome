@@ -1,6 +1,11 @@
 """
 Cleanup Manager Module - Handles Zero-Residue policy and server cleanup ONLY
-WITH IMPROVED DELETION OBSERVABILITY, VERSION NORMALIZATION, AND VPS HYGIENE
+WITH IMPROVED DELETION OBSERVABILITY AND VERSION NORMALIZATION
+
+CRITICAL: Version cleanup logic has been moved to SmartCleanup.
+This module now handles ONLY:
+1. Server cleanup (VPS zombie package removal)
+2. Database file maintenance
 """
 
 import os
@@ -10,7 +15,6 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import List, Optional, Set, Tuple, Dict
-from functools import cmp_to_key
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,6 @@ class CleanupManager:
     This module only handles:
     1. Server cleanup (removing zombie packages from VPS)
     2. Database file maintenance
-    3. VPS hygiene (extras classification + safe deletions)
     """
     
     def __init__(self, config: dict):
@@ -609,176 +612,3 @@ class CleanupManager:
             logger.info(f"Cleaned up {deleted_count} old database files")
         else:
             logger.info("No old database files to clean up")
-    
-    # ----------------------------------------------------------------------
-    # VPS Hygiene (safe deletions) implementation
-    # ----------------------------------------------------------------------
-    def run_vps_hygiene(self,
-                        desired_inventory: Set[str],
-                        keep_latest: int,
-                        dry_run: bool,
-                        keep_extra_metadata: bool) -> Tuple[bool, Dict]:
-        """
-        Perform safe VPS cleanup:
-          - Remove orphan signatures (safe always)
-          - Prune old versions of packages in desired_inventory (keep latest N)
-          - Never delete DB/files artifacts or metadata files (if keep_extra_metadata)
-          - Log all deletions with reason and dry_run flag.
-        
-        Args:
-            desired_inventory: Set of package names that should exist (from PKGBUILDs)
-            keep_latest: Number of latest versions to keep per package
-            dry_run: If True, only log deletions, do not execute
-            keep_extra_metadata: If True, keep files like *.pub, *.key
-            
-        Returns:
-            Tuple (success: bool, stats: dict)
-        """
-        logger.info("VPS_HYGIENE_START: safe cleanup")
-        stats = {'orphan_sigs': 0, 'old_versions': 0, 'total_candidates': 0, 'protected': 0}
-        
-        # 1. Get current VPS files
-        vps_files = self._get_vps_file_inventory()
-        if not vps_files:
-            logger.info("VPS_HYGIENE: no files on VPS")
-            return True, stats
-        
-        vps_files_set = set(vps_files)
-        
-        # 2. Classify each file
-        # We'll also map signature -> base file and detect protected files
-        from modules.repo.smart_cleanup import SmartCleanup
-        smart_cleanup = SmartCleanup(self.repo_name, self.output_dir)
-        
-        # Categories: file_path -> category
-        # category codes: 'db', 'metadata', 'package', 'unknown'
-        file_category = {}
-        # Signature mapping: signature_path -> base_path
-        sig_to_base = {}
-        # Package file grouping by pkgname: pkgname -> list of (file_path, version)
-        pkg_files = {}
-        # Protected files: db/files and (if keep_extra_metadata) metadata files
-        protected = set()
-        
-        for fp in vps_files:
-            fn = Path(fp).name
-            
-            # Database/files artifacts (including their .sig)
-            if (fn.startswith(f"{self.repo_name}.db") or 
-                fn.startswith(f"{self.repo_name}.files")):
-                file_category[fp] = 'db'
-                protected.add(fp)
-                continue
-            
-            # Metadata files (public keys, etc.)
-            if fn.endswith(('.pub', '.key')):
-                file_category[fp] = 'metadata'
-                if keep_extra_metadata:
-                    protected.add(fp)
-                continue
-            
-            # Signature files
-            if fn.endswith('.sig'):
-                base_fn = fn[:-4]  # remove .sig
-                # Find base file path (may not exist)
-                base_fp = None
-                for candidate in vps_files:
-                    if Path(candidate).name == base_fn:
-                        base_fp = candidate
-                        break
-                if base_fp:
-                    sig_to_base[fp] = base_fp
-                # Category will be determined later (if base is db, it's db; else package or unknown)
-                # We'll postpone categorization after we know base category.
-                continue
-            
-            # Package files
-            if fn.endswith(('.pkg.tar.zst', '.pkg.tar.xz')):
-                pkg_name, version = smart_cleanup.parse_package_filename(fn)
-                if pkg_name and version:
-                    file_category[fp] = 'package'
-                    pkg_files.setdefault(pkg_name, []).append((fp, version))
-                else:
-                    file_category[fp] = 'unknown'
-                continue
-            
-            # Everything else
-            file_category[fp] = 'unknown'
-        
-        # Now categorize signatures based on their base file's category
-        for sig_fp, base_fp in sig_to_base.items():
-            base_cat = file_category.get(base_fp, 'unknown')
-            if base_cat == 'db':
-                file_category[sig_fp] = 'db'
-                protected.add(sig_fp)
-            elif base_cat == 'package':
-                file_category[sig_fp] = 'package'   # signature for a package
-                # Note: we don't auto-protect package signatures; they will be deleted if the package is deleted.
-            else:
-                file_category[sig_fp] = 'unknown'   # signature without known base type
-        
-        # 3. Identify orphan signatures (signatures whose base file is missing)
-        orphan_sigs = []
-        for sig_fp, base_fp in sig_to_base.items():
-            if base_fp not in vps_files_set:
-                # Base file is missing
-                if file_category.get(sig_fp) == 'package' or file_category.get(sig_fp) == 'unknown':
-                    # Not a protected signature (db/metadata)
-                    orphan_sigs.append(sig_fp)
-                    stats['orphan_sigs'] += 1
-        
-        # 4. Version pruning for packages in desired_inventory
-        old_versions = []  # list of (file_path, version) to delete
-        for pkg_name, files in pkg_files.items():
-            if pkg_name not in desired_inventory:
-                # Not in desired inventory: leave alone, but log as extra later
-                continue
-            # Sort files by version descending
-            # We need a comparator that uses vercmp
-            def version_cmp(a, b):
-                # a and b are (file_path, version)
-                return smart_cleanup._compare_versions(b[1], a[1])  # descending: b version vs a version
-            files_sorted = sorted(files, key=cmp_to_key(version_cmp))
-            # Keep top keep_latest
-            keep = files_sorted[:keep_latest]
-            delete = files_sorted[keep_latest:]
-            for fp, ver in delete:
-                old_versions.append(fp)
-                stats['old_versions'] += 1
-                # Also mark its signature for deletion if present
-                # Find signature for this package file
-                for sig_fp, base_fp in sig_to_base.items():
-                    if base_fp == fp:
-                        old_versions.append(sig_fp)
-                        stats['old_versions'] += 1  # counting signature as separate candidate
-                        break
-        
-        # 5. Combine deletion candidates, filtering out protected files
-        candidates = set(orphan_sigs) | set(old_versions)
-        # Remove any that are in protected set
-        candidates = {c for c in candidates if c not in protected}
-        stats['total_candidates'] = len(candidates)
-        
-        # 6. Log each candidate
-        for fp in candidates:
-            reason = 'orphan_sig' if fp in orphan_sigs else 'old_version'
-            logger.info(f"VPS_HYGIENE_DELETE candidate={Path(fp).name} reason={reason} dry_run={1 if dry_run else 0}")
-        
-        # 7. Execute deletions if not dry_run
-        if not dry_run and candidates:
-            candidates_list = list(candidates)
-            logger.info(f"VPS_HYGIENE: deleting {len(candidates_list)} files")
-            # Delete in batches
-            batch_size = 50
-            success = True
-            for i in range(0, len(candidates_list), batch_size):
-                batch = candidates_list[i:i+batch_size]
-                if not self._delete_files_remote(batch):
-                    success = False
-            if success:
-                logger.info("VPS_HYGIENE: deletions successful")
-            else:
-                logger.error("VPS_HYGIENE: some deletions failed")
-        
-        logger.info(f"VPS_HYGIENE_END: stats={stats}")
-        return True, stats
