@@ -7,6 +7,7 @@ import subprocess
 import time
 import logging
 from pathlib import Path
+import shlex
 
 logger = logging.getLogger(__name__)
 
@@ -125,21 +126,46 @@ class ShellExecutor:
             env['USER'] = user
             env['LC_ALL'] = 'C'
             
-            try:
-                sudo_cmd = ['sudo', '-u', user]
-                if shell:
-                    sudo_cmd.extend(['bash', '-c', f'cd "{cwd}" && {cmd}'])
-                else:
-                    sudo_cmd.extend(cmd)
+            # Construct command that preserves environment for the target user
+            if shell:
+                # Build env vars prefix if extra_env provided
+                env_prefix = ""
+                if extra_env:
+                    env_pairs = []
+                    for k, v in extra_env.items():
+                        # Quote value safely for shell
+                        env_pairs.append(f"{k}={shlex.quote(v)}")
+                    if env_pairs:
+                        env_prefix = "env " + " ".join(env_pairs) + " "
                 
-                result = subprocess.run(
-                    sudo_cmd,
-                    capture_output=capture,
-                    text=True,
-                    check=check,
-                    env=env,
-                    timeout=timeout
-                )
+                # Full sudo command with explicit env and cd
+                sudo_cmd = f'sudo -u {user} bash -c "cd {shlex.quote(str(cwd))} && {env_prefix}{cmd}"'
+            else:
+                # For non-shell commands, we cannot use env prefix easily; fallback to original method
+                sudo_cmd = ['sudo', '-u', user]
+                sudo_cmd.extend(cmd)
+            
+            try:
+                # For shell=True case, pass as string; for shell=False case, pass as list
+                if shell:
+                    result = subprocess.run(
+                        sudo_cmd,
+                        shell=True,
+                        capture_output=capture,
+                        text=True,
+                        check=check,
+                        env=env,  # env still used for the sudo process itself (may be ignored)
+                        timeout=timeout
+                    )
+                else:
+                    result = subprocess.run(
+                        sudo_cmd,
+                        capture_output=capture,
+                        text=True,
+                        check=check,
+                        env=env,
+                        timeout=timeout
+                    )
                 
                 # CRITICAL FIX: When in debug mode, bypass logger for critical output
                 if log_cmd or self.debug_mode:

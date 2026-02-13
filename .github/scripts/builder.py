@@ -118,6 +118,9 @@ class PackageBuilderOrchestrator:
         self.post_repo_enable_sy_count = 0
         self.post_repo_enable_sy_ran = False
         
+        # Staging cleanup tracking
+        self.current_run_id = None
+        
         logger.info("PackageBuilderOrchestrator initialized")
     
     def _init_modules(self):
@@ -503,8 +506,20 @@ class PackageBuilderOrchestrator:
         logger.info("PHASE V: Sign and Update WITH STAGING PUBLISH + SAFETY UPGRADES")
         
         # ------------------------------------------------------------
-        # P1) Best‑effort cleanup of stale staging directories (≥24h)
+        # SAFETY NET: Ensure GPG is initialized before any signing
         # ------------------------------------------------------------
+        if self.gpg_handler.gpg_enabled:
+            # If builder environment is not set up, try import again
+            if not hasattr(self.gpg_handler, 'builder_gpg_env') or self.gpg_handler.builder_gpg_env is None:
+                logger.info("GPG builder environment not initialized – attempting import now...")
+                if not self.gpg_handler.import_gpg_key():
+                    logger.warning("GPG key import failed, continuing without package signing")
+            elif not self.gpg_handler._verify_builder_can_sign():
+                logger.warning("Builder cannot access GPG key – package signing will be disabled")
+                self.gpg_handler.sign_packages_enabled = False
+        # ------------------------------------------------------------
+        
+        # P1) Best‑effort cleanup of stale staging directories (≥24h)
         logger.info("Cleaning up stale staging directories older than 24 hours...")
         self.ssh_client.cleanup_old_staging(max_age_hours=24)
         # ------------------------------------------------------------
@@ -558,12 +573,12 @@ class PackageBuilderOrchestrator:
             return False
         
         # 5b: Generate unique run ID and staging path
-        run_id = self._generate_run_id()
-        staging_path = f"{self.remote_dir}/.staging/{run_id}"
-        logger.info(f"STAGING_RUN_ID={run_id} path={staging_path}")
+        self.current_run_id = self._generate_run_id()
+        staging_path = f"{self.remote_dir}/.staging/{self.current_run_id}"
+        logger.info(f"STAGING_RUN_ID={self.current_run_id} path={staging_path}")
         
         # 5c: Ensure staging directory exists on VPS
-        if not self.ssh_client.ensure_staging_dir(run_id):
+        if not self.ssh_client.ensure_staging_dir(self.current_run_id):
             logger.error("Failed to create staging directory on VPS")
             self.gate_state['upload_success'] = False
             self._run_safe_operations_only()
@@ -594,7 +609,7 @@ class PackageBuilderOrchestrator:
             
             # 5f: Promote staging to live (with remote lock)
             logger.info(f"Promoting staging -> live...")
-            promotion_success = self.ssh_client.promote_staging(run_id)
+            promotion_success = self.ssh_client.promote_staging(self.current_run_id)
             self.gate_state['promotion_success'] = promotion_success
             
             if not promotion_success:
@@ -667,6 +682,23 @@ class PackageBuilderOrchestrator:
         package_count, signature_count, orphaned_count = self.cleanup_manager.cleanup_vps_orphaned_signatures()
         logger.info(f"Safe operations complete: {package_count} packages, {signature_count} signatures, deleted {orphaned_count} orphans")
     
+    def _cleanup_staging_dir(self):
+        """Fail-safe cleanup of the staging directory for this run if it still exists."""
+        if self.current_run_id:
+            logger.info(f"Attempting to clean up staging directory for run {self.current_run_id}...")
+            # Only remove if promotion was not successful (otherwise already removed)
+            if not self.gate_state.get('promotion_success', False):
+                staging_path = f"{self.remote_dir}/.staging/{self.current_run_id}"
+                rm_cmd = f"rm -rf {staging_path}"
+                ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", rm_cmd]
+                try:
+                    subprocess.run(ssh_cmd, capture_output=True, timeout=30, check=False)
+                    logger.info(f"Staging directory {self.current_run_id} removed during cleanup.")
+                except Exception as e:
+                    logger.warning(f"Could not remove staging directory {self.current_run_id}: {e}")
+            else:
+                logger.debug(f"Staging directory already promoted and removed; no cleanup needed.")
+    
     def run(self) -> int:
         """Main execution flow WITH STAGING PUBLISH AND NON-BLOCKING HOKIBOT + SAFETY UPGRADES"""
         logger.info("ARCH LINUX PACKAGE BUILDER - MODULAR ORCHESTRATION WITH STAGING PUBLISH + SAFETY UPGRADES")
@@ -731,6 +763,8 @@ class PackageBuilderOrchestrator:
             # Cleanup GPG
             if hasattr(self, 'gpg_handler'):
                 self.gpg_handler.cleanup()
+            # Fail-safe staging cleanup
+            self._cleanup_staging_dir()
 
 
 def main():
