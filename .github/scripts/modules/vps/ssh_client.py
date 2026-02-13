@@ -175,6 +175,7 @@ echo "PROMOTE_SUCCESS"
     def cleanup_old_staging(self, max_age_hours: int = 24) -> bool:
         """
         Delete staging directories older than max_age_hours under REMOTE_DIR/.staging/.
+        Only directories matching 'run_*' are considered for deletion.
         The lock directory (.promote.lock) is never deleted by this operation.
         Safe, best‑effort cleanup – failures are logged but do not abort the pipeline.
         
@@ -188,16 +189,11 @@ echo "PROMOTE_SUCCESS"
         staging_parent = f"{self.remote_dir}/.staging"
         minutes = max_age_hours * 60
         
+        # Ensure parent exists, then delete old run_* directories.
         remote_cmd = f"""
-if [ -d "{staging_parent}" ]; then
-    find "{staging_parent}" -maxdepth 1 -type d \
-        -not -name ".staging" \
-        -not -name ".promote.lock" \
-        -mmin +{minutes} -exec rm -rf {{}} \\; 2>/dev/null || true
-    echo "CLEANUP_OK"
-else
-    echo "NO_STAGING_DIR"
-fi
+mkdir -p "{staging_parent}" || echo "MKDIR_FAIL"
+find "{staging_parent}" -maxdepth 1 -type d -name 'run_*' -mmin +{minutes} -exec rm -rf {{}} \\; -print 2>&1 || echo "FIND_FAIL"
+echo "CLEANUP_OK"
 """
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
@@ -209,11 +205,17 @@ fi
                 check=False,
                 timeout=60
             )
+            # Log full output for debugging (first 500 chars)
+            if result.stdout:
+                logger.debug(f"STALE_STAGING_CLEANUP_STDOUT: {result.stdout[:500]}")
+            if result.stderr:
+                logger.warning(f"STALE_STAGING_CLEANUP_STDERR: {result.stderr[:500]}")
+                
             if result.returncode == 0 and "CLEANUP_OK" in result.stdout:
                 logger.info(f"STALE_STAGING_CLEANUP: removed directories older than {max_age_hours}h")
                 return True
             else:
-                logger.warning(f"STALE_STAGING_CLEANUP_FAIL: {result.stderr[:200]}")
+                logger.warning(f"STALE_STAGING_CLEANUP_FAIL: rc={result.returncode} stderr={result.stderr[:200]}")
                 return False
         except Exception as e:
             logger.error(f"STALE_STAGING_CLEANUP_EXCEPTION: {e}")
