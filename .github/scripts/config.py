@@ -112,4 +112,4 @@ KEEP_VPS_EXTRA_METADATA = True
 # are still blocked (only logged). When True, orphan signature deletions
 # are allowed when dry_run=False. Old‑version pruning remains dry‑run only
 # regardless of this flag.
-ENABLE_VPS_ORPHAN_SIG_DELETE = False
+ENABLE_VPS_ORPHAN_SIG_DELETE = True
