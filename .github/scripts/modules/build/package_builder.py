@@ -882,6 +882,7 @@ class PackageBuilder:
 def create_package_builder(
     packager_id: str,
     output_dir: Path,
+    gpg_handler: Optional[GPGHandler] = None,
     gpg_key_id: Optional[str] = None,
     gpg_private_key: Optional[str] = None,
     sign_packages: bool = True,
@@ -896,6 +897,7 @@ def create_package_builder(
     Args:
         packager_id: Packager identity string
         output_dir: Directory for built packages
+        gpg_handler: Optional existing GPGHandler instance (if provided, overrides gpg_key_id/gpg_private_key)
         gpg_key_id: GPG key ID for signing (optional)
         gpg_private_key: GPG private key (optional)
         sign_packages: Enable package signing
@@ -910,17 +912,30 @@ def create_package_builder(
     # Initialize version manager
     version_manager = VersionManager()
     
-    # Initialize GPG handler
-    gpg_handler = GPGHandler(sign_packages=sign_packages)
-    if gpg_key_id:
-        gpg_handler.gpg_key_id = gpg_key_id
-    if gpg_private_key:
-        gpg_handler.gpg_private_key = gpg_private_key
+    # Initialize GPG handler (use existing if provided, otherwise create new)
+    if gpg_handler is not None:
+        # Use the provided handler directly (assumes it's already initialized)
+        actual_gpg_handler = gpg_handler
+    else:
+        # Create a new GPG handler
+        actual_gpg_handler = GPGHandler(sign_packages=sign_packages)
+        if gpg_key_id:
+            actual_gpg_handler.gpg_key_id = gpg_key_id
+        if gpg_private_key:
+            actual_gpg_handler.gpg_private_key = gpg_private_key
+        
+        # Recompute enabled state based on updated attributes
+        actual_gpg_handler.gpg_enabled = bool(actual_gpg_handler.gpg_private_key and actual_gpg_handler.gpg_key_id)
+        actual_gpg_handler.sign_packages_enabled = sign_packages and actual_gpg_handler.gpg_enabled
+        
+        # Import the key if enabled
+        if actual_gpg_handler.gpg_enabled:
+            actual_gpg_handler.import_gpg_key()
     
     # Create package builder
     return PackageBuilder(
         version_manager=version_manager,
-        gpg_handler=gpg_handler,
+        gpg_handler=actual_gpg_handler,
         packager_id=packager_id,
         output_dir=output_dir,
         version_tracker=version_tracker,  # Pass version tracker

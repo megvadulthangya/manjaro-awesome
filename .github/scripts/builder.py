@@ -170,12 +170,13 @@ class PackageBuilderOrchestrator:
         # Shell executor
         self.shell_executor = ShellExecutor(self.debug_mode)
         
-        # Package builder
+        # Package builder - pass the existing gpg_handler
         self._ensure_output_directory()
         
         self.package_builder = create_package_builder(
             packager_id=self.packager_id,
             output_dir=self.output_dir,
+            gpg_handler=self.gpg_handler,          # Pass the initialized handler
             gpg_key_id=self.gpg_key_id,
             gpg_private_key=self.gpg_private_key,
             sign_packages=self.sign_packages,
