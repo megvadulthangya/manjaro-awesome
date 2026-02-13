@@ -95,7 +95,7 @@ CONFLICT_REMOVE_ALLOWLIST = {
 ENABLE_VPS_HYGIENE = True
 
 # When True, only log what would be deleted; no actual deletions.
-VPS_HYGIENE_DRY_RUN = True
+VPS_HYGIENE_DRY_RUN = False
 
 # Number of latest versions to keep per package on the VPS.
 # Only applies to packages present in the desired inventory.
