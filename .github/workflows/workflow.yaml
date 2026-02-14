@@ -1,4 +1,4 @@
-name: Manjaro Package Builder EOF
+name: Manjaro Package Builder
 
 on:
   workflow_dispatch:
