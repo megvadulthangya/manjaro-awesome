@@ -363,25 +363,54 @@ echo "CLEANUP_OK"
             return False
     
     def ensure_remote_directory(self):
-        """Ensure remote directory exists and has correct permissions"""
+        """
+        Ensure remote directory exists and is writable by the SSH user.
+        Performs comprehensive checks and fails fast with actionable commands.
+        """
         logger.info("Ensuring remote directory exists...")
+        staging_parent = f"{self.remote_dir}/.staging"
         
         remote_cmd = f"""
-        # Check if directory exists
-        if [ ! -d "{self.remote_dir}" ]; then
-            echo "Creating directory"
-            sudo mkdir -p "{self.remote_dir}"
-            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
-            sudo chmod -R 755 "{self.remote_dir}"
-            echo "Directory created and permissions set"
-        else
-            echo "Directory exists"
-            # Ensure correct permissions
-            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
-            sudo chmod -R 755 "{self.remote_dir}"
-            echo "Permissions verified"
-        fi
-        """
+set -e
+# Check/create remote_dir
+if [ ! -d "{self.remote_dir}" ]; then
+    mkdir -p "{self.remote_dir}"
+    echo "CREATED_REMOTE_DIR"
+else
+    echo "REMOTE_DIR_EXISTS"
+fi
+
+# Verify writable
+if [ ! -w "{self.remote_dir}" ]; then
+    echo "REMOTE_DIR_NOT_WRITABLE"
+    exit 1
+fi
+
+# Create and delete a temp file
+tmpfile="{self.remote_dir}/.write_test_$$"
+touch "$tmpfile" || (echo "TMP_CREATE_FAIL" && exit 1)
+rm -f "$tmpfile" || (echo "TMP_DELETE_FAIL" && exit 1)
+
+# Check/create staging parent
+if [ ! -d "{staging_parent}" ]; then
+    mkdir -p "{staging_parent}"
+    echo "CREATED_STAGING_PARENT"
+else
+    echo "STAGING_PARENT_EXISTS"
+fi
+
+if [ ! -w "{staging_parent}" ]; then
+    echo "STAGING_PARENT_NOT_WRITABLE"
+    exit 1
+fi
+
+# Create and delete a temp file in staging
+tmpfile="{staging_parent}/.write_test_$$"
+touch "$tmpfile" || (echo "STAGING_TMP_CREATE_FAIL" && exit 1)
+rm -f "$tmpfile" || (echo "STAGING_TMP_DELETE_FAIL" && exit 1)
+
+echo "ALL_CHECKS_PASSED"
+"""
         
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
@@ -390,20 +419,69 @@ echo "CLEANUP_OK"
                 ssh_cmd,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
+                timeout=30
             )
+            output = result.stdout
+            stderr = result.stderr
             
-            if result.returncode == 0:
-                logger.info("Remote directory verified")
-            else:
-                logger.warning(f"Could not ensure remote directory: {result.stderr[:200]}")
+            if result.returncode != 0:
+                # Determine failure reason
+                if "REMOTE_DIR_NOT_WRITABLE" in output:
+                    error_msg = "Remote directory exists but is not writable"
+                elif "STAGING_PARENT_NOT_WRITABLE" in output:
+                    error_msg = "Staging parent exists but is not writable"
+                elif "TMP_CREATE_FAIL" in output:
+                    error_msg = "Failed to create temporary file in remote_dir"
+                elif "STAGING_TMP_CREATE_FAIL" in output:
+                    error_msg = "Failed to create temporary file in staging parent"
+                else:
+                    error_msg = f"SSH command failed with exit code {result.returncode}"
                 
+                logger.error(
+                    f"REMOTE_DIR_NOT_WRITABLE: vps_user={self.vps_user} "
+                    f"vps_host={self.vps_host} remote_dir={self.remote_dir} "
+                    f"staging_parent={staging_parent} reason={error_msg}"
+                )
+                
+                # Log actionable commands
+                logger.error(f"To fix, run on VPS as root or with sudo:")
+                logger.error(f"  mkdir -p \"{staging_parent}\"")
+                logger.error(f"  chown -R \"{self.vps_user}\" \"{self.remote_dir}\"")
+                logger.error(f"  find \"{self.remote_dir}\" -type d -exec chmod 755 {{}} \\;")
+                logger.error(f"  find \"{self.remote_dir}\" -type f -exec chmod 644 {{}} \\;")
+                
+                raise RuntimeError(f"Remote directory not writable or setup failed: {error_msg}")
+            
+            # If returncode 0 but we didn't see ALL_CHECKS_PASSED, something else failed
+            if "ALL_CHECKS_PASSED" not in output:
+                logger.error(
+                    f"REMOTE_DIR_CREATE_FAIL: vps_user={self.vps_user} "
+                    f"vps_host={self.vps_host} remote_dir={self.remote_dir} "
+                    f"staging_parent={staging_parent} output={output}"
+                )
+                raise RuntimeError("Remote directory setup incomplete")
+            
+            logger.info("Remote directory verified")
+            
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"REMOTE_DIR_TIMEOUT: vps_user={self.vps_user} vps_host={self.vps_host} "
+                f"remote_dir={self.remote_dir} staging_parent={staging_parent}"
+            )
+            raise RuntimeError("SSH timeout while ensuring remote directory")
         except Exception as e:
-            logger.warning(f"Could not ensure remote directory: {e}")
+            if not isinstance(e, RuntimeError):
+                logger.error(
+                    f"REMOTE_DIR_EXCEPTION: vps_user={self.vps_user} vps_host={self.vps_host} "
+                    f"remote_dir={self.remote_dir} staging_parent={staging_parent} error={str(e)}"
+                )
+                raise RuntimeError(f"Unexpected error ensuring remote directory: {e}")
+            raise
     
     def normalize_permissions(self, remote_dir: Optional[str] = None) -> bool:
         """
-        Normalize permissions on remote repository directory:
+        Normalize permissions on remote repository directory (best effort):
         - All directories: chmod 755
         - All files: chmod 644
         
@@ -411,20 +489,17 @@ echo "CLEANUP_OK"
             remote_dir: Remote directory path (defaults to self.remote_dir)
             
         Returns:
-            True if successful, False otherwise
+            True (even on warnings), False only on local/SSH failures.
         """
         target_dir = remote_dir or self.remote_dir
         
         logger.info(f"VPS_PERMS_NORMALIZE_START dir={target_dir}")
         
-        # Build remote command to set directory and file permissions
-        # Use find with -type d for directories, -type f for regular files
+        # Build remote command without suppressing stderr
         remote_cmd = f"""
-        # Set directory permissions to 755
-        find "{target_dir}" -type d -exec chmod 755 {{}} \\; 2>/dev/null || true
-        # Set file permissions to 644 for all regular files
-        find "{target_dir}" -type f -exec chmod 644 {{}} \\; 2>/dev/null || true
-        """
+find "{target_dir}" -type d -exec chmod 755 {{}} \\;
+find "{target_dir}" -type f -exec chmod 644 {{}} \\;
+"""
         
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
@@ -437,19 +512,41 @@ echo "CLEANUP_OK"
                 timeout=60
             )
             
-            if result.returncode == 0:
-                logger.info("VPS_PERMS_NORMALIZE_OK")
-                return True
-            else:
+            # If command failed, log warning but return True
+            if result.returncode != 0:
                 stderr_snippet = result.stderr[:200] if result.stderr else "No stderr"
-                logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={stderr_snippet}")
-                return False
-                
+                logger.warning(
+                    f"VPS_PERMS_NORMALIZE_WARN dir={target_dir} stderr_snippet={stderr_snippet}"
+                )
+                # Log actionable commands
+                logger.warning(f"To fix permissions manually, run on VPS:")
+                logger.warning(f"  find \"{target_dir}\" -type d -exec chmod 755 {{}} \\;")
+                logger.warning(f"  find \"{target_dir}\" -type f -exec chmod 644 {{}} \\;")
+                logger.warning(f"  chown -R \"{self.vps_user}\" \"{target_dir}\"")
+                # Return True to not abort pipeline
+                return True
+            
+            # Also check stderr for permission issues even if returncode 0
+            if result.stderr and ("permission denied" in result.stderr.lower() or "cannot access" in result.stderr.lower()):
+                stderr_snippet = result.stderr[:200]
+                logger.warning(
+                    f"VPS_PERMS_NORMALIZE_WARN dir={target_dir} stderr_snippet={stderr_snippet}"
+                )
+                # Log actionable commands anyway
+                logger.warning(f"To fix permissions, run on VPS:")
+                logger.warning(f"  chown -R \"{self.vps_user}\" \"{target_dir}\"")
+                logger.warning(f"  find \"{target_dir}\" -type d -exec chmod 755 {{}} \\;")
+                logger.warning(f"  find \"{target_dir}\" -type f -exec chmod 644 {{}} \\;")
+                # Return True
+            
+            logger.info("VPS_PERMS_NORMALIZE_OK")
+            return True
+            
         except subprocess.TimeoutExpired:
-            logger.error("VPS_PERMS_NORMALIZE_FAIL stderr_snippet=Timeout after 60 seconds")
+            logger.error(f"VPS_PERMS_NORMALIZE_FAIL dir={target_dir} reason=timeout")
             return False
         except Exception as e:
-            logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={str(e)[:200]}")
+            logger.error(f"VPS_PERMS_NORMALIZE_FAIL dir={target_dir} error={str(e)[:200]}")
             return False
     
     def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
