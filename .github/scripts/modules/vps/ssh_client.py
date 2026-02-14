@@ -363,100 +363,68 @@ echo "CLEANUP_OK"
             return False
     
     def ensure_remote_directory(self):
-        """
-        CHECK-ONLY: Verify remote directory exists, is writable, and .staging can be created.
-        If any check fails, logs detailed instructions and raises RuntimeError (fail-fast).
-        """
-        logger.info("VPS_DIR_CHECK_START")
+        """Ensure remote directory exists and has correct permissions"""
+        logger.info("Ensuring remote directory exists...")
         
-        # 1) Check if directory exists and is a directory
-        check_dir_cmd = f"test -d '{self.remote_dir}' && echo 'EXISTS'"
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", check_dir_cmd]
+        remote_cmd = f"""
+        # Check if directory exists
+        if [ ! -d "{self.remote_dir}" ]; then
+            echo "Creating directory"
+            sudo mkdir -p "{self.remote_dir}"
+            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
+            sudo chmod -R 755 "{self.remote_dir}"
+            echo "Directory created and permissions set"
+        else
+            echo "Directory exists"
+            # Ensure correct permissions
+            sudo chown -R {self.vps_user}:www-data "{self.remote_dir}"
+            sudo chmod -R 755 "{self.remote_dir}"
+            echo "Permissions verified"
+        fi
+        """
+        
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
+        
         try:
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False, timeout=30)
-            if result.returncode != 0 or 'EXISTS' not in result.stdout:
-                raise RuntimeError(self._build_error_instructions("Directory does not exist or is not a directory"))
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(self._build_error_instructions("SSH timeout checking directory existence"))
-        
-        # 2) Check writability: create and remove a temporary file
-        temp_file = f"{self.remote_dir}/.check_write_{random.randint(1000,9999)}"
-        write_check_cmd = f"touch '{temp_file}' && rm '{temp_file}' && echo 'WRITABLE'"
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", write_check_cmd]
-        try:
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False, timeout=30)
-            if result.returncode != 0 or 'WRITABLE' not in result.stdout:
-                raise RuntimeError(self._build_error_instructions("Directory is not writable by SSH user"))
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(self._build_error_instructions("SSH timeout checking writability"))
-        
-        # 3) Check that .staging can be created (parent must be writable)
-        staging_parent = f"{self.remote_dir}/.staging"
-        staging_check_cmd = f"mkdir -p '{staging_parent}' && rmdir '{staging_parent}' 2>/dev/null && echo 'OK'"
-        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", staging_check_cmd]
-        try:
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False, timeout=30)
-            if result.returncode != 0 or 'OK' not in result.stdout:
-                raise RuntimeError(self._build_error_instructions("Cannot create .staging directory (parent not writable)"))
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(self._build_error_instructions("SSH timeout checking .staging creation"))
-        
-        logger.info("VPS_DIR_CHECK_OK")
-    
-    def _build_error_instructions(self, reason: str) -> str:
-        """
-        Build error message with instructions for the user to fix VPS setup.
-        Includes structured prefix VPS_SETUP_REQUIRED=1.
-        """
-        instructions = f"""
-VPS_SETUP_REQUIRED=1
-VPS_DIR_CHECK_FAIL reason={reason}
-
-To fix this, please run the following commands on your VPS as root:
-
-# Create the directory if missing
-sudo mkdir -p <REMOTE_DIR>
-
-# Set ownership to your SSH user and web server group
-sudo chown -R <VPS_USER>:<WEB_GROUP> <REMOTE_DIR>
-
-# Set permissions: directories 755, files 644
-sudo find <REMOTE_DIR> -type d -exec chmod 755 {{}} \\;
-sudo find <REMOTE_DIR> -type f -exec chmod 644 {{}} \\;
-
-# Ensure .staging exists and is writable
-sudo mkdir -p <REMOTE_DIR>/.staging
-sudo chown <VPS_USER>:<WEB_GROUP> <REMOTE_DIR>/.staging
-sudo chmod 755 <REMOTE_DIR>/.staging
-
-Replace <REMOTE_DIR> with your remote directory, <VPS_USER> with your SSH user, and <WEB_GROUP> with the web server group (e.g., www-data).
-"""
-        return instructions
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("Remote directory verified")
+            else:
+                logger.warning(f"Could not ensure remote directory: {result.stderr[:200]}")
+                
+        except Exception as e:
+            logger.warning(f"Could not ensure remote directory: {e}")
     
     def normalize_permissions(self, remote_dir: Optional[str] = None) -> bool:
         """
-        Best-effort permission normalization on remote repository directory.
-        Attempts chmod without sudo; if it fails, logs a warning and continues.
+        Normalize permissions on remote repository directory:
+        - All directories: chmod 755
+        - All files: chmod 644
         
         Args:
             remote_dir: Remote directory path (defaults to self.remote_dir)
             
         Returns:
-            Always True (best-effort, does not block pipeline)
+            True if successful, False otherwise
         """
         target_dir = remote_dir or self.remote_dir
         
-        logger.info(f"VPS_PERMS_NORMALIZE_START dir={target_dir} (best-effort)")
+        logger.info(f"VPS_PERMS_NORMALIZE_START dir={target_dir}")
         
-        # Build remote command without sudo, using find with -type d and -type f
-        # If it fails, we ignore the error and log a warning.
+        # Build remote command to set directory and file permissions
+        # Use find with -type d for directories, -type f for regular files
         remote_cmd = f"""
-# Set directory permissions to 755 (if possible)
-find "{target_dir}" -type d -exec chmod 755 {{}} \\; 2>/dev/null
-# Set file permissions to 644 for all regular files (if possible)
-find "{target_dir}" -type f -exec chmod 644 {{}} \\; 2>/dev/null
-echo "DONE"
-"""
+        # Set directory permissions to 755
+        find "{target_dir}" -type d -exec chmod 755 {{}} \\; 2>/dev/null || true
+        # Set file permissions to 644 for all regular files
+        find "{target_dir}" -type f -exec chmod 644 {{}} \\; 2>/dev/null || true
+        """
         
         ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}", remote_cmd]
         
@@ -471,17 +439,18 @@ echo "DONE"
             
             if result.returncode == 0:
                 logger.info("VPS_PERMS_NORMALIZE_OK")
+                return True
             else:
                 stderr_snippet = result.stderr[:200] if result.stderr else "No stderr"
-                logger.warning(f"VPS_PERMS_NORMALIZE_FAIL (non-fatal) stderr_snippet={stderr_snippet}")
+                logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={stderr_snippet}")
+                return False
                 
         except subprocess.TimeoutExpired:
-            logger.warning("VPS_PERMS_NORMALIZE_FAIL: Timeout after 60 seconds (non-fatal)")
+            logger.error("VPS_PERMS_NORMALIZE_FAIL stderr_snippet=Timeout after 60 seconds")
+            return False
         except Exception as e:
-            logger.warning(f"VPS_PERMS_NORMALIZE_FAIL: {str(e)[:200]} (non-fatal)")
-        
-        # Always return True; pipeline continues even if normalization fails.
-        return True
+            logger.error(f"VPS_PERMS_NORMALIZE_FAIL stderr_snippet={str(e)[:200]}")
+            return False
     
     def check_repository_exists_on_vps(self) -> Tuple[bool, bool]:
         """Check if repository exists on VPS via SSH"""

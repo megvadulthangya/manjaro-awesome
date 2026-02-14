@@ -282,13 +282,10 @@ class RsyncClient:
         def build_cmd(extra_ssh_options: str = "", use_link_dest: bool = False) -> str:
             ssh_part = f"-e \"ssh {extra_ssh_options}\"" if extra_ssh_options else ""
             link_dest_part = f"--link-dest='{self.remote_dir}'" if use_link_dest else ""
-            # Force permissions: directories 755, files 644
-            chmod_part = "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r"
             return f"""
             rsync -avz \
               --progress \
               --stats \
-              {chmod_part} \
               {link_dest_part} \
               {ssh_part} \
               {" ".join(f"'{f}'" for f in files_to_upload)} \
