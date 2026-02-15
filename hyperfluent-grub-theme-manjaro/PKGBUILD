@@ -1,0 +1,67 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Upstream: Coopydood <https://github.com/Coopydood>
+
+pkgname="hyperfluent-grub-theme-manjaro"
+pkgver=0
+pkgrel=1
+pkgdesc="Manjaro HyperFluent GRUB theme (git HEAD)"
+arch=('any')
+url="https://github.com/Coopydood/HyperFluent-GRUB-Theme"
+license=('GPL3')
+makedepends=('git')
+
+_srcname="HyperFluent-GRUB-Theme"
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  local repo_dir="${srcdir}/${_srcname}"
+  local git_url="${url}.git"
+
+  # Normal path: sources already downloaded (makepkg -o / build step)
+  if [[ -d "${repo_dir}/.git" ]]; then
+    cd "${repo_dir}"
+    local ts hash
+    ts="$(git show -s --format=%ct HEAD)"
+    hash="$(git rev-parse --short=7 HEAD)"
+    printf "r%s.g%s" "$(date -u -d "@${ts}" +%Y%m%d)" "${hash}"
+    return 0
+  fi
+
+  # Fallback: allow makepkg --printsrcinfo to succeed even when sources are not present yet.
+  # Do a minimal remote query/fetch to compute a stable version from HEAD.
+  local tmpdir="${srcdir}/.${pkgname}-pkgver"
+  rm -rf "${tmpdir}"
+  mkdir -p "${tmpdir}"
+  git -C "${tmpdir}" init -q
+  git -C "${tmpdir}" remote add origin "${git_url}"
+
+  local full_hash
+  full_hash="$(git -C "${tmpdir}" ls-remote origin HEAD | awk '{print $1}')"
+
+  if [[ -z "${full_hash}" ]]; then
+    rm -rf "${tmpdir}"
+    printf "r0.g0000000"
+    return 0
+  fi
+
+  git -C "${tmpdir}" fetch -q --depth=1 origin "${full_hash}" || true
+
+  local ts
+  ts="$(git -C "${tmpdir}" show -s --format=%ct FETCH_HEAD 2>/dev/null || true)"
+  rm -rf "${tmpdir}"
+
+  if [[ -n "${ts}" ]]; then
+    printf "r%s.g%s" "$(date -u -d "@${ts}" +%Y%m%d)" "${full_hash:0:7}"
+  else
+    printf "r0.g%s" "${full_hash:0:7}"
+  fi
+}
+
+package() {
+  cd "${srcdir}/${_srcname}"
+
+  install -d -m 755 "${pkgdir}/usr/share/grub/themes/${pkgname}"
+  cp -a manjaro/. "${pkgdir}/usr/share/grub/themes/${pkgname}/"
+}
+
