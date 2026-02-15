@@ -2,7 +2,7 @@
 # Upstream: Coopydood <https://github.com/Coopydood>
 
 pkgname="hyperfluent-grub-theme-manjaro"
-pkgver=0
+pkgver=r20250404.g50a69ef
 pkgrel=1
 pkgdesc="Manjaro HyperFluent GRUB theme (git HEAD)"
 arch=('any')
