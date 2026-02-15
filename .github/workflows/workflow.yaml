@@ -2,8 +2,8 @@ name: Manjaro Package Builder
 
 on:
   workflow_dispatch:
- # schedule:
- #   - cron: '0 4 * * *'  # Daily at 4 AM UTC
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 4 AM UTC
   push:
     paths:
       - 'packages.py'
