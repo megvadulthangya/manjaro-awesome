@@ -110,8 +110,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /mnt/pacman_cache
-          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
             ${{ runner.os }}-pacman-cache-
 
       # ================== CACHE: Yay AUR Cache ==================
@@ -120,8 +121,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /mnt/yay_cache
-          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
             ${{ runner.os }}-yay-cache-
 
       # ================== CACHE: VPS Repository Mirror ==================
@@ -130,8 +132,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /mnt/vps_cache
-          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-
             ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-
             ${{ runner.os }}-vps-mirror-cache-
 
@@ -143,7 +146,7 @@ jobs:
           path: |
             /mnt/build_artifacts
             build_aur
-          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
             ${{ runner.os }}-built-packages-cache-
@@ -862,21 +865,21 @@ jobs:
         if: always()
         with:
           path: /mnt/pacman_cache
-          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save Yay AUR Cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: /mnt/yay_cache
-          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}
+          key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save VPS Repository Mirror Cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: /mnt/vps_cache
-          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}
+          key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}
 
       - name: Save Built Packages Cache
         uses: actions/cache/save@v4
@@ -885,7 +888,7 @@ jobs:
           path: |
             /mnt/build_artifacts
             build_aur
-          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Upload Build Artifacts
         if: always()
@@ -908,11 +911,17 @@ jobs:
           echo "AUR sources in cache: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
           echo "VPS mirror cache: $(du -sh /mnt/vps_cache 2>/dev/null | cut -f1 || echo '0')"
           echo ""
-          echo "📊 Cache keys used:"
-          echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
-          echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}"
-          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}"
-          echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.sha }}"
+          echo "📊 Cache keys used (save keys; unique per run_id):"
+          echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}"
+          echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}"
+          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}"
+          echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}"
+          echo ""
+          echo "📌 Restore prefixes:"
+          echo "  - Pacman: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-  (fallback: ${{ runner.os }}-pacman-cache-)"
+          echo "  - Yay: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-  (fallback: ${{ runner.os }}-yay-cache-)"
+          echo "  - VPS mirror: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-  (fallback: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-)"
+          echo "  - Built packages: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-  (fallback: ${{ runner.os }}-built-packages-cache-)"
 
       - name: Cleanup Temporary Directories (Preserve Cache)
         if: always()
