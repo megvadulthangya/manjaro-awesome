@@ -1,6 +1,7 @@
-# Maintainer: Nathan Chere <aur@nathanchere.com.au>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
 pkgname=grayjay-bin
-pkgver=16
+pkgver=15
 pkgrel=1
 pkgdesc="Grayjay Desktop - follow creators, not platforms (privacy- and freedom-respecting client for YouTube, Rumble, Twitch, Spotify etc)"
 arch=('x86_64')
@@ -12,6 +13,7 @@ provides=('grayjay')
 conflicts=('grayjay-git')
 options=(!strip)
 
+# How far ahead we probe from the best known starting point (pkgver or brew API).
 _probe_max=50
 
 _url_for_ver() {
@@ -21,7 +23,9 @@ _url_for_ver() {
 
 _exists_ver() {
   local v="$1"
-  local u="$(_url_for_ver "$v")"
+  local u
+  u="$(_url_for_ver "$v")"
+
   curl -fsSL \
     --retry 2 --retry-delay 1 \
     --connect-timeout 10 --max-time 20 \
@@ -43,42 +47,84 @@ _latest_ver_from_brew_api() {
   [[ "$ver" =~ ^[0-9]+$ ]] && echo "$ver"
 }
 
-_latest_ver_probe_desc() {
+# Probe upwards starting from a known-good baseline (e.g. pkgver or brew API version).
+# This solves the "pkgver is numeric so we never check newer" issue.
+_latest_ver_probe_up() {
+  local start="$1"
   local v
-  for ((v=_probe_max; v>=1; v--)); do
+  local last_found=""
+  local misses=0
+  local end=$((start + _probe_max))
+
+  for ((v=start; v<=end; v++)); do
     if _exists_ver "$v"; then
-      echo "$v"
-      return 0
+      last_found="$v"
+      misses=0
+      continue
+    fi
+
+    # After we have found at least one valid version, allow a couple misses
+    # (transient network / CDN hiccup), then stop.
+    if [[ -n "$last_found" ]]; then
+      misses=$((misses + 1))
+      if (( misses >= 2 )); then
+        break
+      fi
     fi
   done
-  return 1
+
+  [[ -n "$last_found" ]] && echo "$last_found"
 }
 
 _resolve_pkgver() {
-  local v
+  local base=0
+  local brew=""
+  local start=1
+  local probed=""
 
   if [[ "$pkgver" =~ ^[0-9]+$ ]] && (( pkgver > 0 )); then
-    echo "$pkgver"
+    base="$pkgver"
+  fi
+
+  brew="$(_latest_ver_from_brew_api 2>/dev/null || true)"
+
+  start="$base"
+  if [[ -n "$brew" ]] && (( brew > start )); then
+    start="$brew"
+  fi
+  if (( start < 1 )); then
+    start=1
+  fi
+
+  probed="$(_latest_ver_probe_up "$start" 2>/dev/null || true)"
+  if [[ -n "$probed" ]]; then
+    echo "$probed"
     return 0
   fi
 
-  v="$(_latest_ver_from_brew_api)"
-  if [[ -n "$v" ]]; then
-    echo "$v"
+  if [[ -n "$brew" ]]; then
+    echo "$brew"
     return 0
   fi
 
-  _latest_ver_probe_desc
+  if (( base > 0 )); then
+    echo "$base"
+    return 0
+  fi
+
+  return 1
 }
 
 pkgver="$(_resolve_pkgver)" || {
   echo "ERROR: Could not determine latest Grayjay version." >&2
-  echo "       Tried: brew API, then probe ${_probe_max}..1 on updater.grayjay.app" >&2
+  echo "       Tried: brew API, then probe up from best-known baseline (+${_probe_max}) on updater.grayjay.app" >&2
   exit 1
 }
 
 _filename="Grayjay.Desktop-linux-x64-v${pkgver}"
-source=("${_filename}.zip::https://updater.grayjay.app/Apps/Grayjay.Desktop/${pkgver}/${_filename}.zip")
+source=(
+  "${_filename}.zip::https://updater.grayjay.app/Apps/Grayjay.Desktop/${pkgver}/${_filename}.zip"
+)
 sha256sums=('SKIP')
 
 # FONTOS: ezzel megakadályozzuk, hogy makepkg automatikusan kibontsa bsdtar-ral

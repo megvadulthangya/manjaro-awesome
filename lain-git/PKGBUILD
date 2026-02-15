@@ -1,4 +1,5 @@
-# Maintainer: Luca CPZ <luca.cpz [at] gmail [dot] com>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# upstream: Luca CPZ <luca.cpz [at] gmail [dot] com>
 # Modified for local build with automatic versioning
 
 _pkgname=lain
