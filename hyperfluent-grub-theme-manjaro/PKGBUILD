@@ -10,9 +10,18 @@ url="https://github.com/Coopydood/HyperFluent-GRUB-Theme"
 license=('GPL3')
 makedepends=('git')
 
+# Pacman install hook script (runs on install/upgrade/remove)
+install="${pkgname}.install"
+
 _srcname="HyperFluent-GRUB-Theme"
-source=("git+${url}.git")
-sha256sums=('SKIP')
+source=(
+  "git+${url}.git"
+  "${pkgname}.install"
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+)
 
 pkgver() {
   local repo_dir="${srcdir}/${_srcname}"
@@ -64,4 +73,3 @@ package() {
   install -d -m 755 "${pkgdir}/usr/share/grub/themes/${pkgname}"
   cp -a manjaro/. "${pkgdir}/usr/share/grub/themes/${pkgname}/"
 }
-

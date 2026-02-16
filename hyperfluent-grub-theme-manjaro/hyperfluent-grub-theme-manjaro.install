@@ -1,0 +1,40 @@
+post_install() {
+  local theme="/usr/share/grub/themes/hyperfluent-grub-theme-manjaro/theme.txt"
+
+  # Only touch /etc/default/grub if it exists (don’t create surprises in weird setups)
+  if [[ -f /etc/default/grub ]]; then
+    sed -i -e "s,^[#[:space:]]*GRUB_THEME=.*$,GRUB_THEME=\"${theme}\"," /etc/default/grub || true
+    sed -i -e "s,^[#[:space:]]*GRUB_GFXMODE=.*$,GRUB_GFXMODE=auto," /etc/default/grub || true
+  fi
+
+  # Regenerate config only if grub-mkconfig exists and /boot/grub is present
+  if command -v grub-mkconfig >/dev/null 2>&1 && [[ -d /boot/grub ]]; then
+    grub-mkconfig -o /boot/grub/grub.cfg || true
+  fi
+
+  cat << _EOF
+
+==> Installation: Theme set in /etc/default/grub:
+==>   GRUB_THEME="${theme}"
+==> Resolution: GRUB_GFXMODE=auto
+==> Note: grub.cfg regenerated if possible.
+
+_EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  cat << _EOF
+
+==> IMPORTANT:
+==> This package does not automatically revert /etc/default/grub.
+==> If you want to remove the theme, edit /etc/default/grub and remove/replace:
+==>   GRUB_THEME="/usr/share/grub/themes/hyperfluent-grub-theme-manjaro/theme.txt"
+==> Then regenerate:
+==>   grub-mkconfig -o /boot/grub/grub.cfg
+
+_EOF
+}
