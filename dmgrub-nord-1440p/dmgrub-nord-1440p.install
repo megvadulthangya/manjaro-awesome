@@ -1,0 +1,47 @@
+post_install() {
+  local theme="/usr/share/grub/themes/dmgrub-nord-1440p/theme.txt"
+
+  # Force GRUB_THEME no matter what
+  if [[ -f /etc/default/grub ]]; then
+    if grep -qE '^[#[:space:]]*GRUB_THEME=' /etc/default/grub; then
+      sed -i -E "s|^[#[:space:]]*GRUB_THEME=.*$|GRUB_THEME=\"${theme}\"|" /etc/default/grub
+    else
+      printf '\nGRUB_THEME="%s"\n' "${theme}" >> /etc/default/grub
+    fi
+
+    # Manjaro-style gfxmode
+    if grep -qE '^[#[:space:]]*GRUB_GFXMODE=' /etc/default/grub; then
+      sed -i -E 's|^[#[:space:]]*GRUB_GFXMODE=.*$|GRUB_GFXMODE=auto|' /etc/default/grub
+    else
+      printf 'GRUB_GFXMODE=auto\n' >> /etc/default/grub
+    fi
+  fi
+
+  if command -v grub-mkconfig >/dev/null 2>&1 && [[ -d /boot/grub ]]; then
+    grub-mkconfig -o /boot/grub/grub.cfg || true
+  fi
+
+  cat << _EOF
+
+==> Installation: GRUB theme forced in /etc/default/grub:
+==>   GRUB_THEME="${theme}"
+==>   GRUB_GFXMODE=auto
+==> grub.cfg regenerated if possible.
+
+_EOF
+}
+
+post_upgrade() { post_install; }
+
+post_remove() {
+  cat << _EOF
+
+==> IMPORTANT:
+==> This package does not revert your /etc/default/grub automatically.
+==> If you want to remove the theme reference, edit /etc/default/grub and remove/replace:
+==>   GRUB_THEME="/usr/share/grub/themes/dmgrub-nord-1440p/theme.txt"
+==> Then regenerate:
+==>   grub-mkconfig -o /boot/grub/grub.cfg
+
+_EOF
+}

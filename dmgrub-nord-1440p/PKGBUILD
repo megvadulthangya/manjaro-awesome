@@ -1,0 +1,42 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Fork: megvadulthangya/Dark-Matter-GRUB-Theme (awesome branch, nordified)
+
+pkgname="dmgrub-nord-1440p"
+pkgver=r0.g0000000
+pkgrel=1
+pkgdesc="Dark Matter GRUB theme (Manjaro style, nordified) - 1440p"
+arch=('any')
+url="https://github.com/megvadulthangya/Dark-Matter-GRUB-Theme.git"
+license=('GPL3')
+makedepends=('git')
+
+install="${pkgname}.install"
+
+_srcname="Dark-Matter-GRUB-Theme"
+source=("git+${url}#branch=awesome")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${_srcname}"
+  local ts hash
+  ts="$(git show -s --format=%ct HEAD)"
+  hash="$(git rev-parse --short=7 HEAD)"
+  printf "r%s.g%s" "$(date -u -d "@${ts}" +%Y%m%d)" "${hash}"
+}
+
+package() {
+  cd "${srcdir}/${_srcname}"
+
+  local themedir="${pkgdir}/usr/share/grub/themes/${pkgname}"
+  install -d -m 755 "${themedir}"
+
+  # Background (style = manjaro, resolution = 1440p) :contentReference[oaicite:4]{index=4}
+  install -m 644 "assets/backgrounds/manjaro-1440p.png" "${themedir}/background.png"
+
+  # Icons (color) :contentReference[oaicite:5]{index=5}
+  cp -a "assets/icons-1440p/color" "${themedir}/icons"
+
+  # Fonts + base theme files 
+  cp -a "assets/fonts/1440p/." "${themedir}/"
+  cp -a "base/1440p/." "${themedir}/"
+}
