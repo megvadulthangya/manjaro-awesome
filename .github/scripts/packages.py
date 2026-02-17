@@ -6,6 +6,8 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
     "gghelper",
     "hyperfluent-grub-theme-manjaro",
+    "dmgrub-nord-1080p",
+    "dmgrub-nord-1440p",
     "gtk2",
     "awesome-freedesktop-git",
     "lain-git",
