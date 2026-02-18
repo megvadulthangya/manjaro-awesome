@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=manjaro-distro-grub-theme
-pkgver=r0.g0000000
+pkgver=r428.g434decb
 pkgrel=1
 pkgdesc="Distro GRUB theme (Manjaro) packaged for Manjaro Awesome, Nord-tuned text colors"
 arch=('any')
