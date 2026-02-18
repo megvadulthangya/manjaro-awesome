@@ -1,18 +1,124 @@
-post_install() {
-  cat <<'EOF'
-==> manjaro-distro-grub-theme installed.
-    The theme has been enabled via:
-      /etc/default/grub.d/99-manjaro-distro-grub-theme.cfg
+_theme_path="/usr/share/grub/themes/manjaro-distro-grub-theme/theme.txt"
+_grub_default="/etc/default/grub"
+_state_dir="/var/lib/manjaro-distro-grub-theme"
+_state_file="${_state_dir}/previous_theme"
 
-    Now regenerate GRUB config:
-      sudo update-grub
-    (or)
-      sudo grub-mkconfig -o /boot/grub/grub.cfg
+_run_update_grub() {
+  if command -v update-grub >/dev/null 2>&1; then
+    update-grub || true
+  elif command -v grub-mkconfig >/dev/null 2>&1; then
+    grub-mkconfig -o /boot/grub/grub.cfg || true
+  fi
+}
+
+_save_previous() {
+  mkdir -p "${_state_dir}"
+
+  if [[ -f "${_grub_default}" ]]; then
+    # Find first GRUB_THEME (commented or not)
+    local line
+    line="$(grep -m1 -E '^[[:space:]]*#?[[:space:]]*GRUB_THEME=' "${_grub_default}" || true)"
+
+    if [[ -n "${line}" ]]; then
+      local commented=0
+      if [[ "${line}" =~ ^[[:space:]]*# ]]; then
+        commented=1
+      fi
+
+      # Extract value part after GRUB_THEME=
+      local val="${line#*=}"
+      # Trim spaces
+      val="$(echo "${val}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+      # Remove surrounding quotes if present
+      val="$(echo "${val}" | sed -E 's/^"//; s/"$//; s/^\x27//; s/\x27$//')"
+
+      {
+        echo "PRESENT=1"
+        echo "COMMENTED=${commented}"
+        echo "VALUE=${val}"
+      } > "${_state_file}"
+    else
+      {
+        echo "PRESENT=0"
+        echo "COMMENTED=0"
+        echo "VALUE="
+      } > "${_state_file}"
+    fi
+  fi
+}
+
+_set_grub_theme() {
+  if [[ ! -f "${_grub_default}" ]]; then
+    cat <<EOF
+==> ${_grub_default} not found.
+    Please set manually:
+    GRUB_THEME="${_theme_path}"
+    then run:
+    sudo update-grub
+EOF
+    return 0
+  fi
+
+  # Replace uncommented GRUB_THEME if exists
+  if grep -q -E '^[[:space:]]*GRUB_THEME=' "${_grub_default}"; then
+    sed -i -E "s|^[[:space:]]*GRUB_THEME=.*|GRUB_THEME=\"${_theme_path}\"|g" "${_grub_default}"
+    return 0
+  fi
+
+  # Replace commented GRUB_THEME if exists
+  if grep -q -E '^[[:space:]]*#[[:space:]]*GRUB_THEME=' "${_grub_default}"; then
+    sed -i -E "s|^[[:space:]]*#[[:space:]]*GRUB_THEME=.*|GRUB_THEME=\"${_theme_path}\"|g" "${_grub_default}"
+    return 0
+  fi
+
+  # Otherwise append
+  printf "\nGRUB_THEME=\"%s\"\n" "${_theme_path}" >> "${_grub_default}"
+}
+
+_restore_previous() {
+  [[ -f "${_grub_default}" ]] || return 0
+  [[ -f "${_state_file}" ]] || return 0
+
+  local present commented value
+  present="$(grep -E '^PRESENT=' "${_state_file}" | cut -d= -f2-)"
+  commented="$(grep -E '^COMMENTED=' "${_state_file}" | cut -d= -f2-)"
+  value="$(grep -E '^VALUE=' "${_state_file}" | cut -d= -f2-)"
+
+  # Remove our current GRUB_THEME line(s)
+  sed -i -E '/^[[:space:]]*GRUB_THEME=/d' "${_grub_default}"
+
+  if [[ "${present}" == "1" && -n "${value}" ]]; then
+    if [[ "${commented}" == "1" ]]; then
+      printf "\n#GRUB_THEME=\"%s\"\n" "${value}" >> "${_grub_default}"
+    else
+      printf "\nGRUB_THEME=\"%s\"\n" "${value}" >> "${_grub_default}"
+    fi
+  fi
+}
+
+post_install() {
+  _save_previous
+  _set_grub_theme
+
+  cat <<EOF
+==> manjaro-distro-grub-theme installed.
+    Set GRUB_THEME in /etc/default/grub to:
+      GRUB_THEME="${_theme_path}"
+
+    Regenerating GRUB config (if possible)...
+EOF
+
+  _run_update_grub
+
+  cat <<EOF
+==> Done.
 EOF
 }
 
 post_upgrade() {
-  post_install
+  # Keep the theme forced to our package after upgrades too
+  _set_grub_theme
+  _run_update_grub
 }
 
 pre_remove() {
@@ -20,11 +126,16 @@ pre_remove() {
 }
 
 post_remove() {
-  cat <<'EOF'
+  _restore_previous
+
+  cat <<EOF
 ==> manjaro-distro-grub-theme removed.
-    If you want to fully revert, regenerate GRUB config:
-      sudo update-grub
-    (or)
-      sudo grub-mkconfig -o /boot/grub/grub.cfg
+    Restored previous GRUB_THEME (if it existed), then regenerating GRUB config...
+EOF
+
+  _run_update_grub
+
+  cat <<EOF
+==> Done.
 EOF
 }
