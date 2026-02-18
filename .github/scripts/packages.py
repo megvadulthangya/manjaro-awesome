@@ -8,6 +8,7 @@ LOCAL_PACKAGES = [
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
     "dmgrub-nord-1440p",
+    "manjaro-distro-grub-theme",
     "gtk2",
     "awesome-freedesktop-git",
     "lain-git",

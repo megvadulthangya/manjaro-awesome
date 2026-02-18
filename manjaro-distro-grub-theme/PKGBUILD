@@ -1,0 +1,48 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=manjaro-distro-grub-theme
+pkgver=r0.g0000000
+pkgrel=1
+pkgdesc="Distro GRUB theme (Manjaro) packaged for Manjaro Awesome, Nord-tuned text colors"
+arch=('any')
+url="https://github.com/megvadulthangya/distro-grub-themes"
+license=('GPL3')
+depends=('grub')
+makedepends=('git')
+install="${pkgname}.install"
+
+_srcname="distro-grub-themes"
+source=(
+  "${_srcname}::git+https://github.com/megvadulthangya/distro-grub-themes.git#branch=awesome"
+)
+sha256sums=('SKIP')
+
+backup=("etc/default/grub.d/99-${pkgname}.cfg")
+
+pkgver() {
+  cd "${srcdir}/${_srcname}"
+  printf "r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd "${srcdir}/${_srcname}"
+
+  local themedir="${pkgdir}/usr/share/grub/themes/${pkgname}"
+  install -d "${themedir}"
+
+  # Manjaro background -> background.png
+  install -Dm644 "assets/backgrounds/manjaro.png" "${themedir}/background.png"
+
+  # Common assets
+  cp -a "assets/icons" "${themedir}/"
+  cp -a "assets/fonts/." "${themedir}/"
+  cp -a "assets/menu/." "${themedir}/"
+
+  # Theme config (this is the one you Nord-osítasz)
+  install -Dm644 "assets/theme.txt" "${themedir}/theme.txt"
+
+  # Auto-enable via /etc/default/grub.d (Manjaro-friendly)
+  install -d "${pkgdir}/etc/default/grub.d"
+  printf 'GRUB_THEME="%s"\n' "/usr/share/grub/themes/${pkgname}/theme.txt" \
+    > "${pkgdir}/etc/default/grub.d/99-${pkgname}.cfg"
+}

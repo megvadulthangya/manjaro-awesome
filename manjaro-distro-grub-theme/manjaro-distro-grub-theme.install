@@ -1,0 +1,30 @@
+post_install() {
+  cat <<'EOF'
+==> manjaro-distro-grub-theme installed.
+    The theme has been enabled via:
+      /etc/default/grub.d/99-manjaro-distro-grub-theme.cfg
+
+    Now regenerate GRUB config:
+      sudo update-grub
+    (or)
+      sudo grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  :
+}
+
+post_remove() {
+  cat <<'EOF'
+==> manjaro-distro-grub-theme removed.
+    If you want to fully revert, regenerate GRUB config:
+      sudo update-grub
+    (or)
+      sudo grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+}
