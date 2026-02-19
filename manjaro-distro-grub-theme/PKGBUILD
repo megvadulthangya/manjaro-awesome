@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=manjaro-distro-grub-theme
-pkgver=r428.g434decb
+pkgver=r429.g22f248e
 pkgrel=1
 pkgdesc="Distro GRUB theme (Manjaro only) + auto-set GRUB_THEME in /etc/default/grub"
 arch=('any')

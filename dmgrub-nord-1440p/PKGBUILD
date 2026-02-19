@@ -2,7 +2,7 @@
 # Fork: megvadulthangya/Dark-Matter-GRUB-Theme (awesome branch, nordified)
 
 pkgname="dmgrub-nord-1440p"
-pkgver=r0.g0000000
+pkgver=r20260218.g9f43633
 pkgrel=1
 pkgdesc="Dark Matter GRUB theme (Manjaro style, nordified) - 1440p"
 arch=('any')
