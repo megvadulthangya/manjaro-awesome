@@ -1,0 +1,41 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=manjaro-distro-grub-theme-ai
+pkgver=r428.g434decb
+pkgrel=1
+pkgdesc="Distro GRUB theme (Manjaro only) + auto-set GRUB_THEME in /etc/default/grub (AI background)"
+arch=('any')
+url="https://github.com/megvadulthangya/distro-grub-themes"
+license=('GPL3')
+depends=('grub')
+makedepends=('git')
+install="${pkgname}.install"
+
+_srcname="distro-grub-themes"
+source=(
+  "${_srcname}::git+https://github.com/megvadulthangya/distro-grub-themes.git#branch=awesome"
+)
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${_srcname}"
+  printf "r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd "${srcdir}/${_srcname}"
+
+  local themedir="${pkgdir}/usr/share/grub/themes/${pkgname}"
+  install -d "${themedir}"
+
+  # Manjaro AI background -> background.png
+  install -Dm644 "assets/backgrounds/manjaro-AI.png" "${themedir}/background.png"
+
+  # Common assets (UNCHANGED)
+  cp -a "assets/icons" "${themedir}/"
+  cp -a "assets/fonts/." "${themedir}/"
+  cp -a "assets/menu/." "${themedir}/"
+
+  # Theme config (UNCHANGED)
+  install -Dm644 "assets/theme.txt" "${themedir}/theme.txt"
+}

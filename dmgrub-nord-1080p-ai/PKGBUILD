@@ -1,10 +1,10 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 # Fork: megvadulthangya/Dark-Matter-GRUB-Theme (awesome branch, nordified)
 
-pkgname="dmgrub-nord-1440p-ai"
+pkgname="dmgrub-nord-1080p-ai"
 pkgver=r20260217.g4ee319f
 pkgrel=1
-pkgdesc="Dark Matter GRUB theme (Manjaro style, nordified) - 1440p AI"
+pkgdesc="Dark Matter GRUB theme (Manjaro style, nordified) - 1080p AI"
 arch=('any')
 url="https://github.com/megvadulthangya/Dark-Matter-GRUB-Theme.git"
 license=('GPL3')
@@ -30,13 +30,13 @@ package() {
   local themedir="${pkgdir}/usr/share/grub/themes/${pkgname}"
   install -d -m 755 "${themedir}"
 
-  # Background (style = manjaro, resolution = 1440p, AI)
-  install -m 644 "assets/backgrounds/manjaro-1440p-AI.png" "${themedir}/background.png"
+  # Background (style = manjaro, resolution = 1080p, AI)
+  install -m 644 "assets/backgrounds/manjaro-1080p-AI.png" "${themedir}/background.png"
 
-  # Icons (color)
-  cp -a "assets/icons-1440p/color" "${themedir}/icons"
+  # Icons: "color"
+  cp -a "assets/icons-1080p/color" "${themedir}/icons"
 
-  # Fonts + base theme files
-  cp -a "assets/fonts/1440p/." "${themedir}/"
-  cp -a "base/1440p/." "${themedir}/"
+  # Fonts + base theme files (theme.txt, png slices, etc.)
+  cp -a "assets/fonts/1080p/." "${themedir}/"
+  cp -a "base/1080p/." "${themedir}/"
 }
