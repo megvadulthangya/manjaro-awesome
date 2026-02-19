@@ -3,7 +3,7 @@
 # Variant: 1440p + AI Manjaro background (manjaro-1440p-AI.png)
 
 pkgname="dmgrub-nord-1440p-ai"
-pkgver=r20260217.g4ee319f
+pkgver=r20260218.g9f43633
 pkgrel=1
 pkgdesc="Dark Matter GRUB theme (Manjaro style, nordified) - 1440p AI background"
 arch=('any')
