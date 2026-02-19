@@ -13,11 +13,10 @@ post_install() {
     if grep -qE '^[#[:space:]]*GRUB_GFXMODE=' /etc/default/grub; then
       sed -i -E 's|^[#[:space:]]*GRUB_GFXMODE=.*$|GRUB_GFXMODE=auto|' /etc/default/grub
     else
-      printf '\nGRUB_GFXMODE=auto\n' >> /etc/default/grub
+      printf 'GRUB_GFXMODE=auto\n' >> /etc/default/grub
     fi
   fi
 
-  # Regenerate grub.cfg (Manjaro-style)
   if command -v grub-mkconfig >/dev/null 2>&1 && [[ -d /boot/grub ]]; then
     grub-mkconfig -o /boot/grub/grub.cfg || true
   fi

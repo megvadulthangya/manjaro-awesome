@@ -1,5 +1,5 @@
 post_install() {
-  local theme="/usr/share/grub/themes/dmgrub-nord-1440p-ai/theme.txt"
+  local theme="/usr/share/grub/themes/dmgrub-nord-1440p/theme.txt"
 
   # Force GRUB_THEME no matter what
   if [[ -f /etc/default/grub ]]; then
@@ -39,7 +39,7 @@ post_remove() {
 ==> IMPORTANT:
 ==> This package does not revert your /etc/default/grub automatically.
 ==> If you want to remove the theme reference, edit /etc/default/grub and remove/replace:
-==>   GRUB_THEME="/usr/share/grub/themes/dmgrub-nord-1440p-ai/theme.txt"
+==>   GRUB_THEME="/usr/share/grub/themes/dmgrub-nord-1440p/theme.txt"
 ==> Then regenerate:
 ==>   grub-mkconfig -o /boot/grub/grub.cfg
 
