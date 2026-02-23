@@ -23,7 +23,7 @@ SSH_OPTIONS = [
 
 # Build timeouts (seconds)
 MAKEPKG_TIMEOUT = {
-    "default": 3600,        # 1 hour for normal packages
+    "default": 7200,        # 1 hour for normal packages
     "large_packages": 7200, # 2 hours for large packages (gtk, qt, chromium)
     "simplescreenrecorder": 5400,  # 1.5 hours
 }
