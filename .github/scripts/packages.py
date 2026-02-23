@@ -31,6 +31,7 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "libinput-gestures",
+    "gcc14",
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
     "gtkd",
@@ -54,11 +55,6 @@ AUR_PACKAGES = [
     "simplescreenrecorder",
     "gtkhash-thunar",
     "a4tech-bloody-driver-git"
-    #"nordic-bluish-accent-theme",
-    #"nordic-bluish-accent-standard-buttons-theme",
-    #"nordic-polar-standard-buttons-theme",
-    #"nordic-standard-buttons-theme",
-    #"nordic-darker-standard-buttons-theme"
 ]
 
 # Optionally, you can also define package groups or categories
