@@ -4,6 +4,8 @@ Package definitions for Manjaro Package Builder
 
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
+    "cuda-12.9",
+    "cudnn9.10-cuda12.9",
     "gghelper",
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
@@ -30,10 +32,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "libinput-gestures",
-    #"gcc14",
-    "cuda-12.9",
-    "cudnn9.10-cuda12.9",
+    "libinput-gestures",   
     "gtkd",
     "qt5-styleplugins",
     "urxvt-resize-font-git",
@@ -42,7 +41,6 @@ AUR_PACKAGES = [
     "gsconnect",
     "betterlockscreen",
     "nordic-theme",
-    #"nordic-darker-theme",
     "geany-nord-theme",
     "nordzy-icon-theme",
     "oh-my-posh-bin",
