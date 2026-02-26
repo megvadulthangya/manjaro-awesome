@@ -407,9 +407,9 @@ jobs:
 
             install_from_dir=""
 
-            # 1) Primary: git clone with retries (handles transient TLS EOF)
+            # 1) Primary: HTTPS git clone with retries (handles transient TLS EOF)
             for attempt in 1 2 3 4 5; do
-              echo "yay: git clone attempt ${attempt}/5"
+              echo "yay: https git clone attempt ${attempt}/5"
               rm -rf "$YAY_WORKDIR/yay-bin"
               if sudo -u builder git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
                 clone --depth 1 https://aur.archlinux.org/yay-bin.git "$YAY_WORKDIR/yay-bin"; then
@@ -419,7 +419,23 @@ jobs:
               sleep $((attempt * 3))
             done
 
-            # 2) Fallback: snapshot tarball (no git; different endpoint)
+            # 2) Fallback: SSH git clone (bypasses HTTPS/TLS entirely)
+            if [ -z "$install_from_dir" ]; then
+              echo "yay: https clone failed - trying SSH clone fallback..."
+              SSH_CLONE_OPTS="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+              for attempt in 1 2 3 4 5; do
+                echo "yay: ssh git clone attempt ${attempt}/5"
+                rm -rf "$YAY_WORKDIR/yay-bin"
+                if sudo -u builder env GIT_SSH_COMMAND="$SSH_CLONE_OPTS" \
+                  timeout 90 git clone --depth 1 ssh://aur@aur.archlinux.org/yay-bin.git "$YAY_WORKDIR/yay-bin"; then
+                  install_from_dir="$YAY_WORKDIR/yay-bin"
+                  break
+                fi
+                sleep $((attempt * 3))
+              done
+            fi
+
+            # 3) Fallback: snapshot tarball (no git; different endpoint/path, still HTTPS)
             if [ -z "$install_from_dir" ]; then
               echo "yay: git clone failed - trying snapshot fallback..."
 
@@ -445,30 +461,50 @@ jobs:
               fi
             fi
 
-            if [ -z "$install_from_dir" ]; then
-              echo "❌ yay installation failed: could not fetch AUR sources (git + snapshot fallback failed)"
-              rm -rf "$YAY_WORKDIR"
-              exit 1
+            # If we obtained PKGBUILD sources from AUR, build/install via makepkg
+            if [ -n "$install_from_dir" ]; then
+              echo "yay: building from $install_from_dir"
+              if sudo -u builder bash -lc "cd '$install_from_dir' && makepkg -si --noconfirm"; then
+                echo "✅ yay build/install finished"
+              else
+                echo "❌ yay build/install failed"
+                rm -rf "$YAY_WORKDIR"
+                exit 1
+              fi
             fi
 
-            echo "yay: building from $install_from_dir"
-            if sudo -u builder bash -lc "cd '$install_from_dir' && makepkg -si --noconfirm"; then
-              echo "✅ yay build/install finished"
+            # 4) Final fallback: build/install yay via Go modules (no AUR required)
+            if ! command -v yay &> /dev/null; then
+              echo "yay: AUR endpoints unreachable - trying Go modules fallback..."
+
+              pacman -S --needed --noconfirm go
+
+              if sudo -u builder bash -lc "set -e; export GOBIN=\"\$HOME/.local/bin\"; mkdir -p \"\$GOBIN\"; go install github.com/Jguer/yay/v12@latest"; then
+                if [ -x /home/builder/.local/bin/yay ]; then
+                  install -m 755 /home/builder/.local/bin/yay /usr/local/bin/yay
+                  echo "✅ yay installed via Go modules fallback"
+                fi
+              fi
+            fi
+
+            # Final verification
+            if command -v yay &> /dev/null; then
+              if sudo -u builder yay --version; then
+                echo "✅ yay installed successfully"
+              else
+                echo "❌ yay installed but failed to run"
+                rm -rf "$YAY_WORKDIR"
+                exit 1
+              fi
             else
-              echo "❌ yay build/install failed"
+              echo "❌ yay installation failed: AUR (https/ssh/snapshot) and Go fallback all failed"
+              echo "=== yay diagnostics (AUR TLS) ==="
+              timeout 10 curl -vI https://aur.archlinux.org/ 2>&1 | tail -80 || true
               rm -rf "$YAY_WORKDIR"
               exit 1
             fi
 
             rm -rf "$YAY_WORKDIR"
-
-            # Test yay installation
-            if sudo -u builder yay --version; then
-              echo "✅ yay installed successfully"
-            else
-              echo "❌ yay installation failed"
-              exit 1
-            fi
           else
             echo "✅ yay already installed (from cache)"
             sudo -u builder yay --version
