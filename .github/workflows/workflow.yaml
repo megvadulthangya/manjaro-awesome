@@ -400,20 +400,74 @@ jobs:
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
           if ! command -v yay &> /dev/null; then
-            echo "Installing yay..."
-            chmod 777 /tmp
-            cd /tmp
-            sudo -u builder git clone https://aur.archlinux.org/yay-bin.git
-            cd yay-bin
-            sudo -u builder makepkg -si --noconfirm
-            cd /
-            rm -rf /tmp/yay-bin
+            echo "Installing yay (retry + fallback)..."
+
+            YAY_WORKDIR="$(mktemp -d -p /tmp yay-install-XXXXXXXX)"
+            chown -R builder:builder "$YAY_WORKDIR"
+
+            install_from_dir=""
+
+            # 1) Primary: git clone with retries (handles transient TLS EOF)
+            for attempt in 1 2 3 4 5; do
+              echo "yay: git clone attempt ${attempt}/5"
+              rm -rf "$YAY_WORKDIR/yay-bin"
+              if sudo -u builder git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+                clone --depth 1 https://aur.archlinux.org/yay-bin.git "$YAY_WORKDIR/yay-bin"; then
+                install_from_dir="$YAY_WORKDIR/yay-bin"
+                break
+              fi
+              sleep $((attempt * 3))
+            done
+
+            # 2) Fallback: snapshot tarball (no git; different endpoint)
+            if [ -z "$install_from_dir" ]; then
+              echo "yay: git clone failed - trying snapshot fallback..."
+
+              ok=0
+              rm -f "$YAY_WORKDIR/yay-bin.tar.gz"
+              for attempt in 1 2 3 4 5; do
+                echo "yay: snapshot download attempt ${attempt}/5"
+                rm -f "$YAY_WORKDIR/yay-bin.tar.gz"
+                if sudo -u builder curl -fsSL --connect-timeout 20 \
+                  -o "$YAY_WORKDIR/yay-bin.tar.gz" \
+                  "https://aur.archlinux.org/cgit/aur.git/snapshot/yay-bin.tar.gz"; then
+                  ok=1
+                  break
+                fi
+                sleep $((attempt * 3))
+              done
+
+              if [ "$ok" -eq 1 ]; then
+                sudo -u builder bash -lc "cd '$YAY_WORKDIR' && tar -xzf yay-bin.tar.gz"
+                if [ -d "$YAY_WORKDIR/yay-bin" ]; then
+                  install_from_dir="$YAY_WORKDIR/yay-bin"
+                fi
+              fi
+            fi
+
+            if [ -z "$install_from_dir" ]; then
+              echo "❌ yay installation failed: could not fetch AUR sources (git + snapshot fallback failed)"
+              rm -rf "$YAY_WORKDIR"
+              exit 1
+            fi
+
+            echo "yay: building from $install_from_dir"
+            if sudo -u builder bash -lc "cd '$install_from_dir' && makepkg -si --noconfirm"; then
+              echo "✅ yay build/install finished"
+            else
+              echo "❌ yay build/install failed"
+              rm -rf "$YAY_WORKDIR"
+              exit 1
+            fi
+
+            rm -rf "$YAY_WORKDIR"
 
             # Test yay installation
             if sudo -u builder yay --version; then
               echo "✅ yay installed successfully"
             else
               echo "❌ yay installation failed"
+              exit 1
             fi
           else
             echo "✅ yay already installed (from cache)"
