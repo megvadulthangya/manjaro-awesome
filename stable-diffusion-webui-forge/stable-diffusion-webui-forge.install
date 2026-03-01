@@ -1,0 +1,33 @@
+#!/bin/bash
+
+_appname="stable-diffusion-webui-forge"
+_apphome="/opt/${_appname}"
+_appdata="/var/opt/${_appname}/data"
+_appuser="sdwebui-forge"
+
+pre_install() {
+  getent passwd "${_appuser}" >/dev/null || useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+}
+
+_setup() {
+  mkdir -p "${_apphome}" "${_appdata}"
+
+  # Fontos: a venv és a runtime írások miatt az apphome + data a service useré legyen.
+  chown -R "${_appuser}:${_appuser}" "${_apphome}" "${_appdata}" || return 1
+  chmod -R g+w "${_appdata}" || return 1
+
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python -m venv '${_apphome}/venv'" || return 1
+  fi
+
+  # Forge környezet előkészítés (pip deps, stb.)
+  su "${_appuser}" -s /bin/bash -c "cd '${_apphome}' && ./venv/bin/python -c 'from modules.launch_utils import prepare_environment; prepare_environment()'" || return 1
+}
+
+post_install() {
+  _setup || { echo -e "\nERROR: Failed to install and configure ${_appname}\n"; return 1; }
+}
+
+post_upgrade() {
+  _setup || { echo -e "\nERROR: Failed to upgrade and reconfigure ${_appname}\n"; return 1; }
+}

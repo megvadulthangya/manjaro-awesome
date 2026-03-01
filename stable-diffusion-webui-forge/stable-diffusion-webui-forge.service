@@ -1,0 +1,33 @@
+[Unit]
+Description=Stable Diffusion WebUI Forge (main)
+After=network.target
+
+[Service]
+Type=simple
+User=sdwebui-forge
+Group=sdwebui-forge
+WorkingDirectory=/opt/stable-diffusion-webui-forge
+
+Environment=PYTHONUNBUFFERED=1
+
+# Betöltjük a /opt/.../webui-user.sh-t (amit a user szerkeszthet),
+# és utána launch.py-val indítunk. A COMMANDLINE_ARGS env var-t a Forge
+# sys.argv-ba injektálja import time-ban, tehát működik launch.py-val is.
+ExecStart=/bin/bash -lc '\
+  set -a; \
+  source /opt/stable-diffusion-webui-forge/webui-user.sh; \
+  set +a; \
+  : "${DATA_DIR:=/var/opt/stable-diffusion-webui-forge/data}"; \
+  mkdir -p "$DATA_DIR"; \
+  exec /opt/stable-diffusion-webui-forge/venv/bin/python -u \
+    /opt/stable-diffusion-webui-forge/launch.py \
+    --data-dir "$DATA_DIR" \
+'
+
+Restart=always
+StartLimitIntervalSec=120
+StartLimitBurst=15
+UMask=007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="stable-diffusion-webui-forge"
+pkgname="${_pkgname}"
+pkgver=r0.0000000
+pkgrel=1
+pkgdesc="Stable Diffusion WebUI Forge (main branch) - packaged for Arch/Manjaro"
+arch=('x86_64')
+url="https://github.com/lllyasviel/stable-diffusion-webui-forge"
+license=('AGPL3')
+
+depends=('python' 'python-pip' 'git')
+makedepends=('git')
+
+install="${pkgname}.install"
+
+# ISZONYAT FONTOS: ha a user módosítja, update nem írhatja felül -> .pacnew
+backup=("opt/${_pkgname}/webui-user.sh")
+
+# IMPORTANT: keep the "$pkgname::" prefix so the checkout directory is $srcdir/$pkgname (headcheck kompatibilis)
+source=(
+  "${pkgname}::git+${url}.git#branch=main"
+  "file://${pkgname}.service"
+)
+sha256sums=('SKIP' 'SKIP')
+
+_appdir="/opt/${_pkgname}"
+_datadir="/var/opt/${_pkgname}/data"
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  # 1) systemd unit
+  install -Dm644 "$srcdir/${pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+
+  # 2) app -> /opt
+  install -d "$pkgdir${_appdir}"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  rm -rf "$pkgdir${_appdir}/.git"
+
+  # 3) BUILD IDŐBEN: a gyári webui-user.sh default COMMANDLINE_ARGS sorának beállítása
+  _cfg="$pkgdir${_appdir}/webui-user.sh"
+  if [[ -f "$_cfg" ]]; then
+    if grep -qE '^[[:space:]]*#?[[:space:]]*export[[:space:]]+COMMANDLINE_ARGS=' "$_cfg"; then
+      sed -i -E \
+        's|^[[:space:]]*#?[[:space:]]*export[[:space:]]+COMMANDLINE_ARGS=.*|export COMMANDLINE_ARGS="--opt-split-attention --disable-gpu-warning --port 7860 --api"|' \
+        "$_cfg"
+    else
+      printf '\nexport COMMANDLINE_ARGS="--opt-split-attention --disable-gpu-warning --port 7860 --api"\n' >> "$_cfg"
+    fi
+  else
+    echo "ERROR: webui-user.sh not found in repo root (expected at ${_appdir}/webui-user.sh)" >&2
+    exit 1
+  fi
+
+  # 4) data dir placeholder (runtime)
+  install -d "$pkgdir${_datadir}"
+  chmod 775 "$pkgdir${_datadir}"
+}
