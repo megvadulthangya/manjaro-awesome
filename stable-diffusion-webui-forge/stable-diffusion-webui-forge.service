@@ -10,16 +10,7 @@ WorkingDirectory=/opt/stable-diffusion-webui-forge
 
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/bin/bash -lc '\
-  set -a; \
-  source /opt/stable-diffusion-webui-forge/webui-user.sh; \
-  set +a; \
-  : "${DATA_DIR:=/var/opt/stable-diffusion-webui-forge/data}"; \
-  mkdir -p "$DATA_DIR"; \
-  exec /opt/stable-diffusion-webui-forge/venv/bin/python \
-    /opt/stable-diffusion-webui-forge/launch.py \
-    --data-dir "$DATA_DIR" \
-'
+ExecStart=/opt/stable-diffusion-webui-forge/venv/bin/python /opt/stable-diffusion-webui-forge/launch.py --listen --no-half
 
 Restart=always
 StartLimitIntervalSec=120

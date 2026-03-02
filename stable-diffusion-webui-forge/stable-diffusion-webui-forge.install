@@ -1,31 +1,41 @@
 #!/bin/bash
 
-_appname="stable-diffusion-webui-forge"
-_apphome="/opt/${_appname}"
-_appdata="/var/opt/${_appname}/data"
-_appuser="sdwebui-forge"
-
-pre_install() {
-  getent passwd "${_appuser}" >/dev/null || \
-    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
-}
-
-_setup_dirs() {
-  mkdir -p "${_apphome}" "${_appdata}"
-
-  chown -R "${_appuser}:${_appuser}" "${_apphome}" "${_appdata}"
-  chmod -R g+w "${_appdata}"
-
-  # venv létrehozása KIFEJEZETTEN python3.10-zel
-  if [[ ! -d "${_apphome}/venv" ]]; then
-    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
-  fi
-}
-
 post_install() {
-  _setup_dirs
+
+  echo ">>> Setting up Stable Diffusion WebUI Forge..."
+
+  # service user (system user, users group tag)
+  if ! id sdwebui-forge >/dev/null 2>&1; then
+    useradd -r -g users \
+      -d /opt/stable-diffusion-webui-forge \
+      -s /usr/bin/nologin \
+      sdwebui-forge
+  fi
+
+  # tulajdon és jogosultság
+  chown -R root:users /opt/stable-diffusion-webui-forge
+
+  find /opt/stable-diffusion-webui-forge -type d -exec chmod 2775 {} \;
+  find /opt/stable-diffusion-webui-forge -type f -exec chmod 664 {} \;
+
+  # service engedélyezés
+  #systemctl daemon-reload
+  #systemctl enable stable-diffusion-webui-forge.service
+
+  echo ">>> Installation complete."
+  echo ">>> Place models into:"
+  echo ">>>   /opt/stable-diffusion-webui-forge/models"
+  #echo ">>> Service will start automatically on boot."
 }
 
 post_upgrade() {
-  _setup_dirs
+  # ne törje el a jogosultságokat update
+  chown -R root:users /opt/stable-diffusion-webui-forge
+  find /opt/stable-diffusion-webui-forge -type d -exec chmod 2775 {} \;
+  find /opt/stable-diffusion-webui-forge -type f -exec chmod 664 {} \;
 }
+
+#post_remove() {
+#  systemctl disable stable-diffusion-webui-forge.service 2>/dev/null
+#  echo ">>> Service disabled."
+#}
