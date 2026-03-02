@@ -1,41 +1,37 @@
 #!/bin/bash
 
-post_install() {
+_appname="stable-diffusion-webui-forge"
+_apphome="/opt/${_appname}"
+_appuser="sdwebui-forge"
 
-  echo ">>> Setting up Stable Diffusion WebUI Forge..."
+pre_install() {
+  getent passwd "${_appuser}" >/dev/null || \
+    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+}
 
-  # service user (system user, users group tag)
-  if ! id sdwebui-forge >/dev/null 2>&1; then
-    useradd -r -g users \
-      -d /opt/stable-diffusion-webui-forge \
-      -s /usr/bin/nologin \
-      sdwebui-forge
+_setup_dirs() {
+  mkdir -p "${_apphome}"
+
+  # Tulajdonos és jogosultságok beállítása
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+  chmod -R g+w "${_apphome}"
+  find "${_apphome}" -type d -exec chmod g+s {} \;
+
+  # venv létrehozása KIFEJEZETTEN python3.10-zel
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
   fi
 
-  # tulajdon és jogosultság
-  chown -R root:users /opt/stable-diffusion-webui-forge
+  # Összes normál felhasználó (UID>=1000) hozzáadása az _appuser csoporthoz
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+}
 
-  find /opt/stable-diffusion-webui-forge -type d -exec chmod 2775 {} \;
-  find /opt/stable-diffusion-webui-forge -type f -exec chmod 664 {} \;
-
-  # service engedélyezés
-  #systemctl daemon-reload
-  #systemctl enable stable-diffusion-webui-forge.service
-
-  echo ">>> Installation complete."
-  echo ">>> Place models into:"
-  echo ">>>   /opt/stable-diffusion-webui-forge/models"
-  #echo ">>> Service will start automatically on boot."
+post_install() {
+  _setup_dirs
 }
 
 post_upgrade() {
-  # ne törje el a jogosultságokat update
-  chown -R root:users /opt/stable-diffusion-webui-forge
-  find /opt/stable-diffusion-webui-forge -type d -exec chmod 2775 {} \;
-  find /opt/stable-diffusion-webui-forge -type f -exec chmod 664 {} \;
+  _setup_dirs
 }
-
-#post_remove() {
-#  systemctl disable stable-diffusion-webui-forge.service 2>/dev/null
-#  echo ">>> Service disabled."
-#}
