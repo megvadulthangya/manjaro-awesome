@@ -48,6 +48,7 @@ AUR_PACKAGES = [
     "fish-done",
     "find-the-command",
     "p7zip-gui",
+    "python310",
     "qownnotes",
     "xorg-font-utils",
     "xnviewmp",
