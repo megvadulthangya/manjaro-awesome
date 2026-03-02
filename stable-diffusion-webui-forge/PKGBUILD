@@ -3,7 +3,7 @@
 
 _pkgname="stable-diffusion-webui-forge"
 pkgname="${_pkgname}"
-pkgver=r0.0000000
+pkgver=r8627.dfdcbab6
 pkgrel=1
 pkgdesc="Stable Diffusion WebUI Forge (main branch) - python310 runtime"
 arch=('x86_64')
