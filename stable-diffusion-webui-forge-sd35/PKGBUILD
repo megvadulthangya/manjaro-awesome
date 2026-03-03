@@ -2,7 +2,7 @@
 
 _pkgname="stable-diffusion-webui-forge-sd35"
 pkgname="${_pkgname}"
-pkgver=r000.000
+pkgver=r8553.c5853ef9
 pkgrel=1
 pkgdesc="Stable Diffusion WebUI Forge (sd35 branch) - python310 runtime"
 arch=('x86_64')
