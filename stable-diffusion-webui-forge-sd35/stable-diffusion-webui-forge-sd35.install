@@ -1,0 +1,71 @@
+#!/bin/bash
+
+_appname="stable-diffusion-webui-forge-sd35"
+_apphome="/opt/${_appname}"
+_appuser="sdwebui-forge"
+
+pre_install() {
+  getent passwd "${_appuser}" >/dev/null || \
+    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+}
+
+_setup_dirs() {
+  mkdir -p "${_apphome}"
+
+  # Tulajdonos és jogosultságok beállítása
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+  chmod -R g+w "${_apphome}"
+  find "${_apphome}" -type d -exec chmod g+s {} \;
+
+  # venv létrehozása KIFEJEZETTEN python3.10-zel
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  fi
+
+  # Összes normál felhasználó (UID>=1000) hozzáadása az _appuser csoporthoz
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+}
+
+_show_info() {
+  cat <<EOF
+
+=============================================================================
+       Stable Diffusion WebUI Forge (sd35) - Post-Install Information
+=============================================================================
+
+1. To activate group membership for writing to /opt/stable-diffusion-webui-forge-sd35,
+   you MUST log out and log back in (or restart your shell).
+
+2. (Optional) Download model files, for example (6.46GB filesize!!):
+   wget -O "/opt/stable-diffusion-webui-forge-sd35/models/Stable-diffusion/DreamShaperXL_Lightning.safetensors" \\
+        "https://civitai.com/api/download/models/354657?type=Model&format=SafeTensor&size=full&fp=fp16"
+   
+
+3. Enable and start the systemd service:
+   sudo systemctl enable stable-diffusion-webui-forge-sd35.service
+   sudo systemctl start stable-diffusion-webui-forge-sd35.service
+
+   ⚠️  IMPORTANT: The first start will download about 3.5–3.6 GB of Python
+      dependencies and other files. This can take a long time depending on
+      your internet speed and machine. You can monitor the process with 'btop'
+      or 'htop'. When system load drops significantly, the initial setup is
+      complete.
+
+4. Once the service is running, open your browser and go to:
+   http://localhost:7863
+
+=============================================================================
+EOF
+}
+
+post_install() {
+  _setup_dirs
+  _show_info
+}
+
+post_upgrade() {
+  _setup_dirs
+  _show_info
+}
