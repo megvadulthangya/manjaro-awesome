@@ -38,10 +38,10 @@ _show_info() {
 1. To activate group membership for writing to /opt/stable-diffusion-webui-forge,
    you MUST log out and log back in (or restart your shell).
 
-2. (Optional) Download model files, for example:
-   wget -O "/opt/stable-diffusion-webui-forge/models/Stable-diffusion/model.safetensors" \\
+2. (Optional) Download model files, for example (6.46GB filesize!!):
+   wget -O "/opt/stable-diffusion-webui-forge/models/Stable-diffusion/DreamShaperXL_Lightning.safetensors" \\
         "https://civitai.com/api/download/models/354657?type=Model&format=SafeTensor&size=full&fp=fp16"
-   (Adjust the filename and URL as needed.)
+   
 
 3. Enable and start the systemd service:
    sudo systemctl enable stable-diffusion-webui-forge.service
