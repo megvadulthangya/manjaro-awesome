@@ -18,9 +18,6 @@ makedepends=('git')
 
 install="${pkgname}.install"
 
-# FONTOS: ha user módosítja, update nem írhatja felül
-backup=("opt/${_pkgname}/webui-user.sh")
-
 source=(
   "${pkgname}::git+${url}.git#branch=main"
   "${pkgname}.service"
@@ -46,19 +43,4 @@ package() {
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
   rm -rf "$pkgdir${_appdir}/.git"
 
-  # build-time patch of repo's own webui-user.sh
-  _cfg="$pkgdir${_appdir}/webui-user.sh"
-
-  if [[ -f "$_cfg" ]]; then
-    if grep -qE '^[[:space:]]*#?[[:space:]]*export[[:space:]]+COMMANDLINE_ARGS=' "$_cfg"; then
-      sed -i -E \
-        's|^[[:space:]]*#?[[:space:]]*export[[:space:]]+COMMANDLINE_ARGS=.*|export COMMANDLINE_ARGS="--opt-split-attention --disable-gpu-warning --port 7860 --api --skip-python-version-check"|' \
-        "$_cfg"
-    else
-      printf '\nexport COMMANDLINE_ARGS="--opt-split-attention --disable-gpu-warning --port 7860 --api --skip-python-version-check"\n' >> "$_cfg"
-    fi
-  else
-    echo "ERROR: webui-user.sh not found in repo root!"
-    exit 1
-  fi
 }
