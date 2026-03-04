@@ -8,7 +8,7 @@ LOCAL_PACKAGES = [
     "cudnn9.10-cuda12.9",
     "gghelper",
     "stable-diffusion-webui-forge",
-    "stable-diffusion-webui-forge-sd35",
+#    "stable-diffusion-webui-forge-sd35",
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
     "dmgrub-nord-1080p-ai",
