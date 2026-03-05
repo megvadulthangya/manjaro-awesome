@@ -2,7 +2,7 @@
 
 _pkgname="kohya_ss"
 pkgname="${_pkgname}"
-pkgver=r000.000000
+pkgver=r3371.4161d1d8
 pkgrel=1
 pkgdesc="Kohya's GUI and CLI for training diffusion models - uv managed (follows official guide)"
 arch=('x86_64')
