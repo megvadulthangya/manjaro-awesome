@@ -1,0 +1,20 @@
+[Unit]
+Description=Kohya_ss GUI service (byobu, uv managed)
+After=network.target
+
+[Service]
+Type=forking
+User=diffusion
+Group=diffusion
+WorkingDirectory=/opt/kohya_ss
+Environment=TERM=xterm-256color
+# A gui-uv.sh elvégzi az uv ellenőrzést/telepítést és elindítja a GUI-t a megadott paraméterekkel
+ExecStart=/usr/bin/byobu new-session -d -s kohya_ss '/opt/kohya_ss/gui-uv.sh --listen 0.0.0.0 --server_port 7861 --headless'
+ExecStop=/usr/bin/byobu kill-session -t kohya_ss
+Restart=always
+StartLimitIntervalSec=120
+StartLimitBurst=15
+UMask=007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="kohya_ss"
+pkgname="${_pkgname}"
+pkgver=r000.000000
+pkgrel=1
+pkgdesc="Kohya's GUI and CLI for training diffusion models - uv managed (follows official guide)"
+arch=('x86_64')
+url="https://github.com/bmaltais/kohya_ss"
+license=('Apache')
+depends=(
+  'git'          # a gui-uv.sh használja a klónozáshoz, de a csomag már klónozva van – biztonság kedvéért bent hagyjuk
+  'byobu'        # a service-hez kell
+)
+makedepends=('git')
+install="${pkgname}.install"
+
+source=(
+  "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=main::submodules=yes"
+  "${pkgname}.service"
+)
+sha256sums=('SKIP' 'SKIP')
+
+_appdir="/opt/${_pkgname}"
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  # systemd unit
+  install -Dm644 "$srcdir/${pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+
+  # alkalmazás fájlok másolása az /opt/kohya_ss-be
+  install -d "$pkgdir${_appdir}"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  rm -rf "$pkgdir${_appdir}/.git"
+  rm -rf "$pkgdir${_appdir}/.github"
+  # .gitmodules és a szubmodulok tartalma megmarad – a gui-uv.sh kezeli őket
+}

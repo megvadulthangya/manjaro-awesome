@@ -1,0 +1,35 @@
+#!/bin/bash
+
+_appname="kohya_ss"
+_apphome="/opt/${_appname}"
+_appuser="diffusion"
+
+pre_install() {
+  # diffusion felhasználó létrehozása, ha nem létezik
+  getent passwd "${_appuser}" >/dev/null || \
+    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+}
+
+post_install() {
+  # tulajdonos és jogosultságok beállítása
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+  chmod -R g+w "${_apphome}"
+  find "${_apphome}" -type d -exec chmod g+s {} \;
+
+  # normál felhasználók (UID>=1000) hozzáadása az _appuser csoporthoz,
+  # hogy írhassanak az /opt/kohya_ss könyvtárba (pl. config.toml, datasetek)
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+
+  # Információs üzenet (opcionális)
+  echo "Kohya_ss fájljai elhelyezve: ${_apphome}"
+  echo "A környezet és függőségek az első indításkor települnek a gui-uv.sh által."
+}
+
+post_upgrade() {
+  # frissítéskor is állítsuk be a jogokat (biztonság)
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+  chmod -R g+w "${_apphome}"
+  find "${_apphome}" -type d -exec chmod g+s {} \;
+}
