@@ -16,7 +16,7 @@ makedepends=('git')
 install="${pkgname}.install"
 
 source=(
-  "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=main::submodules=yes"
+  "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=main"
   "${pkgname}.service"
 )
 sha256sums=('SKIP' 'SKIP')
