@@ -7,10 +7,13 @@ _appuser="diffusion"
 pre_install() {
   # diffusion felhasználó létrehozása, ha nem létezik
   getent passwd "${_appuser}" >/dev/null || \
-    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+    useradd -r -s /bin/bash -d "${_apphome}" "${_appuser}"
 }
 
 post_install() {
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen (ha már létezett)
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
   # tulajdonos és jogosultságok beállítása
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
   chmod -R g+w "${_apphome}"
@@ -28,6 +31,9 @@ post_install() {
 }
 
 post_upgrade() {
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash maradjon
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
   # frissítéskor is állítsuk be a jogokat (biztonság)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
   chmod -R g+w "${_apphome}"
