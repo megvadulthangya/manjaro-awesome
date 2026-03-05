@@ -2,7 +2,7 @@
 
 _appname="stable-diffusion-webui-forge"
 _apphome="/opt/${_appname}"
-_appuser="sdwebui-forge"
+_appuser="diffusion"
 
 pre_install() {
   getent passwd "${_appuser}" >/dev/null || \

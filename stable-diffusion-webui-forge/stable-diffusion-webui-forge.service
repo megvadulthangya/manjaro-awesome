@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=sdwebui-forge
-Group=sdwebui-forge
+User=diffusion
+Group=diffusion
 WorkingDirectory=/opt/stable-diffusion-webui-forge
 
 Environment=PYTHONUNBUFFERED=1
