@@ -10,6 +10,7 @@ url="https://github.com/bmaltais/kohya_ss"
 license=('Apache')
 depends=(
   'git'          # a gui-uv.sh használja a klónozáshoz, de a csomag már klónozva van – biztonság kedvéért bent hagyjuk
+  'uv'
   'byobu'        # a service-hez kell
 )
 makedepends=('git')
