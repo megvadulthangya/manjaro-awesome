@@ -1,0 +1,153 @@
+
+=========================================
+FILE: PKGBUILD
+=========================================
+
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="stable-diffusion-webui-forge"
+pkgname="${_pkgname}"
+pkgver=r8627.dfdcbab6
+pkgrel=1
+pkgdesc="Stable Diffusion WebUI Forge (main branch) - python310 runtime"
+arch=('x86_64')
+url="https://github.com/lllyasviel/stable-diffusion-webui-forge"
+license=('AGPL3')
+
+depends=(
+  'python310'
+  'git'
+)
+
+makedepends=('git')
+
+install="${pkgname}.install"
+
+source=(
+  "${pkgname}::git+${url}.git#branch=main"
+  "${pkgname}.service"
+)
+
+sha256sums=('SKIP' 'SKIP')
+
+_appdir="/opt/${_pkgname}"
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+
+  # systemd unit
+  install -Dm644 "$srcdir/${pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+
+  # app files
+  install -d "$pkgdir${_appdir}"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  rm -rf "$pkgdir${_appdir}/.git"
+
+}
+
+=========================================
+FILE: stable-diffusion-webui-forge.install
+=========================================
+
+#!/bin/bash
+
+_appname="stable-diffusion-webui-forge"
+_apphome="/opt/${_appname}"
+_appuser="sdwebui-forge"
+
+pre_install() {
+  getent passwd "${_appuser}" >/dev/null || \
+    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+}
+
+_setup_dirs() {
+  mkdir -p "${_apphome}"
+
+  # Tulajdonos és jogosultságok beállítása
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+  chmod -R g+w "${_apphome}"
+  find "${_apphome}" -type d -exec chmod g+s {} \;
+
+  # venv létrehozása KIFEJEZETTEN python3.10-zel
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  fi
+
+  # Összes normál felhasználó (UID>=1000) hozzáadása az _appuser csoporthoz
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+}
+
+_show_info() {
+  cat <<EOF
+
+=============================================================================
+           Stable Diffusion WebUI Forge - Post-Install Information
+=============================================================================
+
+1. To activate group membership for writing to /opt/stable-diffusion-webui-forge,
+   you MUST log out and log back in (or restart your shell).
+
+2. (Optional) Download model files, for example (6.46GB filesize!!):
+   wget -O "/opt/stable-diffusion-webui-forge/models/Stable-diffusion/DreamShaperXL_Lightning.safetensors" \\
+        "https://civitai.com/api/download/models/354657?type=Model&format=SafeTensor&size=full&fp=fp16"
+   
+
+3. Enable and start the systemd service:
+   sudo systemctl enable stable-diffusion-webui-forge.service
+   sudo systemctl start stable-diffusion-webui-forge.service
+
+   ⚠️  IMPORTANT: The first start will download about 3.5–3.6 GB of Python
+      dependencies and other files. This can take a long time depending on
+      your internet speed and machine. You can monitor the process with 'btop'
+      or 'htop'. When system load drops significantly, the initial setup is
+      complete.
+
+4. Once the service is running, open your browser and go to:
+   http://localhost:7860
+
+=============================================================================
+EOF
+}
+
+post_install() {
+  _setup_dirs
+  _show_info
+}
+
+post_upgrade() {
+  _setup_dirs
+  _show_info
+}
+
+=========================================
+FILE: stable-diffusion-webui-forge.service
+=========================================
+
+[Unit]
+Description=Stable Diffusion WebUI Forge (python310)
+After=network.target
+
+[Service]
+Type=simple
+User=sdwebui-forge
+Group=sdwebui-forge
+WorkingDirectory=/opt/stable-diffusion-webui-forge
+
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/stable-diffusion-webui-forge/venv/bin/python /opt/stable-diffusion-webui-forge/launch.py --listen --no-half
+
+Restart=always
+StartLimitIntervalSec=120
+StartLimitBurst=15
+UMask=007
+
+[Install]
+WantedBy=multi-user.target
