@@ -1,7 +1,8 @@
 #!/bin/bash
 
 _appname="kohya_ss"
-_apphome="/opt/${_appname}"
+_apphome="/var/lib/kohya_ss"
+_appdir="/opt/kohya_ss"
 _appuser="diffusion"
 
 pre_install() {
@@ -14,10 +15,17 @@ post_install() {
   # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen (ha már létezett)
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
 
-  # tulajdonos és jogosultságok beállítása
+  # létrehozzuk a home könyvtárat, ha nem létezik
+  mkdir -p "${_apphome}"
+
+  # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  chmod -R g+w "${_apphome}"
-  find "${_apphome}" -type d -exec chmod g+s {} \;
+  chmod 755 "${_apphome}"
+
+  # tulajdonos és jogosultságok beállítása az alkalmazás könyvtárára
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+  chmod -R g+w "${_appdir}"
+  find "${_appdir}" -type d -exec chmod g+s {} \;
 
   # normál felhasználók (UID>=1000) hozzáadása az _appuser csoporthoz,
   # hogy írhassanak az /opt/kohya_ss könyvtárba (pl. config.toml, datasetek)
@@ -26,7 +34,8 @@ post_install() {
   done
 
   # Információs üzenet (opcionális)
-  echo "Kohya_ss fájljai elhelyezve: ${_apphome}"
+  echo "Kohya_ss fájljai elhelyezve: ${_appdir}"
+  echo "Home könyvtár: ${_apphome}"
   echo "A környezet és függőségek az első indításkor települnek a gui-uv.sh által."
 }
 
@@ -34,8 +43,15 @@ post_upgrade() {
   # biztosítjuk, hogy a felhasználó shellje /bin/bash maradjon
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
 
-  # frissítéskor is állítsuk be a jogokat (biztonság)
+  # létrehozzuk a home könyvtárat, ha nem létezik (upgrade után is)
+  mkdir -p "${_apphome}"
+
+  # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  chmod -R g+w "${_apphome}"
-  find "${_apphome}" -type d -exec chmod g+s {} \;
+  chmod 755 "${_apphome}"
+
+  # tulajdonos és jogosultságok beállítása az alkalmazás könyvtárára (frissítéskor is)
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+  chmod -R g+w "${_appdir}"
+  find "${_appdir}" -type d -exec chmod g+s {} \;
 }
