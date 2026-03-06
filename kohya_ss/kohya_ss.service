@@ -10,9 +10,11 @@ User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/kohya_ss
 Environment=HOME=/var/lib/kohya_ss
+Environment=UV_PROJECT_ENVIRONMENT=/var/lib/kohya_ss/.venv
+Environment=UV_CACHE_DIR=/var/lib/kohya_ss/.cache/uv
 Environment=BYOBU_PREFIX=/usr
 Environment=TERM=xterm-256color
-ExecStart=/usr/bin/byobu new-session -d -s kohya_ss 'bash -c "/opt/kohya_ss/gui-uv.sh --listen 0.0.0.0 --server_port 7861 --headless"'
+ExecStart=/usr/bin/byobu new-session -d -s kohya_ss 'bash -c "uv run kohya_gui.py --listen 0.0.0.0 --server_port 7861 --headless"'
 ExecStop=-/usr/bin/byobu kill-session -t kohya_ss
 Restart=always
 UMask=007

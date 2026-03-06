@@ -9,9 +9,9 @@ arch=('x86_64')
 url="https://github.com/bmaltais/kohya_ss"
 license=('Apache')
 depends=(
-  'git'          # a gui-uv.sh használja a klónozáshoz, de a csomag már klónozva van – biztonság kedvéért bent hagyjuk
+  'git'
   'uv'
-  'byobu'        # a service-hez kell
+  'byobu'
 )
 makedepends=('git')
 install="${pkgname}.install"
@@ -29,6 +29,12 @@ pkgver() {
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+prepare() {
+  cd "$srcdir/$pkgname"
+  # Initialize submodules to ensure all dependencies are present
+  git submodule update --init --recursive
+}
+
 package() {
   # systemd unit
   install -Dm644 "$srcdir/${pkgname}.service" \
@@ -39,5 +45,5 @@ package() {
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
-  # .gitmodules és a szubmodulok tartalma megmarad – a gui-uv.sh kezeli őket
+  # .gitmodules and submodules are kept; they are necessary for the uv-managed environment
 }

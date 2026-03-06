@@ -36,7 +36,7 @@ post_install() {
   # Információs üzenet (opcionális)
   echo "Kohya_ss fájljai elhelyezve: ${_appdir}"
   echo "Home könyvtár: ${_apphome}"
-  echo "A környezet és függőségek az első indításkor települnek a gui-uv.sh által."
+  echo "A környezet és függőségek az első indításkor települnek az uv által a /var/lib/kohya_ss/.venv környezetbe."
 }
 
 post_upgrade() {
