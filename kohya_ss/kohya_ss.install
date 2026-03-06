@@ -20,15 +20,14 @@ post_install() {
 
   # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  chmod 755 "${_apphome}"
+  chmod 2775 "${_apphome}"  # group write + sgid
 
   # tulajdonos és jogosultságok beállítása az alkalmazás könyvtárára
   chown -R "${_appuser}:${_appuser}" "${_appdir}"
-  chmod -R g+w "${_appdir}"
   find "${_appdir}" -type d -exec chmod g+s {} \;
 
   # normál felhasználók (UID>=1000) hozzáadása az _appuser csoporthoz,
-  # hogy írhassanak az /opt/kohya_ss könyvtárba (pl. config.toml, datasetek)
+  # hogy írhassanak a /var/lib/kohya_ss könyvtárba (pl. config.toml, datasetek)
   for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
     usermod -aG "${_appuser}" "$user" 2>/dev/null || true
   done
@@ -48,10 +47,9 @@ post_upgrade() {
 
   # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  chmod 755 "${_apphome}"
+  chmod 2775 "${_apphome}"  # group write + sgid
 
   # tulajdonos és jogosultságok beállítása az alkalmazás könyvtárára (frissítéskor is)
   chown -R "${_appuser}:${_appuser}" "${_appdir}"
-  chmod -R g+w "${_appdir}"
   find "${_appdir}" -type d -exec chmod g+s {} \;
 }
