@@ -46,7 +46,6 @@ prepare() {
   git submodule update --init --recursive
   
   # Overlay CUDA 12.4 specific requirements
-  # Mivel a fájlok a PKGBUILD mellett vannak, a makepkg a $srcdir gyökerébe tette őket
   cp -v "$srcdir"/requirements*.txt .
 }
 
@@ -55,9 +54,12 @@ package() {
   install -Dm644 "$srcdir/kohya_ss.service" \
     "$pkgdir/usr/lib/systemd/system/kohya_ss.service"
 
-  # alkalmazás fájlok másolása az /opt/kohya_ss-be
-  install -d "$pkgdir${_appdir}"
+  # alkalmazás fájlok másolása az /opt/kohya_ss-be, SGID bites joggal
+  install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  
+  # .sh fájlok futtathatóvá tétele
+  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
   
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"

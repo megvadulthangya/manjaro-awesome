@@ -16,15 +16,19 @@ _fix_permissions() {
   # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen
   chown -R "${_appuser}:${_appuser}" "${_appdir}"
   
-  # Minden könyvtárra: rwxrwxr-x (775) + SGID bit (hogy az új fájlok csoportja is diffusion maradjon)
+  # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
   find "${_appdir}" -type d -exec chmod 2775 {} +
   
-  # Minden fájlra: rw-rw-r-- (664), hogy a csoporttagok szerkeszthessék őket
+  # Minden fájlra: rw-rw-r-- (664)
   find "${_appdir}" -type f -exec chmod 664 {} +
 
-  # Speciális eset: a futtatható fájloknak (pl. szkriptek) kell az 'x' jog
-  # Ha vannak .sh vagy venv/bin fájlok, azokat érdemes futtathatóvá tenni, 
-  # de a fenti alapbeállítás a mappákba való írást már megoldja.
+  # .sh fájlok futtathatóvá tétele
+  find "${_appdir}" -type f -name "*.sh" -exec chmod +x {} +
+
+  # Ha létezik a virtuális környezet bin könyvtára, annak tartalmát is futtathatóvá tesszük
+  if [ -d "${_appdir}/venv/bin" ]; then
+    find "${_appdir}/venv/bin" -type f -exec chmod +x {} +
+  fi
 }
 
 post_install() {
