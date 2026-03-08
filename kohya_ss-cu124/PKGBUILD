@@ -33,7 +33,6 @@ source=(
 )
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
-
 _appdir="/opt/${_pkgname}"
 
 pkgver() {
@@ -45,8 +44,10 @@ prepare() {
   cd "$srcdir/$pkgname"
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
-  # Overlay CUDA 12.4 specific requirements and files
-  cp -a "$srcdir/cu124/." "$srcdir/$pkgname/"
+  
+  # Overlay CUDA 12.4 specific requirements
+  # Mivel a fájlok a PKGBUILD mellett vannak, a makepkg a $srcdir gyökerébe tette őket
+  cp -v "$srcdir"/requirements*.txt .
 }
 
 package() {
@@ -57,6 +58,7 @@ package() {
   # alkalmazás fájlok másolása az /opt/kohya_ss-be
   install -d "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
   # .gitmodules and submodules are kept
