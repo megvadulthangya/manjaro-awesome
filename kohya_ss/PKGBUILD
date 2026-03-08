@@ -4,13 +4,12 @@ _pkgname="kohya_ss"
 pkgname="${_pkgname}"
 pkgver=r3371.4161d1d8
 pkgrel=1
-pkgdesc="Kohya's GUI and CLI for training diffusion models - uv managed (follows official guide)"
+pkgdesc="Kohya_ss GUI (CUDA 12.8 backend) — ONLY for NVIDIA GPUs with Compute Capability ≥7.5 (Turing/Ampere/Ada/Hopper/Blackwell)"
 arch=('x86_64')
 url="https://github.com/bmaltais/kohya_ss"
 license=('Apache')
 depends=(
   'git'
-  'uv'
   'byobu'
 )
 makedepends=('git')
@@ -45,5 +44,5 @@ package() {
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
-  # .gitmodules and submodules are kept; they are necessary for the uv-managed environment
+  # .gitmodules and submodules are kept
 }
