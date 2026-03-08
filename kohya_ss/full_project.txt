@@ -1,0 +1,126 @@
+
+=========================================
+FILE: kohya_ss.install
+=========================================
+
+#!/bin/bash
+
+_appname="kohya_ss"
+_appdir="/opt/kohya_ss"
+_appuser="diffusion"
+
+pre_install() {
+  # diffusion felhasználó létrehozása, ha nem létezik
+  getent passwd "${_appuser}" >/dev/null || \
+    useradd -r -s /bin/bash -d "${_appdir}" "${_appuser}"
+}
+
+post_install() {
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen (ha már létezett)
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  # létrehozzuk a home könyvtárat, ha nem létezik
+  mkdir -p "${_appdir}"
+
+  # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+  chmod 2775 "${_appdir}"  # group write + sgid
+
+  # normál felhasználók (UID>=1000) hozzáadása az _appuser csoporthoz,
+  # hogy írhassanak a /opt/kohya_ss könyvtárba
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+
+  # Információs üzenet (opcionális)
+  echo "Kohya_ss fájljai elhelyezve: ${_appdir}"
+}
+
+post_upgrade() {
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash maradjon
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  # létrehozzuk a home könyvtárat, ha nem létezik (upgrade után is)
+  mkdir -p "${_appdir}"
+
+  # tulajdonos és jogosultságok beállítása a home könyvtárra (rekurzívan)
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+  chmod 2775 "${_appdir}"  # group write + sgid
+}
+=========================================
+FILE: kohya_ss.service
+=========================================
+
+[Unit]
+Description=Kohya_ss GUI (CUDA 12.8 backend) — ONLY for NVIDIA GPUs with Compute Capability ≥7.5 (Turing/Ampere/Ada/Hopper/Blackwell)
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=15
+
+[Service]
+Type=forking
+User=diffusion
+Group=diffusion
+WorkingDirectory=/opt/kohya_ss
+Environment=HOME=/opt/kohya_ss
+Environment=BYOBU_PREFIX=/usr
+Environment=TERM=xterm-256color
+ExecStart=/usr/bin/byobu new-session -d -s kohya_ss 'bash -c "cd /opt/kohya_ss && /opt/kohya_ss/venv/bin/python kohya_gui.py --listen 0.0.0.0 --server_port 7861 --headless"'
+ExecStop=-/usr/bin/byobu kill-session -t kohya_ss
+Restart=always
+UMask=007
+
+[Install]
+WantedBy=multi-user.target
+=========================================
+FILE: PKGBUILD
+=========================================
+
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="kohya_ss"
+pkgname="${_pkgname}"
+pkgver=r3371.4161d1d8
+pkgrel=1
+pkgdesc="Kohya_ss GUI (CUDA 12.8 backend) — ONLY for NVIDIA GPUs with Compute Capability ≥7.5 (Turing/Ampere/Ada/Hopper/Blackwell)"
+arch=('x86_64')
+url="https://github.com/bmaltais/kohya_ss"
+license=('Apache')
+depends=(
+  'git'
+  'byobu'
+)
+makedepends=('git')
+install="${pkgname}.install"
+
+source=(
+  "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=master"
+  "${pkgname}.service"
+)
+sha256sums=('SKIP' 'SKIP')
+
+_appdir="/opt/${_pkgname}"
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  # Initialize submodules to ensure all dependencies are present
+  git submodule update --init --recursive
+}
+
+package() {
+  # systemd unit
+  install -Dm644 "$srcdir/${pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+
+  # alkalmazás fájlok másolása az /opt/kohya_ss-be
+  install -d "$pkgdir${_appdir}"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  rm -rf "$pkgdir${_appdir}/.git"
+  rm -rf "$pkgdir${_appdir}/.github"
+  # .gitmodules and submodules are kept
+}

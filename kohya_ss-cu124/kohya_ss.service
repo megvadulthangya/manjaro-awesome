@@ -1,0 +1,21 @@
+[Unit]
+Description=Kohya_ss GUI (CUDA 12.4 backend) — supports NVIDIA GPUs with Compute Capability ≥5.0 (Kepler/Maxwell/Pascal/Volta/Turing/Ampere/Ada)
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=15
+
+[Service]
+Type=forking
+User=diffusion
+Group=diffusion
+WorkingDirectory=/opt/kohya_ss
+Environment=HOME=/opt/kohya_ss
+Environment=BYOBU_PREFIX=/usr
+Environment=TERM=xterm-256color
+ExecStart=/usr/bin/byobu new-session -d -s kohya_ss 'bash -c "cd /opt/kohya_ss && /opt/kohya_ss/venv/bin/python kohya_gui.py --listen 0.0.0.0 --server_port 7861 --headless"'
+ExecStop=-/usr/bin/byobu kill-session -t kohya_ss
+Restart=always
+UMask=007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,10 +1,10 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 _pkgname="kohya_ss"
-pkgname="${_pkgname}"
+pkgname="kohya_ss-cu126"
 pkgver=r3371.4161d1d8
 pkgrel=1
-pkgdesc="Kohya_ss GUI (CUDA 12.8 backend) — ONLY for NVIDIA GPUs with Compute Capability ≥7.5 (Turing/Ampere/Ada/Hopper/Blackwell)"
+pkgdesc="Kohya_ss GUI (CUDA 12.6 backend) — supports NVIDIA GPUs with Compute Capability ≥5.0 (Kepler/Maxwell/Pascal/Volta/Turing/Ampere/Ada)"
 arch=('x86_64')
 url="https://github.com/bmaltais/kohya_ss"
 license=('Apache')
@@ -14,14 +14,15 @@ depends=(
 )
 makedepends=('git')
 provides=('kohya_ss')
-conflicts=('kohya_ss-cu124' 'kohya_ss-cu126')
+conflicts=('kohya_ss' 'kohya_ss-cu124')
 install="${pkgname}.install"
 
 source=(
   "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=master"
-  "${pkgname}.service"
+  "kohya_ss.service"
+  "cu126"
 )
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -34,12 +35,14 @@ prepare() {
   cd "$srcdir/$pkgname"
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
+  # Overlay CUDA 12.6 specific requirements and files
+  cp -a "$srcdir/cu126/." "$srcdir/$pkgname/"
 }
 
 package() {
   # systemd unit
-  install -Dm644 "$srcdir/${pkgname}.service" \
-    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+  install -Dm644 "$srcdir/kohya_ss.service" \
+    "$pkgdir/usr/lib/systemd/system/kohya_ss.service"
 
   # alkalmazás fájlok másolása az /opt/kohya_ss-be
   install -d "$pkgdir${_appdir}"

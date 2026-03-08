@@ -9,6 +9,8 @@ LOCAL_PACKAGES = [
     "gghelper",
     "stable-diffusion-webui-forge",
     "kohya_ss",
+    "kohya_ss-cu124",
+    "kohya_ss-cu126",
 #    "stable-diffusion-webui-forge-sd35",
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
