@@ -19,7 +19,6 @@ install="${pkgname}.install"
 
 source=(
   "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=master"
-  "pip-upgrade.patch"
   "kohya_ss.service"
   "requirements.txt"
   "requirements_linux.txt"
@@ -31,6 +30,7 @@ source=(
   "requirements_pytorch_windows.txt"
   "requirements_runpod.txt"
   "requirements_windows.txt"
+  "setup.sh"
 )
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
@@ -45,10 +45,10 @@ prepare() {
   cd "$srcdir/$pkgname"
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
-  # Apply patch to upgrade pip in venv
-  patch -Np1 -i "$srcdir/pip-upgrade.patch"
   # Overlay CUDA 12.6 specific requirements and files
   cp -v "$srcdir"/requirements*.txt .
+  # Overlay setup.sh from the same directory as PKGBUILD
+  cp -v "$srcdir/setup.sh" .                      # <-- hozzáadva
 }
 
 package() {
