@@ -227,9 +227,9 @@ install_python_dependencies() {
     fi
   fi
 
-  # Pip frissítése minden környezetben (venv vagy conda)
+  # Pip frissítése a legújabb verzióra (már a virtuális környezetben)
   echo "Frissítem a pip-et a legújabb verzióra..."
-  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install --upgrade pip
 
   case "$OSTYPE" in
     "lin"*)
