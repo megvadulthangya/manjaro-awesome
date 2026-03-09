@@ -26,13 +26,13 @@ source=(
   "requirements_linux_docker.txt"
   "requirements_linux_ipex.txt"
   "requirements_linux_rocm.txt"
-  "requirements_macos_amd64.txt"
-  "requirements_macos_arm64.txt"
-  "requirements_pytorch_windows.txt"
+#  "requirements_macos_amd64.txt"
+#  "requirements_macos_arm64.txt"
+#  "requirements_pytorch_windows.txt"
   "requirements_runpod.txt"
-  "requirements_windows.txt"
+#  "requirements_windows.txt"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
