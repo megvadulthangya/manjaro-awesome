@@ -44,7 +44,6 @@ prepare() {
   cd "$srcdir/$pkgname"
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
-  
   # Overlay CUDA 12.4 specific requirements
   cp -v "$srcdir"/requirements*.txt .
 }
