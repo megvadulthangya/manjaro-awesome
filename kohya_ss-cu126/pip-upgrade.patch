@@ -1,0 +1,12 @@
+--- a/setup.sh
++++ b/setup.sh
+@@ -187,7 +187,9 @@
+     else
+       "$PYTHON_CMD" -m venv "$DIR/venv"
+       # Activate the virtual environment
+       # shellcheck source=/dev/null
+       source "$DIR/venv/bin/activate"
++      echo "Upgrading pip, setuptools, and wheel in venv..."
++      python -m pip install --upgrade pip setuptools wheel
+     fi
+   fi
