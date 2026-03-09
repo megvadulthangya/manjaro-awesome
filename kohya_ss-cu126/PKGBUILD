@@ -11,6 +11,7 @@ license=('Apache')
 depends=(
   'git'
   'byobu'
+  'acl'
 )
 makedepends=('git')
 provides=('kohya_ss')
@@ -48,7 +49,7 @@ prepare() {
   # Overlay CUDA 12.6 specific requirements and files
   cp -v "$srcdir"/requirements*.txt .
   # Overlay setup.sh from the same directory as PKGBUILD
-  cp -v "$srcdir/setup.sh" .                      # <-- hozzáadva
+  cp -v "$srcdir/setup.sh" .
 }
 
 package() {

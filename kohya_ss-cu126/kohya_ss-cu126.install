@@ -29,6 +29,10 @@ _fix_permissions() {
   if [ -d "${_appdir}/venv/bin" ]; then
     find "${_appdir}/venv/bin" -type f -exec chmod +x {} +
   fi
+
+  # ACL-ek beállítása a csoportos együttműködéshez
+  setfacl -R -m g:${_appuser}:rwx "${_appdir}"
+  setfacl -R -d -m g:${_appuser}:rwx "${_appdir}"
 }
 
 post_install() {
