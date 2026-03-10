@@ -11,6 +11,7 @@ license=('Apache')
 depends=(
   'git'
   'byobu'
+  'acl'
 )
 makedepends=('git')
 provides=('kohya_ss')
@@ -20,8 +21,9 @@ install="${pkgname}.install"
 source=(
   "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=master"
   "${pkgname}.service"
+  "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -34,6 +36,7 @@ prepare() {
   cd "$srcdir/$pkgname"
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
+  cp -v "$srcdir/setup.sh" .
 }
 
 package() {

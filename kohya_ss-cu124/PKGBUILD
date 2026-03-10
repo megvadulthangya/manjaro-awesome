@@ -11,6 +11,7 @@ license=('Apache')
 depends=(
   'git'
   'byobu'
+  'acl'
 )
 makedepends=('git')
 provides=('kohya_ss')
@@ -30,8 +31,9 @@ source=(
   "requirements_pytorch_windows.txt"
   "requirements_runpod.txt"
   "requirements_windows.txt"
+  "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -46,6 +48,7 @@ prepare() {
   git submodule update --init --recursive
   # Overlay CUDA 12.4 specific requirements
   cp -v "$srcdir"/requirements*.txt .
+  cp -v "$srcdir/setup.sh" .
 }
 
 package() {

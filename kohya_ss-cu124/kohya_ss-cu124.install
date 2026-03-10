@@ -19,16 +19,20 @@ _fix_permissions() {
   # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
   find "${_appdir}" -type d -exec chmod 2775 {} +
   
-  # Minden fájlra: rw-rw-r-- (664)
+  # Minden fájl alaphelyzetbe állítása: rw-rw-r-- (664) – semmi sem futtatható
   find "${_appdir}" -type f -exec chmod 664 {} +
 
-  # .sh fájlok futtathatóvá tétele
-  find "${_appdir}" -type f -name "*.sh" -exec chmod +x {} +
+  # Kifejezetten futtathatóvá tesszük a .sh fájlokat
+  find "${_appdir}" -type f -name "*.sh" -exec chmod 775 {} +
 
   # Ha létezik a virtuális környezet bin könyvtára, annak tartalmát is futtathatóvá tesszük
   if [ -d "${_appdir}/venv/bin" ]; then
-    find "${_appdir}/venv/bin" -type f -exec chmod +x {} +
+    find "${_appdir}/venv/bin" -type f -exec chmod 775 {} +
   fi
+
+  # ACL-ek beállítása a csoportos együttműködéshez (a nagy X biztosítja, hogy csak könyvtárak kapjanak futtatási jogot)
+  setfacl -R -m g:${_appuser}:rwX "${_appdir}"
+  setfacl -R -d -m g:${_appuser}:rwX "${_appdir}"
 }
 
 post_install() {
