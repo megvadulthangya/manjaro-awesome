@@ -6,26 +6,32 @@ _appuser="diffusion"
 
 pre_install() {
   getent passwd "${_appuser}" >/dev/null || \
-    useradd -r -s /bin/false -d "${_apphome}" "${_appuser}"
+    useradd -r -s /bin/bash -d "${_apphome}" "${_appuser}"
 }
 
-_setup_dirs() {
-  mkdir -p "${_apphome}"
-
-  # Tulajdonos és jogosultságok beállítása
+_fix_permissions() {
+  echo "Jogosultságok beállítása a következő könyvtáron: ${_apphome}..."
+  
+  # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  chmod -R g+w "${_apphome}"
-  find "${_apphome}" -type d -exec chmod g+s {} \;
+  
+  # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
+  find "${_apphome}" -type d -exec chmod 2775 {} +
+  
+  # Minden fájl alaphelyzetbe állítása: rw-rw-r-- (664) – semmi sem futtatható
+  find "${_apphome}" -type f -exec chmod 664 {} +
 
-  # venv létrehozása KIFEJEZETTEN python3.10-zel
-  if [[ ! -d "${_apphome}/venv" ]]; then
-    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  # Kifejezetten futtathatóvá tesszük a .sh fájlokat
+  find "${_apphome}" -type f -name "*.sh" -exec chmod 775 {} +
+
+  # Ha létezik a virtuális környezet bin könyvtára, annak tartalmát is futtathatóvá tesszük
+  if [ -d "${_apphome}/venv/bin" ]; then
+    find "${_apphome}/venv/bin" -type f -exec chmod 775 {} +
   fi
 
-  # Összes normál felhasználó (UID>=1000) hozzáadása az _appuser csoporthoz
-  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
-    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
-  done
+  # ACL-ek beállítása a csoportos együttműködéshez (a nagy X biztosítja, hogy csak könyvtárak kapjanak futtatási jogot)
+  setfacl -R -m g:${_appuser}:rwX "${_apphome}"
+  setfacl -R -d -m g:${_appuser}:rwX "${_apphome}"
 }
 
 _show_info() {
@@ -61,11 +67,34 @@ EOF
 }
 
 post_install() {
-  _setup_dirs
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen (bár pre_install már beállította)
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  # Virtuális környezet létrehozása, ha még nem létezik
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  fi
+
+  # Jogok fixálása
+  _fix_permissions
+
+  # Felhasználók hozzáadása a csoporthoz
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+
   _show_info
 }
 
 post_upgrade() {
-  _setup_dirs
-  _show_info
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  # Virtuális környezet létrehozása, ha még nem létezik (frissítéskor is lehet, hogy törölték)
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  fi
+
+  # Jogok fixálása
+  _fix_permissions
 }

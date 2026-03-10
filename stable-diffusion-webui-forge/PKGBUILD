@@ -12,6 +12,7 @@ license=('AGPL3')
 depends=(
   'python310'
   'git'
+  'acl'
 )
 
 makedepends=('git')
