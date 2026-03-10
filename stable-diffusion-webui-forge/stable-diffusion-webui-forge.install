@@ -9,10 +9,22 @@ pre_install() {
     useradd -r -s /bin/bash -d "${_apphome}" "${_appuser}"
 }
 
+_create_venv() {
+  # 1. Alapvető tulajdonos beállítása a mappára, különben a 'su' paranccsal
+  # futtatott venv kreálás elhasal 'Permission denied' hibával.
+  chown -R "${_appuser}:${_appuser}" "${_apphome}"
+
+  # 2. Virtuális környezet létrehozása a diffusion user nevében
+  if [[ ! -d "${_apphome}/venv" ]]; then
+    echo "Virtuális környezet (venv) létrehozása python3.10-zel..."
+    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
+  fi
+}
+
 _fix_permissions() {
   echo "Jogosultságok beállítása a következő könyvtáron: ${_apphome}..."
   
-  # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen
+  # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen (biztonsági ismétlés)
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
   
   # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
@@ -67,15 +79,13 @@ EOF
 }
 
 post_install() {
-  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen (bár pre_install már beállította)
+  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
 
-  # Virtuális környezet létrehozása, ha még nem létezik
-  if [[ ! -d "${_apphome}/venv" ]]; then
-    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
-  fi
+  # Venv létrehozása a megfelelő jogokkal
+  _create_venv
 
-  # Jogok fixálása
+  # Jogok végleges fixálása (ACL, SGID, chmod)
   _fix_permissions
 
   # Felhasználók hozzáadása a csoporthoz
@@ -90,11 +100,9 @@ post_upgrade() {
   # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
 
-  # Virtuális környezet létrehozása, ha még nem létezik (frissítéskor is lehet, hogy törölték)
-  if [[ ! -d "${_apphome}/venv" ]]; then
-    su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
-  fi
+  # Frissítéskor is leellenőrizzük, hátha törölték a venv-et
+  _create_venv
 
-  # Jogok fixálása
+  # Jogok újraalkalmazása a frissített fájlokra
   _fix_permissions
 }

@@ -39,9 +39,15 @@ package() {
   install -Dm644 "$srcdir/${pkgname}.service" \
     "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
 
-  # app files
-  install -d "$pkgdir${_appdir}"
+  # app files - SGID bittel hozzuk létre a főkönyvtárat (2775)
+  install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  
+  # .sh fájlok futtathatóvá tétele már a csomagban
+  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
+
   rm -rf "$pkgdir${_appdir}/.git"
+  # Esetleg a .github mappát is törölheted, ha nincs rá szükség, ahogy a kohya-nál:
+  rm -rf "$pkgdir${_appdir}/.github"
 
 }
