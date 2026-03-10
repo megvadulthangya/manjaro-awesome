@@ -1,78 +1,81 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
 pkgname=awesome-copycats-manjaro
-pkgver=r1064.247b081
+pkgver=1064
 pkgrel=1
-pkgdesc="A forked and enhanced version of the original Awesome WM Copycats repository."
+pkgdesc="Nord themed AwesomeWM configuration based on awesome-copycats"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
 
-# --- MÓDOSÍTÁS: Függőségek beállítása ---
-# Ezek kellenek, hogy a Quake terminál és a config funkciói (háttér, copy-paste) működjenek az ISO-n.
-# A lain-git és awesome-freedesktop-git maradt, feltételezve, hogy ezeket is építed a repódban.
-depends=()
-
+depends=('awesome')
 makedepends=('git')
-source=("git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
+
+source=("$pkgname-$pkgver.tar.gz::https://github.com/megvadulthangya/awesome-copycats-manjaro/archive/refs/heads/nord.tar.gz")
 sha256sums=('SKIP')
 
-pkgver() {
-  # Ez most már biztonságos, mert a prepare() nem törli ki alóla a .git-et
-  cd "$srcdir/awesome-copycats-manjaro"
-  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
-
-prepare() {
-  # A prepare most üres vagy törölhető. 
-  # SOHA ne töröld itt a .git mappát, mert kell a pkgver-nek!
-  true
-}
-
 package() {
-  # Belépünk a letöltött forrás mappájába
-  cd "$srcdir/awesome-copycats-manjaro"
-   
-  # Célmappa létrehozása
-  install -d -m755 "$pkgdir/etc/skel/.config/awesome"
-   
-  # MÁSOLÁS: A 'cp -a' mindent másol (rejtett fájlokat is), rekurzívan, jogokkal együtt.
-  # Mivel a scratch.lua ott van a git repódban, itt automatikusan átmásolódik!
+
+  cd "$srcdir/awesome-copycats-manjaro-nord"
+
+  # Target directory
+  install -dm755 "$pkgdir/etc/skel/.config/awesome"
+
+  # Copy configuration files
   cp -a . "$pkgdir/etc/skel/.config/awesome/"
-   
-  # TISZTÍTÁS: Most, hogy már a csomagban ($pkgdir) van minden,
-  # INNEN töröljük ki a .git mappát.
+
+  # Remove unwanted repository metadata
   rm -rf "$pkgdir/etc/skel/.config/awesome/.git"
-  rm -rf "$pkgdir/etc/skel/.config/awesome/.gitignore"
   rm -rf "$pkgdir/etc/skel/.config/awesome/.github" 2>/dev/null || true
-   
-  # Template átnevezése (ha létezik)
-  if [ -f "$pkgdir/etc/skel/.config/awesome/rc.lua.template" ]; then
-    mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" "$pkgdir/etc/skel/.config/awesome/rc.lua"
+  rm -f "$pkgdir/etc/skel/.config/awesome/.gitignore"
+
+  # Rename template if present
+  if [[ -f "$pkgdir/etc/skel/.config/awesome/rc.lua.template" ]]; then
+      mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" \
+         "$pkgdir/etc/skel/.config/awesome/rc.lua"
   fi
-   
-  # Jogosultságok beállítása (biztos, ami biztos)
+
+  # Ensure correct permissions
   find "$pkgdir/etc/skel/.config/awesome" -type f -exec chmod 644 {} \;
   find "$pkgdir/etc/skel/.config/awesome" -type d -exec chmod 755 {} \;
-   
-  # Install script létrehozása
-  install -d -m755 "$pkgdir/usr/share/$pkgname"
+
+  # Install helper script
+  install -dm755 "$pkgdir/usr/share/$pkgname"
+
   cat > "$pkgdir/usr/share/$pkgname/install-to-user.sh" << 'EOF'
 #!/bin/bash
-if [ -d "$HOME/.config/awesome" ]; then
-  echo "Backing up existing Awesome config to $HOME/.config/awesome.backup"
-  mv "$HOME/.config/awesome" "$HOME/.config/awesome.backup"
+
+set -e
+
+CONFIG_DIR="$HOME/.config/awesome"
+SOURCE_DIR="/etc/skel/.config/awesome"
+
+if [[ -d "$CONFIG_DIR" ]]; then
+    echo "Backing up existing Awesome config to $CONFIG_DIR.backup"
+    mv "$CONFIG_DIR" "$CONFIG_DIR.backup"
 fi
-echo "Installing Awesome WM Nord configuration to $HOME/.config/awesome"
-cp -r /etc/skel/.config/awesome "$HOME/.config/"
-echo "Installation complete! Restart Awesome WM with Mod+Ctrl+R"
+
+echo "Installing Awesome WM Nord configuration..."
+cp -r "$SOURCE_DIR" "$HOME/.config/"
+
+echo "Installation complete."
+echo "Restart Awesome WM with Mod+Ctrl+R"
 EOF
-   
+
   chmod +x "$pkgdir/usr/share/$pkgname/install-to-user.sh"
-   
-  # README
-  install -d -m755 "$pkgdir/usr/share/doc/$pkgname"
+
+  # Install README
+  install -dm755 "$pkgdir/usr/share/doc/$pkgname"
+
   cat > "$pkgdir/usr/share/doc/$pkgname/README" << EOF
 Awesome WM Nord Configuration
-Run the installation script: /usr/share/$pkgname/install-to-user.sh
+
+To install the configuration for your user run:
+
+/usr/share/$pkgname/install-to-user.sh
+
+This will copy the configuration from /etc/skel/.config/awesome
+to your home directory.
 EOF
+
 }
