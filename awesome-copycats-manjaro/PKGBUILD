@@ -1,6 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome-copycats-manjaro
+pkgver=r0000.9999
 pkgrel=1
 pkgdesc="Nord themed AwesomeWM configuration based on awesome-copycats"
 arch=('any')
@@ -14,7 +15,7 @@ source=("$pkgname::git+https://github.com/megvadulthangya/awesome-copycats-manja
 sha256sums=('SKIP')
 
 pkgver() {
-  cd "$pkgname"
+  cd "$srcdir/$pkgname"
 
   printf "r%s.%s" \
     "$(git rev-list --count HEAD)" \
@@ -29,27 +30,22 @@ package() {
 
   cp -a . "$pkgdir/etc/skel/.config/awesome/"
 
-  # repo meta eltávolítás
   rm -rf "$pkgdir/etc/skel/.config/awesome/.git"
   rm -rf "$pkgdir/etc/skel/.config/awesome/.github" 2>/dev/null || true
   rm -f "$pkgdir/etc/skel/.config/awesome/.gitignore"
 
-  # template rename
-  if [[ -f "$pkgdir/etc/skel/.config/awesome/rc.lua.template" ]]; then
+  if [[ -f rc.lua.template ]]; then
       mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" \
          "$pkgdir/etc/skel/.config/awesome/rc.lua"
   fi
 
-  # permissions
   find "$pkgdir/etc/skel/.config/awesome" -type f -exec chmod 644 {} \;
   find "$pkgdir/etc/skel/.config/awesome" -type d -exec chmod 755 {} \;
 
-  # helper script
   install -dm755 "$pkgdir/usr/share/$pkgname"
 
   cat > "$pkgdir/usr/share/$pkgname/install-to-user.sh" << 'EOF'
 #!/bin/bash
-
 set -e
 
 CONFIG_DIR="$HOME/.config/awesome"
@@ -63,8 +59,7 @@ fi
 echo "Installing Awesome WM Nord configuration..."
 cp -r "$SOURCE_DIR" "$HOME/.config/"
 
-echo "Installation complete."
-echo "Restart Awesome WM with Mod+Ctrl+R"
+echo "Restart Awesome with Mod+Ctrl+R"
 EOF
 
   chmod +x "$pkgdir/usr/share/$pkgname/install-to-user.sh"
@@ -72,9 +67,9 @@ EOF
   install -dm755 "$pkgdir/usr/share/doc/$pkgname"
 
   cat > "$pkgdir/usr/share/doc/$pkgname/README" << EOF
-Awesome WM Nord Configuration
+Awesome WM Nord configuration
 
-To install the configuration run:
+Install with:
 
 /usr/share/$pkgname/install-to-user.sh
 EOF
