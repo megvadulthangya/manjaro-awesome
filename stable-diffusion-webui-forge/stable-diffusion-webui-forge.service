@@ -3,14 +3,17 @@ Description=Stable Diffusion WebUI Forge (python310)
 After=network.target
 
 [Service]
-Type=simple
+Type=forking
 User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/stable-diffusion-webui-forge
 
 Environment=PYTHONUNBUFFERED=1
+Environment=BYOBU_PREFIX=/usr
+Environment=TERM=xterm-256color
 
-ExecStart=/opt/stable-diffusion-webui-forge/venv/bin/python /opt/stable-diffusion-webui-forge/launch.py --listen --no-half
+ExecStart=/usr/bin/byobu new-session -d -s sdwebui-forge 'bash -c "cd /opt/stable-diffusion-webui-forge && /opt/stable-diffusion-webui-forge/venv/bin/python launch.py --listen --no-half"'
+ExecStop=-/usr/bin/byobu kill-session -t sdwebui-forge
 
 Restart=always
 StartLimitIntervalSec=120
