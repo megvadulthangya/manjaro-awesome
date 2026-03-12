@@ -32,8 +32,9 @@ source=(
   "requirements_runpod.txt"
   "requirements_windows.txt"
   "setup.sh"
+  "Stable-diffusion"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -49,6 +50,7 @@ prepare() {
   # Overlay CUDA 12.4 specific requirements
   cp -v "$srcdir"/requirements*.txt .
   cp -v "$srcdir/setup.sh" .
+  cp -v "$srcdir/Stable-diffusion" .
 }
 
 package() {
