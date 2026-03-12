@@ -22,9 +22,8 @@ source=(
   "${pkgname}::git+https://github.com/bmaltais/kohya_ss.git#branch=master"
   "${pkgname}.service"
   "setup.sh"
-  "Stable-diffusion"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -38,7 +37,6 @@ prepare() {
   # Initialize submodules to ensure all dependencies are present
   git submodule update --init --recursive
   cp -v "$srcdir/setup.sh" .
-  cp -v "$srcdir/Stable-diffusion" .
 }
 
 package() {
@@ -49,6 +47,9 @@ package() {
   # alkalmazás fájlok másolása az /opt/kohya_ss-be, SGID bites joggal
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  
+  # Symlink létrehozása
+  ln -s /opt/stable-diffusion-webui-forge/models/Stable-diffusion "$pkgdir${_appdir}/models/Stable-diffusion"
   
   # .sh fájlok futtathatóvá tétele
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;

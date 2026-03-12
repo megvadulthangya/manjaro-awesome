@@ -32,9 +32,8 @@ source=(
   "requirements_runpod.txt"
   "requirements_windows.txt"
   "setup.sh"
-  "Stable-diffusion"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -51,7 +50,6 @@ prepare() {
   cp -v "$srcdir"/requirements*.txt .
   # Overlay setup.sh from the same directory as PKGBUILD
   cp -v "$srcdir/setup.sh" .
-  cp -v "$srcdir/Stable-diffusion" .
 }
 
 package() {
@@ -62,6 +60,9 @@ package() {
   # alkalmazás fájlok másolása az /opt/kohya_ss-be, SGID bites joggal
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  
+  # Symlink létrehozása
+  ln -s /opt/stable-diffusion-webui-forge/models/Stable-diffusion "$pkgdir${_appdir}/models/Stable-diffusion"
   
   # .sh fájlok futtathatóvá tétele
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
