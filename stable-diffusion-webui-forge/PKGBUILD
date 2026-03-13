@@ -43,6 +43,16 @@ package() {
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
   
+  # --- INJEKCIÓ: requirements_versions.txt módosítása ---
+  # Hozzáadjuk a hiányzó csomagokat, hogy a Forge saját telepítője felismerje őket
+  echo "joblib" >> "$pkgdir${_appdir}/requirements_versions.txt"
+  echo "insightface" >> "$pkgdir${_appdir}/requirements_versions.txt"
+  
+  # Kényszerítjük a biztonságos verziókat a fájlban (felülírjuk ha már benne van)
+  sed -i 's/numpy==.*/numpy==1.26.2/' "$pkgdir${_appdir}/requirements_versions.txt"
+  sed -i 's/protobuf==.*/protobuf==3.20.0/' "$pkgdir${_appdir}/requirements_versions.txt"
+  # ------------------------------------------------------
+  
   # .sh fájlok futtathatóvá tétele már a csomagban
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
 
