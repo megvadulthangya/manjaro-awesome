@@ -1,5 +1,5 @@
 [Unit]
-Description=Stable Diffusion WebUI Forge (Stable backend: PyTorch 2.3.1 / CU 12.1)
+Description=Stable Diffusion WebUI Forge (Experimental backend: PyTorch 2.4 / CU 12.4)
 After=network.target
 
 [Service]
@@ -12,7 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=BYOBU_PREFIX=/usr
 Environment=TERM=xterm-256color
 
-ExecStart=/usr/bin/byobu new-session -d -s sdwebui-forge 'bash -c "cd /opt/stable-diffusion-webui-forge && /opt/stable-diffusion-webui-forge/venv/bin/python launch.py --listen --no-half"'
+ExecStart=/usr/bin/byobu new-session -d -s sdwebui-forge 'bash -c "cd /opt/stable-diffusion-webui-forge && /opt/stable-diffusion-webui-forge/venv/bin/python launch.py --listen --no-half --disable-gpu-warning"'
 ExecStop=-/usr/bin/byobu kill-session -t sdwebui-forge
 
 Restart=always

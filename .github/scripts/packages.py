@@ -8,6 +8,7 @@ LOCAL_PACKAGES = [
     "cudnn9.10-cuda12.9",
     "gghelper",
     "stable-diffusion-webui-forge",
+    "stable-diffusion-webui-forge-cu124",
     "kohya_ss",
     "kohya_ss-cu124",
     "kohya_ss-cu126",

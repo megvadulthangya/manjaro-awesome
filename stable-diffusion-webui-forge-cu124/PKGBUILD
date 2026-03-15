@@ -1,10 +1,10 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 _pkgname="stable-diffusion-webui-forge"
-pkgname="${_pkgname}"
+pkgname="${_pkgname}-cu124"
 pkgver=r8627.dfdcbab6
 pkgrel=1
-pkgdesc="Stable Diffusion WebUI Forge (Stable backend: PyTorch 2.3.1 / CU 12.1)"
+pkgdesc="Stable Diffusion WebUI Forge (Experimental backend: PyTorch 2.4 / CU 12.4)"
 arch=('x86_64')
 url="https://github.com/lllyasviel/stable-diffusion-webui-forge"
 license=('AGPL3')
@@ -17,15 +17,15 @@ depends=(
 )
 
 provides=("${_pkgname}")
-conflicts=("${_pkgname}-cu124")
+conflicts=("${_pkgname}")
 
 makedepends=('git')
 
 install="${pkgname}.install"
 
 source=(
-  "${pkgname}::git+${url}.git#branch=main"
-  "${pkgname}.service"
+  "${_pkgname}::git+${url}.git#branch=main"
+  "${_pkgname}.service"
   "requirements_versions.txt"
 )
 
@@ -34,31 +34,28 @@ sha256sums=('SKIP' 'SKIP' 'SKIP')
 _appdir="/opt/${_pkgname}"
 
 pkgver() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$_pkgname"
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$_pkgname"
   cp -v "$srcdir"/requirements_versions.txt .
 }
 
 package() {
 
-  # systemd unit
-  install -Dm644 "$srcdir/${pkgname}.service" \
-    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+  # systemd unit (keeps original service file name)
+  install -Dm644 "$srcdir/${_pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${_pkgname}.service"
 
-  # app files - SGID bittel hozzuk létre a főkönyvtárat (2775)
+  # app files - create main directory with SGID (2775)
   install -d -m 2775 "$pkgdir${_appdir}"
-  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  cp -a "$srcdir/$_pkgname/." "$pkgdir${_appdir}/"
   
-   
-  # .sh fájlok futtathatóvá tétele már a csomagban
+  # make all .sh files executable in the package
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
 
   rm -rf "$pkgdir${_appdir}/.git"
-  # Esetleg a .github mappát is törölheted, ha nincs rá szükség, ahogy a kohya-nál:
   rm -rf "$pkgdir${_appdir}/.github"
-
 }
