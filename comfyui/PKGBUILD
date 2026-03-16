@@ -9,7 +9,7 @@ arch=('x86_64')
 url="https://github.com/Comfy-Org/ComfyUI"
 license=('GPL3')
 depends=(
-  'python>=3.13'
+  'python313'
   'git'
   'byobu'
   'acl'
