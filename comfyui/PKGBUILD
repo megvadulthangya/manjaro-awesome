@@ -1,0 +1,69 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="ComfyUI"
+pkgname="comfyui"
+pkgver=rXXX.XXXXXXX
+pkgrel=1
+pkgdesc="ComfyUI GUI (Latest PyTorch)"
+arch=('x86_64')
+url="https://github.com/Comfy-Org/ComfyUI"
+license=('GPL3')
+depends=(
+  'python>=3.13'
+  'git'
+  'byobu'
+  'acl'
+)
+makedepends=('git')
+provides=('comfyui')
+conflicts=('comfyui-cu126')
+install="${pkgname}.install"
+
+source=(
+  "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
+  "${pkgname}.service"
+  "${pkgname}.install"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+_appdir="/opt/${_pkgname}"
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  git submodule update --init --recursive
+}
+
+package() {
+  # systemd unit
+  install -Dm644 "$srcdir/${pkgname}.service" \
+    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+
+  # alkalmazás fájlok másolása az /opt/ComfyUI-be, SGID bites joggal
+  install -d -m 2775 "$pkgdir${_appdir}"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+
+  # Virtuális környezet létrehozása (üresen, csak core fájlok)
+  python -m venv "$pkgdir${_appdir}/venv"
+
+  # Symlink a modellekhez
+  rm -rf "$pkgdir${_appdir}/models/checkpoints"
+  mkdir -p "$pkgdir${_appdir}/models"
+  ln -s /opt/stable-diffusion-webui-forge/models/Stable-diffusion "$pkgdir${_appdir}/models/checkpoints"
+
+  # Jogosultságok előzetes beállítása (SGID könyvtárakra, futtatható .sh és venv/bin)
+  find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
+  find "$pkgdir${_appdir}" -type f -not -path "*/venv/bin/*" -exec chmod 664 {} \;
+  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
+  if [ -d "$pkgdir${_appdir}/venv/bin" ]; then
+    find "$pkgdir${_appdir}/venv/bin" -type f -exec chmod 775 {} \;
+  fi
+
+  # Felesleges git könyvtárak eltávolítása
+  rm -rf "$pkgdir${_appdir}/.git"
+  rm -rf "$pkgdir${_appdir}/.github"
+}
