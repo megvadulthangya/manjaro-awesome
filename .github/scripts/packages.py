@@ -54,6 +54,7 @@ AUR_PACKAGES = [
     "find-the-command",
     "p7zip-gui",
     "python310",
+    "python313",
     "qownnotes",
     "xorg-font-utils",
     "xnviewmp",
