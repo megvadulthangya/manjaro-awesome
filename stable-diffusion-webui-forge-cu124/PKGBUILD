@@ -52,6 +52,8 @@ package() {
   # app files - create main directory with SGID (2775)
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$_pkgname/." "$pkgdir${_appdir}/"
+  # Create VAE-taesd directory within models with SGID permissions
+  install -d -m 2775 "$pkgdir${_appdir}/models/VAE-taesd"
   
   # make all .sh files executable in the package
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
