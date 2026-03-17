@@ -48,7 +48,7 @@ package() {
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
 
   # Virtuális környezet létrehozása (üresen, csak core fájlok)
-  python -m venv "$pkgdir${_appdir}/venv"
+  python3.13 -m venv "$pkgdir${_appdir}/venv"
 
   # Symlink a modellekhez
   rm -rf "$pkgdir${_appdir}/models/checkpoints"
