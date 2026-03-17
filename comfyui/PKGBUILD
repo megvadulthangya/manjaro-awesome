@@ -23,8 +23,9 @@ source=(
   "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
   "${pkgname}.service"
   "${pkgname}.install"
+  "extra_model_paths.yaml"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -36,6 +37,7 @@ pkgver() {
 prepare() {
   cd "$srcdir/$pkgname"
   git submodule update --init --recursive
+  cp -v "$srcdir/extra_model_paths.yaml" "$srcdir/$pkgname/extra_model_paths.yaml"
 }
 
 package() {
@@ -50,10 +52,10 @@ package() {
   # Virtuális környezet létrehozása (üresen, csak core fájlok)
   python3.13 -m venv "$pkgdir${_appdir}/venv"
 
-  # Symlink a modellekhez
-  rm -rf "$pkgdir${_appdir}/models/checkpoints"
-  mkdir -p "$pkgdir${_appdir}/models"
-  ln -s /opt/stable-diffusion-webui-forge/models/Stable-diffusion "$pkgdir${_appdir}/models/checkpoints"
+  # Symlink a modellekhez (vae-approx)
+  mkdir -p "$pkgdir${_appdir}/models/vae-approx"
+  ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae-approx/approx"
+  ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae-approx/taesd"
 
   # Jogosultságok előzetes beállítása (SGID könyvtárakra, futtatható .sh és venv/bin)
   find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
