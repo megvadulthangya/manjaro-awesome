@@ -2,7 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-git"
-pkgver=r4927.379fbd1a8
+pkgver=r4941.f6b869d7d
 pkgrel=1
 pkgdesc="ComfyUI GUI (Latest PyTorch)"
 arch=('x86_64')
