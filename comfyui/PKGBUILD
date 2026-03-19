@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 _pkgname="ComfyUI"
-pkgname="comfyui"
+pkgname="comfyui-git"
 pkgver=r4927.379fbd1a8
 pkgrel=1
 pkgdesc="ComfyUI GUI (Latest PyTorch)"
@@ -16,13 +16,14 @@ depends=(
 )
 makedepends=('git')
 provides=('comfyui')
-conflicts=('comfyui-cu126')
-install="${pkgname}.install"
+conflicts=('comfyui' 'comfyui-cu126')
+install="comfyui.install"
 
+# Figyeld a név prefixet: kikényszerítjük, hogy a comfyui-git néven húzza be
 source=(
   "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git"
-  "${pkgname}.service"
-  "${pkgname}.install"
+  "comfyui.service"
+  "comfyui.install"
   "extra_model_paths.yaml"
   "setup.sh"
 )
@@ -31,7 +32,8 @@ sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 _appdir="/opt/${_pkgname}"
 
 pkgver() {
-  cd "$srcdir/$pkgname"
+  # A $srcdir használata itt tilos a parserek miatt, ez a helyes Arch szintaxis
+  cd "$pkgname"
 
   # Ensure full history (CI shallow clone fix)
   if git rev-parse --is-shallow-repository >/dev/null 2>&1; then
@@ -44,20 +46,21 @@ pkgver() {
 }
 
 prepare() {
-  cd "$srcdir/$pkgname"
+  cd "$pkgname"
   git submodule update --init --recursive
-  cp -v "$srcdir/extra_model_paths.yaml" "$srcdir/$pkgname/extra_model_paths.yaml"
-  cp -v "$srcdir/setup.sh" "$srcdir/$pkgname/setup.sh"
+  # A fájlok másolásánál is a standard relatív utat használjuk a célhoz
+  cp -v "$srcdir/extra_model_paths.yaml" "extra_model_paths.yaml"
+  cp -v "$srcdir/setup.sh" "setup.sh"
 }
 
 package() {
   # systemd unit
-  install -Dm644 "$srcdir/${pkgname}.service" \
-    "$pkgdir/usr/lib/systemd/system/${pkgname}.service"
+  install -Dm644 "$srcdir/comfyui.service" \
+    "$pkgdir/usr/lib/systemd/system/comfyui.service"
 
   # alkalmazás fájlok másolása az /opt/ComfyUI-be, SGID bites joggal
   install -d -m 2775 "$pkgdir${_appdir}"
-  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}//"
 
   # Virtuális környezet létrehozása (üresen, csak core fájlok)
   python3.13 -m venv "$pkgdir${_appdir}/venv"
