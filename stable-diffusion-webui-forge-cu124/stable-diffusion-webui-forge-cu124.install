@@ -3,10 +3,19 @@
 _appname="stable-diffusion-webui-forge"
 _apphome="/opt/${_appname}"
 _appuser="diffusion"
+_userhome="/var/lib/diffusion"
 
 pre_install() {
-  getent passwd "${_appuser}" >/dev/null || \
-    useradd -r -s /bin/bash -d "${_apphome}" "${_appuser}"
+  # diffusion felhasználó létrehozása, ha nem létezik
+  if ! getent passwd "${_appuser}" >/dev/null; then
+    useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
+  fi
+  # Ensure home directory exists with correct permissions
+  if [ ! -d "${_userhome}" ]; then
+    mkdir -p "${_userhome}"
+    chown "${_appuser}:${_appuser}" "${_userhome}"
+    chmod 0755 "${_userhome}"
+  fi
 }
 
 _create_venv() {

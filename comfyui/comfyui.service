@@ -9,7 +9,7 @@ Type=forking
 User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/ComfyUI
-Environment=HOME=/opt/ComfyUI
+#Environment=HOME=/opt/ComfyUI
 Environment=BYOBU_PREFIX=/usr
 Environment=TERM=xterm-256color
 ExecStart=/usr/bin/byobu new-session -d -s comfyui 'bash -c "cd /opt/ComfyUI && /opt/ComfyUI/venv/bin/python main.py --listen 0.0.0.0 --port 8188"'

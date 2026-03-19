@@ -24,8 +24,9 @@ source=(
   "${pkgname}.service"
   "${pkgname}.install"
   "extra_model_paths.yaml"
+  "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -38,6 +39,7 @@ prepare() {
   cd "$srcdir/$pkgname"
   git submodule update --init --recursive
   cp -v "$srcdir/extra_model_paths.yaml" "$srcdir/$pkgname/extra_model_paths.yaml"
+  cp -v "$srcdir/setup.sh" "$srcdir/$pkgname/setup.sh"
 }
 
 package() {

@@ -25,8 +25,9 @@ source=(
   "${pkgname}.install"
   "requirements.txt"
   "extra_model_paths.yaml"
+  "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -41,6 +42,7 @@ prepare() {
   # Override requirements.txt with CUDA 12.6 specific one
   cp -v "$srcdir/requirements.txt" "$srcdir/$pkgname/requirements.txt"
   cp -v "$srcdir/extra_model_paths.yaml" "$srcdir/$pkgname/extra_model_paths.yaml"
+  cp -v "$srcdir/setup.sh" "$srcdir/$pkgname/setup.sh"
 }
 
 package() {

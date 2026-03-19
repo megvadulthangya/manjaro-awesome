@@ -3,11 +3,19 @@
 _appname="ComfyUI"
 _appdir="/opt/ComfyUI"
 _appuser="diffusion"
+_userhome="/var/lib/diffusion"
 
 pre_install() {
   # diffusion felhasználó létrehozása, ha nem létezik
-  getent passwd "${_appuser}" >/dev/null || \
-    useradd -r -s /bin/bash -d "${_appdir}" "${_appuser}"
+  if ! getent passwd "${_appuser}" >/dev/null; then
+    useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
+  fi
+  # Ensure home directory exists with correct permissions
+  if [ ! -d "${_userhome}" ]; then
+    mkdir -p "${_userhome}"
+    chown "${_appuser}:${_appuser}" "${_userhome}"
+    chmod 0755 "${_userhome}"
+  fi
 }
 
 _fix_permissions() {
