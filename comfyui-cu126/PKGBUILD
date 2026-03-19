@@ -34,43 +34,37 @@ _appdir="/opt/${_pkgname}"
 pkgver() {
   cd "$srcdir/$pkgname"
 
-  # Ensure full history (CI shallow clone fix)
-  if git rev-parse --is-shallow-repository >/dev/null 2>&1; then
-    git fetch --unshallow 2>/dev/null || git fetch --depth=999999
-  fi
+  git fetch --quiet origin
 
   printf "r%s.%s" \
-    "$(git rev-list --count HEAD)" \
-    "$(git rev-parse --short HEAD)"
+    "$(git rev-list --count origin/HEAD)" \
+    "$(git rev-parse --short origin/HEAD)"
 }
 
 prepare() {
   cd "$srcdir/$pkgname"
+  git fetch --quiet origin
+  git reset --hard origin/HEAD
   git submodule update --init --recursive
-  # Override requirements.txt with CUDA 12.6 specific one
+
   cp -v "$srcdir/requirements.txt" "$srcdir/$pkgname/requirements.txt"
   cp -v "$srcdir/extra_model_paths.yaml" "$srcdir/$pkgname/extra_model_paths.yaml"
   cp -v "$srcdir/setup.sh" "$srcdir/$pkgname/setup.sh"
 }
 
 package() {
-  # systemd unit
   install -Dm644 "$srcdir/comfyui.service" \
     "$pkgdir/usr/lib/systemd/system/comfyui.service"
 
-  # alkalmazás fájlok másolása az /opt/ComfyUI-be, SGID bites joggal
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
 
-  # Virtuális környezet létrehozása (üresen, csak core fájlok)
   python3.13 -m venv "$pkgdir${_appdir}/venv"
 
-  # Symlink a modellekhez (vae-approx)
   mkdir -p "$pkgdir${_appdir}/models/vae-approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae-approx/approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae-approx/taesd"
 
-  # Jogosultságok előzetes beállítása (SGID könyvtárakra, futtatható .sh és venv/bin)
   find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
   find "$pkgdir${_appdir}" -type f -not -path "*/venv/bin/*" -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
@@ -78,7 +72,6 @@ package() {
     find "$pkgdir${_appdir}/venv/bin" -type f -exec chmod 775 {} \;
   fi
 
-  # Felesleges git könyvtárak eltávolítása
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
 }
