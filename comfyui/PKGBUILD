@@ -20,7 +20,7 @@ conflicts=('comfyui-cu126')
 install="${pkgname}.install"
 
 source=(
-  "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
+  "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git"
   "${pkgname}.service"
   "${pkgname}.install"
   "extra_model_paths.yaml"
