@@ -13,7 +13,7 @@ LOCAL_PACKAGES = [
     "kohya_ss-cu124",
     "kohya_ss-cu126",
     "comfyui-git",
-    "comfyui-cu126",
+    "comfyui-cu126-git",
 #    "stable-diffusion-webui-forge-sd35",
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
