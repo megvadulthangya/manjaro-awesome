@@ -4,7 +4,7 @@ _pkgname="ComfyUI"
 pkgname="comfyui-git"
 pkgver=r4941.f6b869d7d
 pkgrel=1
-pkgdesc="ComfyUI GUI (Latest PyTorch)"
+pkgdesc="ComfyUI GUI - Git version"
 arch=('x86_64')
 url="https://github.com/Comfy-Org/ComfyUI"
 license=('GPL3')
@@ -16,69 +16,56 @@ depends=(
 )
 makedepends=('git')
 provides=('comfyui')
-conflicts=('comfyui' 'comfyui-cu126')
-install="comfyui.install"
+conflicts=('comfyui' 'comfyui-cu126' 'comfyui-cu126-git')
+install="${pkgname}.install"
 
-# Figyeld a név prefixet: kikényszerítjük, hogy a comfyui-git néven húzza be
 source=(
-  "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git"
+  "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
   "comfyui.service"
-  "comfyui.install"
+  "${pkgname}.install"
+  "requirements.txt"
   "extra_model_paths.yaml"
   "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
 pkgver() {
-  # A $srcdir használata itt tilos a parserek miatt, ez a helyes Arch szintaxis
   cd "$pkgname"
-
-  # Ensure full history (CI shallow clone fix)
-  if git rev-parse --is-shallow-repository >/dev/null 2>&1; then
-    git fetch --unshallow 2>/dev/null || git fetch --depth=999999
-  fi
-
-  printf "r%s.%s" \
-    "$(git rev-list --count HEAD)" \
-    "$(git rev-parse --short HEAD)"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
   cd "$pkgname"
   git submodule update --init --recursive
-  # A fájlok másolásánál is a standard relatív utat használjuk a célhoz
+
+  cp -v "$srcdir/requirements.txt" "requirements.txt"
   cp -v "$srcdir/extra_model_paths.yaml" "extra_model_paths.yaml"
   cp -v "$srcdir/setup.sh" "setup.sh"
 }
 
 package() {
-  # systemd unit
   install -Dm644 "$srcdir/comfyui.service" \
     "$pkgdir/usr/lib/systemd/system/comfyui.service"
 
-  # alkalmazás fájlok másolása az /opt/ComfyUI-be, SGID bites joggal
   install -d -m 2775 "$pkgdir${_appdir}"
-  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}//"
+  cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
 
-  # Virtuális környezet létrehozása (üresen, csak core fájlok)
   python3.13 -m venv "$pkgdir${_appdir}/venv"
 
-  # Symlink a modellekhez (vae-approx)
   mkdir -p "$pkgdir${_appdir}/models/vae-approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae-approx/approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae-approx/taesd"
 
-  # Jogosultságok előzetes beállítása (SGID könyvtárakra, futtatható .sh és venv/bin)
   find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
   find "$pkgdir${_appdir}" -type f -not -path "*/venv/bin/*" -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
+  
   if [ -d "$pkgdir${_appdir}/venv/bin" ]; then
     find "$pkgdir${_appdir}/venv/bin" -type f -exec chmod 775 {} \;
   fi
 
-  # Felesleges git könyvtárak eltávolítása
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
 }
