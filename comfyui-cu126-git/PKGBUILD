@@ -2,7 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-cu126-git"
-pkgver=r0000.000000
+pkgver=1
 pkgrel=1
 pkgdesc="ComfyUI GUI (CUDA 12.6 backend - PyTorch 2.6) - Git version"
 arch=('x86_64')
@@ -22,22 +22,30 @@ install="${pkgname}.install"
 source=(
   "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
   "comfyui.service"
-  "${pkgname}.install"
   "requirements.txt"
   "extra_model_paths.yaml"
   "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
 pkgver() {
-  cd "$pkgname"
-  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  local repo="${srcdir:-.}/${pkgname}"
+
+  if [[ -d "$repo/.git" ]]; then
+    printf "r%s.%s" \
+      "$(git -C "$repo" rev-list --count HEAD)" \
+      "$(git -C "$repo" rev-parse --short=8 HEAD)"
+  else
+    printf "r%s.%s" \
+      "$(git rev-list --count HEAD)" \
+      "$(git rev-parse --short=8 HEAD)"
+  fi
 }
 
 prepare() {
-  cd "$pkgname"
+  cd "$srcdir/$pkgname"
   git submodule update --init --recursive
 
   cp -v "$srcdir/requirements.txt" "requirements.txt"
@@ -61,7 +69,7 @@ package() {
   find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
   find "$pkgdir${_appdir}" -type f -not -path "*/venv/bin/*" -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
-  
+
   if [ -d "$pkgdir${_appdir}/venv/bin" ]; then
     find "$pkgdir${_appdir}/venv/bin" -type f -exec chmod 775 {} \;
   fi
