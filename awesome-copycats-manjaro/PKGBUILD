@@ -2,8 +2,8 @@
 
 pkgname=awesome-copycats-manjaro
 pkgver=r1065.a88dedf
-pkgrel=1
-pkgdesc="Nord themed AwesomeWM configuration based on awesome-copycats"
+pkgrel=2
+pkgdesc="Nord themed AwesomeWM configuration (System-wide installation)"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
@@ -11,67 +11,56 @@ license=('GPL3')
 depends=('awesome')
 makedepends=('git')
 
+# A pacman kezelje a konfigurációs fájl felülírást/mentést
+backup=('etc/xdg/awesome/rc.lua')
+
 source=("$pkgname::git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
 sha256sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/$pkgname"
-
   printf "r%s.%s" \
     "$(git rev-list --count HEAD)" \
     "$(git rev-parse --short HEAD)"
 }
 
 package() {
-
   cd "$srcdir/$pkgname"
 
-  install -dm755 "$pkgdir/etc/skel/.config/awesome"
+  # Célkönyvtárak létrehozása
+  install -dm755 "$pkgdir/etc/xdg/awesome"
+  install -dm755 "$pkgdir/usr/share/awesome"
 
-  cp -a . "$pkgdir/etc/skel/.config/awesome/"
+  # 1. Konfigurációs mappák másolása az /etc/xdg/awesome/ alá
+  for dir in configuration modules signals widgets; do
+    if [[ -d "$dir" ]]; then
+      cp -r "$dir" "$pkgdir/etc/xdg/awesome/"
+    fi
+  done
 
-  rm -rf "$pkgdir/etc/skel/.config/awesome/.git"
-  rm -rf "$pkgdir/etc/skel/.config/awesome/.github" 2>/dev/null || true
-  rm -f "$pkgdir/etc/skel/.config/awesome/.gitignore"
-
-  if [[ -f rc.lua.template ]]; then
-      mv "$pkgdir/etc/skel/.config/awesome/rc.lua.template" \
-         "$pkgdir/etc/skel/.config/awesome/rc.lua"
+  # 2. Themes mappa másolása az /usr/share/awesome/ alá
+  if [[ -d "themes" ]]; then
+    cp -r themes "$pkgdir/usr/share/awesome/"
   fi
 
-  find "$pkgdir/etc/skel/.config/awesome" -type f -exec chmod 644 {} \;
-  find "$pkgdir/etc/skel/.config/awesome" -type d -exec chmod 755 {} \;
+  # 3. rc.lua kezelése
+  # Az eredeti rc.lua-ról nem tudunk "biztonsági mentést" csinálni a csomagon belül, 
+  # de a template-et beállítjuk rc.lua-nak és megőrizzük template-ként is.
+  if [[ -f rc.lua.template ]]; then
+    # Telepítés mint rc.lua
+    install -m644 rc.lua.template "$pkgdir/etc/xdg/awesome/rc.lua"
+    # Telepítés mint rc.lua.template
+    install -m644 rc.lua.template "$pkgdir/etc/xdg/awesome/rc.lua.template"
+  fi
 
-  install -dm755 "$pkgdir/usr/share/$pkgname"
+  # Jogosultságok tisztázása
+  find "$pkgdir/etc/xdg/awesome" -type d -exec chmod 755 {} \;
+  find "$pkgdir/etc/xdg/awesome" -type f -exec chmod 644 {} \;
+  find "$pkgdir/usr/share/awesome/themes" -type d -exec chmod 755 {} \;
+  find "$pkgdir/usr/share/awesome/themes" -type f -exec chmod 644 {} \;
 
-  cat > "$pkgdir/usr/share/$pkgname/install-to-user.sh" << 'EOF'
-#!/bin/bash
-set -e
-
-CONFIG_DIR="$HOME/.config/awesome"
-SOURCE_DIR="/etc/skel/.config/awesome"
-
-if [[ -d "$CONFIG_DIR" ]]; then
-    echo "Backing up existing Awesome config to $CONFIG_DIR.backup"
-    mv "$CONFIG_DIR" "$CONFIG_DIR.backup"
-fi
-
-echo "Installing Awesome WM Nord configuration..."
-cp -r "$SOURCE_DIR" "$HOME/.config/"
-
-echo "Restart Awesome with Mod+Ctrl+R"
-EOF
-
-  chmod +x "$pkgdir/usr/share/$pkgname/install-to-user.sh"
-
-  install -dm755 "$pkgdir/usr/share/doc/$pkgname"
-
-  cat > "$pkgdir/usr/share/doc/$pkgname/README" << EOF
-Awesome WM Nord configuration
-
-Install with:
-
-/usr/share/$pkgname/install-to-user.sh
-EOF
-
+  # README (opcionális, de a standard része)
+  if [[ -f README.rst ]]; then
+    install -Dm644 README.rst "$pkgdir/usr/share/doc/$pkgname/README.rst"
+  fi
 }

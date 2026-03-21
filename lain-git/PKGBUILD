@@ -28,6 +28,17 @@ pkgver() {
 
 package() {
     cd "$_pkgname"
-    install -dm755 "$pkgdir/usr/share/lua/5.3/$_pkgname/"{icons,layout,util,widget}
-    cp -a {icons,layout,util,widget,LICENSE,README.rst,*.lua} "$pkgdir/usr/share/lua/5.3/$_pkgname"
+    
+    # Célkönyvtár meghatározása az Awesome WM struktúrában
+    local _dest="$pkgdir/usr/share/awesome/lib/$_pkgname"
+    
+    # Telepítési könyvtár létrehozása
+    install -dm755 "$_dest"
+    
+    # Teljes forrás másolása a célhelyre
+    cp -ra . "$_dest/"
+    
+    # Takarítás: git metaadatok eltávolítása a csomagból
+    rm -rf "$_dest/.git"
+    rm -f "$_dest/.gitignore"
 }
