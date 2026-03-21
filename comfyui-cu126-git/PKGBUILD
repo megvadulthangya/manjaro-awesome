@@ -2,7 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-cu126-git"
-pkgver=1
+pkgver=r4955.a11f68dd
 pkgrel=1
 pkgdesc="ComfyUI GUI (CUDA 12.6 backend - PyTorch 2.6) - Git version"
 arch=('x86_64')
