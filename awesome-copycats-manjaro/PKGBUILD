@@ -1,9 +1,9 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome-copycats-manjaro
-pkgver=r1067.b905977
-pkgrel=1
-pkgdesc="Nord themed AwesomeWM configuration (System-wide installation)"
+pkgver=r1065.a88dedf
+pkgrel=3
+pkgdesc="Nord themed AwesomeWM configuration (System-wide, forced install)"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
@@ -11,7 +11,10 @@ license=('GPL3')
 depends=('awesome')
 makedepends=('git')
 
-# A pacman kezelje a konfigurációs fájl felülírást/mentést
+# Ez hivatkozik a fenti install fájlra
+install="$pkgname.install"
+
+# A pacman így tudja, hogy ezt a fájlt védeni kell frissítéskor
 backup=('etc/xdg/awesome/rc.lua')
 
 source=("$pkgname::git+https://github.com/megvadulthangya/awesome-copycats-manjaro.git#branch=nord")
@@ -27,39 +30,37 @@ pkgver() {
 package() {
   cd "$srcdir/$pkgname"
 
-  # Célkönyvtárak létrehozása
+  # Könyvtárak létrehozása
   install -dm755 "$pkgdir/etc/xdg/awesome"
   install -dm755 "$pkgdir/usr/share/awesome"
 
-  # 1. Konfigurációs mappák másolása az /etc/xdg/awesome/ alá
+  # 1. Konfigurációs mappák (minden, ami az /etc/xdg/awesome/ alá megy)
   for dir in configuration modules signals widgets; do
     if [[ -d "$dir" ]]; then
       cp -r "$dir" "$pkgdir/etc/xdg/awesome/"
     fi
   done
 
-  # 2. Themes mappa másolása az /usr/share/awesome/ alá
+  # 2. Themes (az /usr/share/awesome/ alá)
   if [[ -d "themes" ]]; then
     cp -r themes "$pkgdir/usr/share/awesome/"
   fi
 
-  # 3. rc.lua kezelése
-  # Az eredeti rc.lua-ról nem tudunk "biztonsági mentést" csinálni a csomagon belül, 
-  # de a template-et beállítjuk rc.lua-nak és megőrizzük template-ként is.
+  # 3. rc.lua kezelése: a template-et másoljuk rc.lua néven ÉS template néven is
   if [[ -f rc.lua.template ]]; then
-    # Telepítés mint rc.lua
+    # Fő konfiguráció
     install -m644 rc.lua.template "$pkgdir/etc/xdg/awesome/rc.lua"
-    # Telepítés mint rc.lua.template
+    # Template megőrzése ugyanott
     install -m644 rc.lua.template "$pkgdir/etc/xdg/awesome/rc.lua.template"
   fi
 
-  # Jogosultságok tisztázása
+  # Jogosultságok kényszerítése
   find "$pkgdir/etc/xdg/awesome" -type d -exec chmod 755 {} \;
   find "$pkgdir/etc/xdg/awesome" -type f -exec chmod 644 {} \;
   find "$pkgdir/usr/share/awesome/themes" -type d -exec chmod 755 {} \;
   find "$pkgdir/usr/share/awesome/themes" -type f -exec chmod 644 {} \;
 
-  # README (opcionális, de a standard része)
+  # README
   if [[ -f README.rst ]]; then
     install -Dm644 README.rst "$pkgdir/usr/share/doc/$pkgname/README.rst"
   fi
