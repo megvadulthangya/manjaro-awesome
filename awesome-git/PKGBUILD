@@ -3,26 +3,24 @@
 _pkgname=awesome
 pkgname=${_pkgname}-git
 pkgver=4.3.1732.gf1388f9fc
-pkgrel=1
+pkgrel=2
 pkgdesc='Highly configurable framework window manager'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
 license=('GPL2')
 depends=('cairo' 'dbus' 'gdk-pixbuf2' 'libxdg-basedir' 'libxkbcommon-x11'
          'lua' 'lua-lgi' 'pango' 'startup-notification' 'xcb-util-cursor'
-         'xcb-util-keysyms' 'xcb-util-wm' 'xcb-util-xrm' 'libxfixes')
+         'xcb-util-keysyms' 'xcb-util-wm' 'xcb-util-xrm' 'libxfixes'
+         'awesome-copycats-manjaro')
 makedepends=('asciidoctor' 'cmake' 'docbook-xsl' 'git' 'imagemagick' 'ldoc'
              'xmlto')
 optdepends=('rlwrap: readline support for awesome-client'
             'dex: autostart your desktop files'
             'xcb-util-errors: for pretty-printing of X11 errors'
-            'librsvg: for displaying SVG files without scaling artifacts'
-)
+            'librsvg: for displaying SVG files without scaling artifacts')
 provides=('notification-daemon' 'awesome')
 conflicts=('awesome')
-backup=('etc/xdg/awesome/rc.lua')
 
-# IMPORTANT: keep the "$pkgname::" prefix so the checkout directory is $srcdir/$pkgname
 source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
 _LUA_VER=5.4
@@ -52,4 +50,6 @@ package() {
 
   install -Dm644 "$srcdir/$pkgname/awesome.desktop" \
     "$pkgdir/usr/share/xsessions/awesome.desktop"
+
+  rm -f "$pkgdir/etc/xdg/awesome/rc.lua"
 }
