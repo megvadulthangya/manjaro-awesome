@@ -2,7 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-cu126-git"
-pkgver=r4954.dc719cde
+pkgver=1
 pkgrel=1
 pkgdesc="ComfyUI GUI (CUDA 12.6 backend - PyTorch 2.6) - Git version"
 arch=('x86_64')
@@ -26,6 +26,7 @@ source=(
   "extra_model_paths.yaml"
   "setup.sh"
 )
+
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
@@ -37,10 +38,12 @@ pkgver() {
     printf "r%s.%s" \
       "$(git -C "$repo" rev-list --count HEAD)" \
       "$(git -C "$repo" rev-parse --short=8 HEAD)"
-  else
+  elif [[ -d .git ]]; then
     printf "r%s.%s" \
       "$(git rev-list --count HEAD)" \
       "$(git rev-parse --short=8 HEAD)"
+  else
+    return 1
   fi
 }
 
@@ -60,19 +63,16 @@ package() {
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
 
-  python3.13 -m venv "$pkgdir${_appdir}/venv"
+  # Biztonsági törlés: build-maradvány vagy véletlenül létrejött venv ne csússzon be a csomagba
+  rm -rf "$pkgdir${_appdir}/venv"
 
-  mkdir -p "$pkgdir${_appdir}/models/vae-approx"
-  ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae-approx/approx"
-  ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae-approx/taesd"
+#  mkdir -p "$pkgdir${_appdir}/models/vae-approx"
+  ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae_approx/approx"
+  ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae_approx/taesd"
 
   find "$pkgdir${_appdir}" -type d -exec chmod 2775 {} \;
-  find "$pkgdir${_appdir}" -type f -not -path "*/venv/bin/*" -exec chmod 664 {} \;
+  find "$pkgdir${_appdir}" -type f -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
-
-  if [ -d "$pkgdir${_appdir}/venv/bin" ]; then
-    find "$pkgdir${_appdir}/venv/bin" -type f -exec chmod 775 {} \;
-  fi
 
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"

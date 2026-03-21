@@ -6,11 +6,10 @@ _appuser="diffusion"
 _userhome="/var/lib/diffusion"
 
 pre_install() {
-  # diffusion felhasználó létrehozása, ha nem létezik
   if ! getent passwd "${_appuser}" >/dev/null; then
     useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
   fi
-  # Ensure home directory exists with correct permissions
+
   if [ ! -d "${_userhome}" ]; then
     mkdir -p "${_userhome}"
     chown "${_appuser}:${_appuser}" "${_userhome}"
@@ -18,39 +17,36 @@ pre_install() {
   fi
 }
 
+_ensure_venv() {
+  if [ ! -x "${_appdir}/venv/bin/python" ]; then
+    mkdir -p "${_appdir}"
+    python3.13 -m venv "${_appdir}/venv"
+  fi
+}
+
 _fix_permissions() {
   echo "Jogosultságok beállítása a következő könyvtáron: ${_appdir}..."
-  
-  # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen
-  chown -R "${_appuser}:${_appuser}" "${_appdir}"
-  
-  # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
-  find "${_appdir}" -type d -exec chmod 2775 {} +
-  
-  # Minden fájl alaphelyzetbe állítása: rw-rw-r-- (664) – semmi sem futtatható
-  find "${_appdir}" -type f -exec chmod 664 {} +
 
-  # Kifejezetten futtathatóvá tesszük a .sh fájlokat
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+
+  find "${_appdir}" -type d -exec chmod 2775 {} +
+  find "${_appdir}" -type f -exec chmod 664 {} +
   find "${_appdir}" -type f -name "*.sh" -exec chmod 775 {} +
 
-  # Ha létezik a virtuális környezet bin könyvtára, annak tartalmát is futtathatóvá tesszük
   if [ -d "${_appdir}/venv/bin" ]; then
     find "${_appdir}/venv/bin" -type f -exec chmod 775 {} +
   fi
 
-  # ACL-ek beállítása a csoportos együttműködéshez (a nagy X biztosítja, hogy csak könyvtárak kapjanak futtatási jogot)
-  setfacl -R -m g:${_appuser}:rwX "${_appdir}"
-  setfacl -R -d -m g:${_appuser}:rwX "${_appdir}"
+  setfacl -R -m g:${_appuser}:rwX "${_appdir}" 2>/dev/null || true
+  setfacl -R -d -m g:${_appuser}:rwX "${_appdir}" 2>/dev/null || true
 }
 
 post_install() {
-  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
 
-  # Jogok fixálása
+  _ensure_venv
   _fix_permissions
 
-  # Felhasználók hozzáadása a csoporthoz
   for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
     usermod -aG "${_appuser}" "$user" 2>/dev/null || true
   done
@@ -61,5 +57,7 @@ post_install() {
 
 post_upgrade() {
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  _ensure_venv
   _fix_permissions
 }
