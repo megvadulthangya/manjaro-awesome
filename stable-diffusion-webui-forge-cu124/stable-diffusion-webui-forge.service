@@ -1,23 +1,32 @@
 [Unit]
-Description=Stable Diffusion WebUI Forge (Experimental backend: PyTorch 2.4 / CU 12.4)
-After=network.target
+Description=Stable Diffusion WebUI Forge (backend: PyTorch 2.4 / CUDA 12.4)
+Wants=network-online.target
+After=network-online.target
 
 [Service]
-Type=forking
+Type=simple
 User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/stable-diffusion-webui-forge
 
 Environment=PYTHONUNBUFFERED=1
-Environment=BYOBU_PREFIX=/usr
-Environment=TERM=xterm-256color
 
-ExecStart=/usr/bin/byobu new-session -d -s sdwebui-forge 'bash -c "cd /opt/stable-diffusion-webui-forge && /opt/stable-diffusion-webui-forge/venv/bin/python launch.py --listen --no-half"'
-ExecStop=-/usr/bin/byobu kill-session -t sdwebui-forge
+ExecStart=/opt/stable-diffusion-webui-forge/venv/bin/python /opt/stable-diffusion-webui-forge/launch.py --listen --no-half --port 7860
 
-Restart=always
+Restart=on-failure
+RestartSec=5
 StartLimitIntervalSec=120
 StartLimitBurst=15
+
+TimeoutStartSec=0
+TimeoutStopSec=30
+KillSignal=SIGINT
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sdwebui-forge
+
 UMask=007
 
 [Install]
