@@ -5,20 +5,16 @@ StartLimitIntervalSec=120
 StartLimitBurst=15
 
 [Service]
-Type=simple
+Type=forking
 User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/kohya_ss
-ExecStart=/opt/kohya_ss/venv/bin/python /opt/kohya_ss/kohya_gui.py --listen 0.0.0.0 --server_port 7861 --headless
-Restart=on-failure
-RestartSec=5
-TimeoutStartSec=0
-TimeoutStopSec=30
-KillSignal=SIGINT
-KillMode=mixed
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=kohya_ss
+#Environment=HOME=/opt/kohya_ss
+Environment=BYOBU_PREFIX=/usr
+Environment=TERM=xterm-256color
+ExecStart=/usr/bin/byobu new-session -d -s kohya_ss 'bash -c "cd /opt/kohya_ss && /opt/kohya_ss/venv/bin/python kohya_gui.py --listen 0.0.0.0 --server_port 7861 --headless"'
+ExecStop=-/usr/bin/byobu kill-session -t kohya_ss
+Restart=always
 UMask=007
 
 [Install]
