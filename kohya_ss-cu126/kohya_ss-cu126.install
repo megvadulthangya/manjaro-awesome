@@ -3,18 +3,12 @@
 _appname="kohya_ss"
 _appdir="/opt/kohya_ss"
 _appuser="diffusion"
-_userhome="/var/lib/diffusion"
+_userhome="${_appdir}"
 
 pre_install() {
-  # diffusion felhasználó létrehozása, ha nem létezik
+  # diffusion felhasználó létrehozása, ha nem létezik, az app könyvtárával mint home
   if ! getent passwd "${_appuser}" >/dev/null; then
     useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
-  fi
-  # Ensure home directory exists with correct permissions
-  if [ ! -d "${_userhome}" ]; then
-    mkdir -p "${_userhome}"
-    chown "${_appuser}:${_appuser}" "${_userhome}"
-    chmod 0755 "${_userhome}"
   fi
 }
 
@@ -24,28 +18,29 @@ _fix_permissions() {
   # Biztosítjuk, hogy a tulajdonos és a csoport a diffusion legyen
   chown -R "${_appuser}:${_appuser}" "${_appdir}"
   
-  # Minden könyvtárra: rwxrwxr-x (775) + SGID bit
+  # Minden könyvtárra: rwxrwxr-x (2775) + SGID bit
   find "${_appdir}" -type d -exec chmod 2775 {} +
   
-  # Minden fájl alaphelyzetbe állítása: rw-rw-r-- (664), kivéve a venv könyvtárat
+  # KRITIKUS JAVÍTÁS: Minden fájl alaphelyzetbe állítása (664), DE 
+  # a venv könyvtárat átugorjuk (prune), hogy ne sérüljenek a binárisok futtatási jogai.
   find "${_appdir}" -path "${_appdir}/venv" -prune -o -type f -exec chmod 664 {} +
   
-  # Kifejezetten futtathatóvá tesszük a .sh fájlokat
-  find "${_appdir}" -type f -name "*.sh" -exec chmod 775 {} +
+  # Kifejezetten futtathatóvá tesszük a .sh fájlokat a gyökérben
+  find "${_appdir}" -maxdepth 1 -type f -name "*.sh" -exec chmod 775 {} +
   
-  # Ha létezik a virtuális környezet bin könyvtára, annak tartalmát is futtathatóvá tesszük
+  # Ha létezik a venv/bin, ott minden maradjon futtatható
   if [ -d "${_appdir}/venv/bin" ]; then
     find "${_appdir}/venv/bin" -type f -exec chmod 775 {} +
   fi
 
-  # ACL-ek beállítása a csoportos együttműködéshez (a nagy X biztosítja, hogy csak könyvtárak kapjanak futtatási jogot)
+  # ACL-ek beállítása a csoportos együttműködéshez
   setfacl -R -m g:${_appuser}:rwX "${_appdir}"
   setfacl -R -d -m g:${_appuser}:rwX "${_appdir}"
 }
 
 post_install() {
-  # biztosítjuk, hogy a felhasználó shellje /bin/bash legyen
-  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+  # Kényszerítjük a shellt és a home könyvtár helyét, ha a user már létezett volna korábbról
+  usermod -d "${_userhome}" -s /bin/bash "${_appuser}" 2>/dev/null || true
 
   # Jogok fixálása
   _fix_permissions
@@ -56,10 +51,12 @@ post_install() {
   done
 
   echo "Kohya_ss fájljai elhelyezve: ${_appdir}"
+  echo "Home könyvtár beállítva: ${_userhome}"
   echo "FONTOS: Ha most lettél hozzáadva a '${_appuser}' csoporthoz, jelentkezz ki és be a változások érvényesítéséhez!"
 }
 
 post_upgrade() {
-  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+  # Frissítésnél is biztosítjuk a helyes home-ot és jogokat
+  usermod -d "${_userhome}" -s /bin/bash "${_appuser}" 2>/dev/null || true
   _fix_permissions
 }
