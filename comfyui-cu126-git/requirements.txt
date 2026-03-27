@@ -1,8 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cu126
 
 # UI Packages
-comfyui-frontend-package>=1.41.20
-comfyui-workflow-templates>=0.9.26
+comfyui-frontend-package==1.42.8
+comfyui-workflow-templates>=0.9.38
 comfyui-embedded-docs>=0.4.3
 
 # Core PyTorch + ecosystem
@@ -14,7 +14,7 @@ torchsde==0.2.6
 # ML / NLP / utilities
 numpy>=2.1.0
 einops>=0.8.0
-transformers>=4.45.0
+transformers>=4.50.3
 tokenizers>=0.20.0
 sentencepiece>=0.2.0
 safetensors>=0.4.5
