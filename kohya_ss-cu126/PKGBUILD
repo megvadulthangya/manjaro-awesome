@@ -61,6 +61,9 @@ package() {
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$pkgname/." "$pkgdir${_appdir}/"
   
+  # GUI.SH herélése: Töröljük azt a blokkot, ami sudo-t akar hívni a diffusion user nevében
+sed -i '/if \[ -n "\$SUDO_USER" \] || \[ -n "\$SUDO_COMMAND" \]; then/,/fi/d' "$pkgdir${_appdir}/gui.sh"
+  
   # Symlink létrehozása
   ln -s /opt/stable-diffusion-webui-forge/models/Stable-diffusion "$pkgdir${_appdir}/models/Stable-diffusion"
   
