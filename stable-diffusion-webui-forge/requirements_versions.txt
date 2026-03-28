@@ -11,6 +11,7 @@ fastapi==0.104.1
 gradio==4.40.0
 httpcore==0.15
 inflection==0.5.1
+imageio-ffmpeg
 jsonmerge==1.8.0
 kornia==0.6.7
 lark==1.1.2
