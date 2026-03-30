@@ -9,9 +9,7 @@ User=diffusion
 Group=diffusion
 WorkingDirectory=/opt/stable-diffusion-webui-forge
 
-Environment=PYTHONUNBUFFERED=1
-
-ExecStart=/opt/stable-diffusion-webui-forge/venv/bin/python /opt/stable-diffusion-webui-forge/launch.py --listen --no-half --port 7860
+ExecStart=/opt/stable-diffusion-webui-forge/webui.sh
 
 Restart=on-failure
 RestartSec=5
