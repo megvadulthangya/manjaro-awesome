@@ -10,6 +10,7 @@ url="https://github.com/bmaltais/kohya_ss"
 license=('Apache')
 depends=(
   'git'
+  'python310'
   'acl'
   'byobu'
 )
