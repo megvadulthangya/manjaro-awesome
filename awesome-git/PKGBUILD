@@ -3,24 +3,32 @@
 _pkgname=awesome
 pkgname=${_pkgname}-git
 pkgver=4.3.1732.gf1388f9fc
-pkgrel=2
+pkgrel=3
 pkgdesc='Highly configurable framework window manager'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
 license=('GPL2')
 
-depends=('cairo' 'dbus' 'gdk-pixbuf2' 'libxdg-basedir' 'libxkbcommon-x11'
-         'lua54' 'lua54-lgi' 'pango' 'startup-notification' 'xcb-util-cursor'
-         'xcb-util-keysyms' 'xcb-util-wm' 'xcb-util-xrm' 'libxfixes'
-         'awesome-copycats-manjaro')
+depends=(
+  'cairo' 'dbus' 'gdk-pixbuf2' 'libxdg-basedir'
+  'libxkbcommon-x11' 'lua54' 'lua54-lgi' 'pango'
+  'startup-notification' 'xcb-util-cursor'
+  'xcb-util-keysyms' 'xcb-util-wm' 'xcb-util-xrm'
+  'libxfixes'
+)
 
-makedepends=('asciidoctor' 'cmake' 'docbook-xsl' 'git' 'imagemagick'
-             'lua54-luarocks' 'lua54-lpeg' 'lua54-penlight' 'xmlto')
+makedepends=(
+  'asciidoctor' 'cmake' 'docbook-xsl' 'git'
+  'imagemagick' 'xmlto'
+  'lua54' 'lua54-luarocks'
+)
 
-optdepends=('rlwrap: readline support for awesome-client'
-            'dex: autostart your desktop files'
-            'xcb-util-errors: for pretty-printing of X11 errors'
-            'librsvg: for displaying SVG files without scaling artifacts')
+optdepends=(
+  'rlwrap: readline support for awesome-client'
+  'dex: autostart your desktop files'
+  'xcb-util-errors: for pretty-printing of X11 errors'
+  'librsvg: for displaying SVG files without scaling artifacts'
+)
 
 provides=('notification-daemon' 'awesome')
 conflicts=('awesome')
@@ -36,32 +44,45 @@ pkgver() {
 }
 
 build() {
-  local builddir="$srcdir/build"
-  local rocks_tree="$srcdir/luarocks-tree"
+  cd "$srcdir/$pkgname"
 
-  mkdir -p "$builddir" "$rocks_tree"
+  # 🔥 LOCAL LUAROCKS ENV (Lua 5.4)
+  export LUAROCKS_CONFIG="$srcdir/luarocks-config.lua"
 
-  # Build a Lua 5.4-compatible ldoc in a private tree.
-  # This keeps the documentation generator aligned with the awesome build.
-  luarocks --lua-version="${_LUA_VER}" --tree "$rocks_tree" install markdown --deps-mode=none
-  luarocks --lua-version="${_LUA_VER}" --tree "$rocks_tree" install ldoc --deps-mode=none
+  cat > "$LUAROCKS_CONFIG" <<EOF
+lua_version = "5.4"
+lua_interpreter = "lua5.4"
+variables = {
+  LUA = "/usr/bin/lua5.4",
+  LUA_INCDIR = "/usr/include/lua5.4",
+  LUA_LIBDIR = "/usr/lib"
+}
+EOF
 
-  cd "$builddir"
-  cmake "$srcdir/$pkgname" \
+  # 🔥 Install ldoc LOCAL (nem system!)
+  luarocks --lua-version=5.4 --tree="$srcdir/luarocks" install ldoc
+
+  export PATH="$srcdir/luarocks/bin:$PATH"
+
+  mkdir -p build
+  cd build
+
+  cmake .. \
     -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DSYSCONFDIR=/etc \
     -DLUA_INCLUDE_DIR=/usr/include/lua${_LUA_VER} \
     -DLUA_LIBRARY=/usr/lib/liblua.so.${_LUA_VER} \
     -DLUA_EXECUTABLE=/usr/bin/lua${_LUA_VER} \
-    -DLDOC_EXECUTABLE="$rocks_tree/bin/ldoc" \
-    -DGENERATE_DOC=ON \
+    -DWITH_DOC=ON \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
   make
 }
 
 package() {
-  cd "$srcdir/build"
+  cd "$srcdir/$pkgname/build"
+
   make DESTDIR="$pkgdir" install
 
   install -Dm644 "$srcdir/$pkgname/awesome.desktop" \
