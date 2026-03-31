@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
+    "lgi",
     "gghelper",
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
