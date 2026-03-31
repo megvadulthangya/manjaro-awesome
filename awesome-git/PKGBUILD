@@ -3,7 +3,7 @@
 _pkgname=awesome
 pkgname=${_pkgname}-git
 pkgver=4.3.1732.gf1388f9fc
-pkgrel=4
+pkgrel=5
 pkgdesc='Highly configurable framework window manager'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
@@ -51,6 +51,8 @@ source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
 
 _LUA_VER=5.4
+builddir="$srcdir/build"
+rockstree="$srcdir/luarocks-tree"
 
 pkgver() {
   cd "$pkgname"
@@ -58,16 +60,12 @@ pkgver() {
 }
 
 build() {
-  local builddir="$srcdir/build"
-  local rocks_tree="$srcdir/luarocks-tree"
+  mkdir -p "$builddir" "$rockstree"
 
-  mkdir -p "$builddir" "$rocks_tree"
+  # Lua 5.4-compatible ldoc in a private tree
+  luarocks --lua-version=5.4 --tree="$rockstree" install ldoc --deps-mode=none
 
-  # Install a Lua 5.4 ldoc into a private tree so we do not depend on the
-  # system-wide Lua 5.5 ldoc package.
-  luarocks --lua-version=5.4 --tree="$rocks_tree" install ldoc --deps-mode=none
-
-  export PATH="$rocks_tree/bin:$PATH"
+  export PATH="$rockstree/bin:$PATH"
 
   cd "$builddir"
   cmake "$srcdir/$pkgname" \
@@ -77,7 +75,7 @@ build() {
     -DLUA_INCLUDE_DIR=/usr/include/lua${_LUA_VER} \
     -DLUA_LIBRARY=/usr/lib/liblua.so.${_LUA_VER} \
     -DLUA_EXECUTABLE=/usr/bin/lua${_LUA_VER} \
-    -DLDOC_EXECUTABLE="$rocks_tree/bin/ldoc" \
+    -DLDOC_EXECUTABLE="$rockstree/bin/ldoc" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
   make
 }
