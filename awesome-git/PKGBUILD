@@ -3,7 +3,7 @@
 _pkgname=awesome
 pkgname=${_pkgname}-git
 pkgver=4.3.1732.gf1388f9fc
-pkgrel=5
+pkgrel=6
 pkgdesc='Highly configurable framework window manager'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
@@ -51,18 +51,18 @@ source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
 
 _LUA_VER=5.4
-builddir="$srcdir/build"
-rockstree="$srcdir/luarocks-tree"
 
 pkgver() {
-  cd "$pkgname"
+  cd "$srcdir/$pkgname"
   git describe | sed 's/^v//;s/-/./g'
 }
 
 build() {
+  local builddir="$srcdir/build"
+  local rockstree="$srcdir/luarocks-tree"
+
   mkdir -p "$builddir" "$rockstree"
 
-  # Lua 5.4-compatible ldoc in a private tree
   luarocks --lua-version=5.4 --tree="$rockstree" install ldoc --deps-mode=none
 
   export PATH="$rockstree/bin:$PATH"
@@ -81,6 +81,8 @@ build() {
 }
 
 package() {
+  local builddir="$srcdir/build"
+
   cd "$builddir"
   make DESTDIR="$pkgdir" install
 
