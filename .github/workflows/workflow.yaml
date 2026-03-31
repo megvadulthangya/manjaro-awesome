@@ -791,7 +791,7 @@ jobs:
 #
 #          echo "CHAOTIC: KEYRING_CHECK"
 #
-#          # Ensure keyring exists
+#        # Ensure keyring exists
 #          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
 #            echo "CHAOTIC: KEYRING_INIT (missing keyring dir/files)"
 #            pacman-key --init
@@ -849,7 +849,7 @@ jobs:
 #          pacman -Sy --noconfirm
 #
 #          echo "CHAOTIC: DONE"
-#
+
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
