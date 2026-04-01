@@ -1,30 +1,16 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Maintainer: G Shoots
 
-_pkgname=awesome
-pkgname=${_pkgname}-git
-pkgver=4.3.1735.gfa805ab46
+pkgbase=awesome-git
+pkgname=('awesome53-git' 'awesome54-git')
+pkgver=4.3.1732.gf1388f9fc
 pkgrel=1
-pkgdesc='Highly configurable framework window manager'
-arch=('i686' 'x86_64')
+pkgdesc='Highly configurable framework window manager (git)'
+arch=('x86_64')
 url='https://awesomewm.org/'
 license=('GPL2')
 
-depends=(
-  'cairo'
-  'dbus'
-  'gdk-pixbuf2'
-  'libxdg-basedir'
-  'libxkbcommon-x11'
-  'lua54'
-  'lua54-lgi'
-  'pango'
-  'startup-notification'
-  'xcb-util-cursor'
-  'xcb-util-keysyms'
-  'xcb-util-wm'
-  'xcb-util-xrm'
-  'libxfixes'
-)
+source=("awesome::git+https://github.com/awesomeWM/awesome.git")
+md5sums=('SKIP')
 
 makedepends=(
   'asciidoctor'
@@ -33,61 +19,97 @@ makedepends=(
   'git'
   'imagemagick'
   'luarocks'
-  'lua54-penlight'
   'xmlto'
+
+  # LUA 5.3
+  'lua53'
+  'lua53-lgi'
+  'lua53-penlight'
+
+  # LUA 5.4
+  'lua54'
+  'lua54-lgi'
+  'lua54-penlight'
 )
-
-optdepends=(
-  'rlwrap: readline support for awesome-client'
-  'dex: autostart your desktop files'
-  'xcb-util-errors: for pretty-printing of X11 errors'
-  'librsvg: for displaying SVG files without scaling artifacts'
-)
-
-provides=('notification-daemon' 'awesome')
-conflicts=('awesome')
-
-source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
-md5sums=('SKIP')
-
-_LUA_VER=5.4
 
 pkgver() {
-  cd "$srcdir/$pkgname"
-  git describe | sed 's/^v//;s/-/./g'
+  cd "$srcdir/awesome"
+  git describe --long --tags | sed 's/^v//;s/-/./g'
 }
 
 build() {
-  local builddir="$srcdir/build"
-  local rockstree="$srcdir/luarocks-tree"
+  cd "$srcdir"
 
-  mkdir -p "$builddir" "$rockstree"
+  # --- LUA 5.3 ---
+  mkdir -p build-lua53 rocks-lua53
+  luarocks --lua-version=5.3 --tree="$srcdir/rocks-lua53" install ldoc --deps-mode=none
 
-  luarocks --lua-version=5.4 --tree="$rockstree" install ldoc --deps-mode=none
+  export PATH="$srcdir/rocks-lua53/bin:$PATH"
 
-  export PATH="$rockstree/bin:$PATH"
-
-  cd "$builddir"
-  cmake "$srcdir/$pkgname" \
-    -DCMAKE_BUILD_TYPE=RELEASE \
+  cmake -S awesome -B build-lua53 \
+    -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DSYSCONFDIR=/etc \
-    -DLUA_INCLUDE_DIR=/usr/include/lua${_LUA_VER} \
-    -DLUA_LIBRARY=/usr/lib/liblua.so.${_LUA_VER} \
-    -DLUA_EXECUTABLE=/usr/bin/lua${_LUA_VER} \
-    -DLDOC_EXECUTABLE="$rockstree/bin/ldoc" \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-  make
+    -DLUA_INCLUDE_DIR=/usr/include/lua5.3 \
+    -DLUA_LIBRARY=/usr/lib/liblua.so.5.3 \
+    -DLUA_EXECUTABLE=/usr/bin/lua5.3 \
+    -DLDOC_EXECUTABLE="$srcdir/rocks-lua53/bin/ldoc"
+
+  cmake --build build-lua53
+
+  # --- LUA 5.4 ---
+  mkdir -p build-lua54 rocks-lua54
+  luarocks --lua-version=5.4 --tree="$srcdir/rocks-lua54" install ldoc --deps-mode=none
+
+  export PATH="$srcdir/rocks-lua54/bin:$PATH"
+
+  cmake -S awesome -B build-lua54 \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DSYSCONFDIR=/etc \
+    -DLUA_INCLUDE_DIR=/usr/include/lua5.4 \
+    -DLUA_LIBRARY=/usr/lib/liblua.so.5.4 \
+    -DLUA_EXECUTABLE=/usr/bin/lua5.4 \
+    -DLDOC_EXECUTABLE="$srcdir/rocks-lua54/bin/ldoc"
+
+  cmake --build build-lua54
 }
 
-package() {
-  local builddir="$srcdir/build"
+_common_package() {
+  make -C "$1" DESTDIR="$pkgdir" install
 
-  cd "$builddir"
-  make DESTDIR="$pkgdir" install
-
-  install -Dm644 "$srcdir/$pkgname/awesome.desktop" \
+  install -Dm644 "$srcdir/awesome/awesome.desktop" \
     "$pkgdir/usr/share/xsessions/awesome.desktop"
 
   rm -f "$pkgdir/etc/xdg/awesome/rc.lua"
+}
+
+package_awesome53-git() {
+  depends=(
+    cairo dbus gdk-pixbuf2 libxdg-basedir libxkbcommon-x11
+    lua53 lua53-lgi
+    pango startup-notification
+    xcb-util-cursor xcb-util-keysyms xcb-util-wm xcb-util-xrm
+    libxfixes
+  )
+
+  provides=('awesome' 'notification-daemon')
+  conflicts=('awesome' 'awesome54-git')
+
+  _common_package "$srcdir/build-lua53"
+}
+
+package_awesome54-git() {
+  depends=(
+    cairo dbus gdk-pixbuf2 libxdg-basedir libxkbcommon-x11
+    lua54 lua54-lgi
+    pango startup-notification
+    xcb-util-cursor xcb-util-keysyms xcb-util-wm xcb-util-xrm
+    libxfixes
+  )
+
+  provides=('awesome' 'notification-daemon')
+  conflicts=('awesome' 'awesome53-git')
+
+  _common_package "$srcdir/build-lua54"
 }
