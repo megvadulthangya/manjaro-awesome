@@ -27,6 +27,12 @@ _create_venv() {
     echo "Creating virtual environment (venv) with python3.10..."
     su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
   fi
+
+  # 3. Upgrade pip, setuptools, and wheel inside the venv to avoid pkg_resources errors
+  if [[ -d "${_apphome}/venv" ]]; then
+    echo "Upgrading pip, setuptools, and wheel in the virtual environment..."
+    su "${_appuser}" -s /bin/bash -c "'${_apphome}/venv/bin/python' -m pip install --upgrade pip setuptools wheel"
+  fi
 }
 
 _fix_permissions() {
