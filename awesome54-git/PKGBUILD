@@ -31,7 +31,7 @@ makedepends=(
   'docbook-xsl'
   'git'
   'imagemagick'
-  'lua54-luarocks'
+  'luarocks'
   'lua54-penlight'
   'xmlto'
 )
