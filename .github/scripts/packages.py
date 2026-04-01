@@ -28,7 +28,6 @@ LOCAL_PACKAGES = [
     "awesome-freedesktop-git",
     "lain-git",
     "awesome-rofi",
-    "awesome-git",
     "awesome53-git",
     "awesome54-git",
     "awesome-welcome",
