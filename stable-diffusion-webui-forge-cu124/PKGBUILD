@@ -26,9 +26,10 @@ source=(
   "${_pkgname}::git+${url}.git#branch=main"
   "${_pkgname}.service"
   "requirements_versions.txt"
+  "webui.sh"
 )
 
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -40,6 +41,9 @@ pkgver() {
 prepare() {
   cd "$srcdir/$_pkgname"
   cp -v "$srcdir"/requirements_versions.txt .
+#  cp -v "$srcdir/requirements_versions.txt" "requirements_versions.txt"
+  cp -v "$srcdir"/webui.sh .
+#  cp -v "$srcdir/webui.sh" "webui.sh" 
 }
 
 package() {
