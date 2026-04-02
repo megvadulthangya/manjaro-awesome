@@ -50,6 +50,33 @@ class RsyncClient:
         # After the base, there should be exactly '/.staging/' followed by something
         return suffix.startswith('/.staging/')
     
+    def _get_relative_link_dest(self, staging_path: str) -> str:
+        """
+        Compute relative path from staging_path to self.remote_dir.
+        Example: staging_path = /repo/.staging/run_123
+                 self.remote_dir = /repo
+                 Returns '../..'
+        """
+        # Normalize paths (remove trailing slash)
+        staging = staging_path.rstrip('/')
+        live = self.remote_dir.rstrip('/')
+        # Compute relative path from staging directory to live directory
+        rel = os.path.relpath(live, start=staging)
+        # Ensure it's not empty (should be at least '..' or '../..')
+        if rel == '.':
+            rel = ''
+        return rel
+    
+    def _remote_dir_exists(self, remote_path: str) -> bool:
+        """Check if remote directory exists via SSH."""
+        ssh_cmd = ["ssh", *self.ssh_options, f"{self.vps_user}@{self.vps_host}",
+                   f"test -d '{remote_path}' && echo 'EXISTS' || echo 'NOT_EXISTS'"]
+        try:
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=10)
+            return result.returncode == 0 and 'EXISTS' in result.stdout
+        except Exception:
+            return False
+    
     def mirror_remote_packages(self, mirror_temp_dir: Path, output_dir: Path, vps_package_files: List[str]) -> bool:
         """
         Download ONLY remote package files (*.pkg.tar.*) to local directory.
@@ -278,20 +305,6 @@ class RsyncClient:
         # Check if this is a staging upload (target is under .staging/)
         is_staging = self._is_staging_path(dest_path)
         
-        # Build the rsync command base (without --delete)
-        def build_cmd(extra_ssh_options: str = "", use_link_dest: bool = False) -> str:
-            ssh_part = f"-e \"ssh {extra_ssh_options}\"" if extra_ssh_options else ""
-            link_dest_part = f"--link-dest='{self.remote_dir}'" if use_link_dest else ""
-            return f"""
-            rsync -avz \
-              --progress \
-              --stats \
-              {link_dest_part} \
-              {ssh_part} \
-              {" ".join(f"'{f}'" for f in files_to_upload)} \
-              '{self.vps_user}@{self.vps_host}:{dest_path}/'
-            """
-        
         # Helper to run a command and return success/failure
         def run_rsync(cmd_str: str, attempt_label: str) -> bool:
             logger.info(f"RUNNING RSYNC COMMAND {attempt_label}")
@@ -327,19 +340,65 @@ class RsyncClient:
                 logger.error(f"RSYNC execution error {attempt_label}: {e}")
                 return False
         
-        # If this is a staging upload, try once with --link-dest (using default SSH options)
+        # =====================================================================
+        # STAGING UPLOAD – incremental with --link-dest, NO fallback to full upload
+        # =====================================================================
         if is_staging:
-            logger.info("STAGING_UPLOAD: using --link-dest to avoid re‑uploading unchanged files")
-            cmd_link = build_cmd(extra_ssh_options="", use_link_dest=True)
-            if run_rsync(cmd_link, "STAGING (with --link-dest)"):
+            logger.info("STAGING_UPLOAD: preparing incremental upload with --link-dest")
+            
+            # 1. Validate that live reference directory exists on VPS
+            if not self._remote_dir_exists(self.remote_dir):
+                raise RuntimeError(
+                    f"CRITICAL: Live reference directory does not exist on VPS: {self.remote_dir}. "
+                    f"Cannot perform incremental staging upload."
+                )
+            logger.info(f"STAGING_UPLOAD: live reference directory exists: {self.remote_dir}")
+            
+            # 2. Compute relative link-dest path
+            rel_link_dest = self._get_relative_link_dest(dest_path)
+            if not rel_link_dest:
+                # If dest_path equals remote_dir (shouldn't happen for staging), fallback to '.'
+                rel_link_dest = '.'
+            logger.info(f"STAGING_UPLOAD: link-dest relative path = '{rel_link_dest}'")
+            
+            # 3. Build rsync command with --link-dest
+            files_str = ' '.join(f"'{f}'" for f in files_to_upload)
+            ssh_part = "-e \"ssh " + " ".join(self.ssh_options) + "\""
+            rsync_cmd = (
+                f"rsync -avz --progress --stats "
+                f"--link-dest='{rel_link_dest}' "
+                f"{ssh_part} "
+                f"{files_str} "
+                f"'{self.vps_user}@{self.vps_host}:{dest_path}/'"
+            )
+            logger.info(f"STAGING_UPLOAD: rsync command (link-dest={rel_link_dest})")
+            
+            # 4. Execute rsync once – if it fails, hard fail the pipeline
+            if run_rsync(rsync_cmd, "STAGING (with --link-dest)"):
                 return True
-            # --link-dest attempt failed, fall back to original method (without link-dest)
-            logger.warning("STAGING_UPLOAD: --link-dest attempt failed, falling back to full upload")
-        # (If not staging, or fallback needed, proceed with original two‑attempt logic)
+            else:
+                # Log the failure and abort – no fallback
+                logger.error("STAGING_UPLOAD: --link-dest attempt failed, aborting to prevent full re-upload")
+                raise RuntimeError("CRITICAL: --link-dest failed, aborting to prevent full re-upload")
         
-        # Original two‑attempt logic (no --link-dest)
+        # =====================================================================
+        # NON‑STAGING UPLOAD – original two‑attempt logic (no --link-dest)
+        # =====================================================================
+        logger.info("NON_STAGING_UPLOAD: using standard upload (no --link-dest)")
+        
+        def build_cmd(extra_ssh_options: str = "") -> str:
+            ssh_part = f"-e \"ssh {extra_ssh_options}\"" if extra_ssh_options else ""
+            return f"""
+            rsync -avz \
+              --progress \
+              --stats \
+              {ssh_part} \
+              {" ".join(f"'{f}'" for f in files_to_upload)} \
+              '{self.vps_user}@{self.vps_host}:{dest_path}/'
+            """
+        
         # FIRST ATTEMPT (default SSH options)
-        cmd1 = build_cmd(extra_ssh_options="", use_link_dest=False)
+        cmd1 = build_cmd(extra_ssh_options="")
         if run_rsync(cmd1, "ATTEMPT 1"):
             return True
         
@@ -347,8 +406,7 @@ class RsyncClient:
         logger.info("Retrying with different SSH options...")
         time.sleep(5)
         cmd2 = build_cmd(
-            extra_ssh_options="-o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3",
-            use_link_dest=False
+            extra_ssh_options="-o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"
         )
         if run_rsync(cmd2, "ATTEMPT 2"):
             return True
