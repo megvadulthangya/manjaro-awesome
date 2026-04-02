@@ -27,15 +27,6 @@ _create_venv() {
     echo "Creating virtual environment (venv) with python3.10..."
     su "${_appuser}" -s /bin/bash -c "python3.10 -m venv '${_apphome}/venv'"
   fi
-
-  # 3. Upgrade pip, pin setuptools==69.5.1, install wheel, then install clip with --no-build-isolation
-  if [[ -d "${_apphome}/venv" ]]; then
-    echo "Upgrading pip, installing setuptools 69.5.1 and wheel in the virtual environment..."
-    su "${_appuser}" -s /bin/bash -c "'${_apphome}/venv/bin/python' -m pip install --upgrade pip 'setuptools==69.5.1' wheel"
-
-    echo "Installing CLIP from archive with --no-build-isolation to use pinned setuptools..."
-    su "${_appuser}" -s /bin/bash -c "'${_apphome}/venv/bin/pip' install --no-build-isolation 'https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip'"
-  fi
 }
 
 _fix_permissions() {
