@@ -174,13 +174,29 @@ jobs:
 
       - name: Disable broken Manjaro disk repository
         run: |
-          echo "=== Disabling [disk] repository in pacman.conf ==="
-          if grep -q '^\[disk\]' /etc/pacman.conf; then
-            echo "Commenting out the [disk] repository section to prevent pacman from reading /build/packages/packages.db"
-            sed -i '/^\[disk\]/,/^\[/ s/^/#/' /etc/pacman.conf
-          else
-            echo "No [disk] repository section found in pacman.conf"
-          fi
+          echo "=== Disabling broken local pacman repository entries ==="
+
+          for conf in /etc/pacman.conf /etc/pacman.d/*.conf; do
+            if [ ! -f "$conf" ]; then
+              continue
+            fi
+
+            echo "Checking $conf"
+
+            if grep -q '^\[disk\]' "$conf"; then
+              echo "Commenting out [disk] repository section in $conf"
+              sed -i '/^\[disk\]/,/^\[/ s/^/#/' "$conf"
+            fi
+
+            if grep -Eq '/build/packages/packages\.db|/build/packages/' "$conf"; then
+              echo "Commenting out direct /build/packages references in $conf"
+              sed -i '\|/build/packages/packages.db| s|^|#|' "$conf"
+              sed -i '\|/build/packages/| s|^|#|' "$conf"
+            fi
+          done
+
+          echo "=== Relevant pacman config lines after cleanup ==="
+          grep -R -nE '^\[disk\]|/build/packages|packages\.db' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
       - name: Install Python and Dependencies
         run: |
