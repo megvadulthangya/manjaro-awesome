@@ -187,37 +187,21 @@ jobs:
           grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
           echo ""
-          echo "=== Disabling broken repository entries ==="
+          echo "=== Disabling broken repository entries (surgical fix) ==="
 
-          # 2026-04-08: The old narrow fix only targeted [disk].
-          # It is kept here as commented history because it did not fully protect the build.
-          # if grep -q '^\[disk\]' /etc/pacman.conf; then
-          #   sed -i '/^\[disk\]/,/^\[/ s/^/#/' /etc/pacman.conf
-          # fi
+          # Disable [disk] repository section header
+          sed -i 's/^\[disk\]/# [disk]/' /etc/pacman.conf
 
-          # 2026-04-08: Comment out any active repository section that references the broken local packages db.
-          # Reason: pacman is still trying to read /build/packages/packages.db during sync.
-          for conf in /etc/pacman.conf /etc/pacman.d/*.conf; do
-            [ -f "$conf" ] || continue
+          # Disable [packages] repository section header (if present)
+          sed -i 's/^\[packages\]/# [packages]/' /etc/pacman.conf
 
-            echo "Checking $conf"
+          # Disable any Server line pointing to the broken /build/packages/ directory
+          sed -i 's|^Server = file:///build/packages|# Server = file:///build/packages|' /etc/pacman.conf
 
-            if grep -q '^\[disk\]' "$conf"; then
-              echo "Commenting out [disk] repository section in $conf"
-              sed -i '/^\[disk\]/,/^\[/ s/^/#/' "$conf"
-            fi
-
-            if grep -q '^\[packages\]' "$conf"; then
-              echo "Commenting out [packages] repository section in $conf"
-              sed -i '/^\[packages\]/,/^\[/ s/^/#/' "$conf"
-            fi
-
-            if grep -Eq '/build/packages/packages\.db|/build/packages/' "$conf"; then
-              echo "Commenting out direct /build/packages references in $conf"
-              sed -i '\|/build/packages/packages.db| s|^|#|' "$conf"
-              sed -i '\|/build/packages/| s|^|#|' "$conf"
-            fi
-          done
+          # Apply same fixes to any included .conf files in /etc/pacman.d/
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's/^\[disk\]/# [disk]/' {} \;
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's/^\[packages\]/# [packages]/' {} \;
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's|^Server = file:///build/packages|# Server = file:///build/packages|' {} \;
 
           echo ""
           echo "=== Relevant pacman config lines after cleanup ==="
@@ -834,77 +818,6 @@ jobs:
           pacman -Sy --noconfirm
           pacman -Ss gcc14
           echo "CACHYOS: DONE"
-#
-#      - name: Setup Chaotic-AUR Repository
-#        shell: bash
-#       run: |
-#          set -euo pipefail
-#
-#          echo "=== Setting up Chaotic-AUR Repository ==="
-#
-#          CHAOTIC_KEYID="3056513887B78AEB"
-#          PACMAN_CONF="/etc/pacman.conf"
-#
-#          echo "CHAOTIC: KEYRING_CHECK"
-#
-#        # Ensure keyring exists
-#          if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
-#            echo "CHAOTIC: KEYRING_INIT (missing keyring dir/files)"
-#            pacman-key --init
-#            pacman-key --populate archlinux
-#          fi
-#
-#          # Ensure secret key exists for lsign
-#          if ! pacman-key --list-secret-keys >/dev/null 2>&1 || [ -z "$(pacman-key --list-secret-keys 2>/dev/null)" ]; then
-#            echo "CHAOTIC: KEYRING_INIT (no secret keys found)"
-#            pacman-key --init
-#            pacman-key --populate archlinux
-#          fi
-#
-#          echo "CHAOTIC: IMPORT_KEY"
-#          ok=0
-#          for attempt in 1 2; do
-#            echo "CHAOTIC: recv-keys attempt=${attempt}"
-#            if pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CHAOTIC_KEYID}"; then
-#              ok=1
-#              break
-#            fi
-#            sleep 2
-#          done
-#          if [ "$ok" -ne 1 ]; then
-#            echo "CHAOTIC: FAIL recv-keys"
-#            exit 1
-#          fi
-#
-#          echo "CHAOTIC: LSIGN_KEY"
-#          pacman-key --lsign-key "${CHAOTIC_KEYID}"
-#
-#          echo "CHAOTIC: INSTALL_KEYRING"
-#          pacman -U --noconfirm \
-#            'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
-#            'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
-#
-#          echo "CHAOTIC: CONFIG_APPEND_CHECK"
-#          if grep -qF '[chaotic-aur]' "$PACMAN_CONF"; then
-#            echo "CHAOTIC: already present -> skipping"
-#          else
-#            cp -a "$PACMAN_CONF" "${PACMAN_CONF}.bak.chaotic"
-#
-#            TMP_CHAOTIC=$(mktemp)
-#            cat > "$TMP_CHAOTIC" <<'EOF'
-#
-#          [chaotic-aur]
-#          Include = /etc/pacman.d/chaotic-mirrorlist
-#          EOF
-#
-#            cat "$TMP_CHAOTIC" >> "$PACMAN_CONF"
-#            rm -f "$TMP_CHAOTIC"
-#          fi
-#
-#          echo "CHAOTIC: SYNC_DB"
-#          pacman -Sy --noconfirm
-#
-#          echo "CHAOTIC: DONE"
 
       - name: Run Builder with Cache Optimization
         env:
