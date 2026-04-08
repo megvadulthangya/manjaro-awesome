@@ -172,20 +172,44 @@ jobs:
 
           chmod -R 777 /mnt
 
-      - name: Disable broken Manjaro disk repository
+      - name: Debug and Disable Broken Manjaro Repository Entries
         run: |
-          echo "=== Disabling broken local pacman repository entries ==="
+          echo "=== PACMAN CONFIG DEBUG ==="
+          echo "--- /etc/pacman.conf ---"
+          cat /etc/pacman.conf
 
+          echo ""
+          echo "--- /etc/pacman.d/ ---"
+          ls -la /etc/pacman.d/ || true
+
+          echo ""
+          echo "--- Matching repository references ---"
+          grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
+
+          echo ""
+          echo "=== Disabling broken repository entries ==="
+
+          # 2026-04-08: The old narrow fix only targeted [disk].
+          # It is kept here as commented history because it did not fully protect the build.
+          # if grep -q '^\[disk\]' /etc/pacman.conf; then
+          #   sed -i '/^\[disk\]/,/^\[/ s/^/#/' /etc/pacman.conf
+          # fi
+
+          # 2026-04-08: Comment out any active repository section that references the broken local packages db.
+          # Reason: pacman is still trying to read /build/packages/packages.db during sync.
           for conf in /etc/pacman.conf /etc/pacman.d/*.conf; do
-            if [ ! -f "$conf" ]; then
-              continue
-            fi
+            [ -f "$conf" ] || continue
 
             echo "Checking $conf"
 
             if grep -q '^\[disk\]' "$conf"; then
               echo "Commenting out [disk] repository section in $conf"
               sed -i '/^\[disk\]/,/^\[/ s/^/#/' "$conf"
+            fi
+
+            if grep -q '^\[packages\]' "$conf"; then
+              echo "Commenting out [packages] repository section in $conf"
+              sed -i '/^\[packages\]/,/^\[/ s/^/#/' "$conf"
             fi
 
             if grep -Eq '/build/packages/packages\.db|/build/packages/' "$conf"; then
@@ -195,8 +219,9 @@ jobs:
             fi
           done
 
+          echo ""
           echo "=== Relevant pacman config lines after cleanup ==="
-          grep -R -nE '^\[disk\]|/build/packages|packages\.db' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
+          grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
       - name: Install Python and Dependencies
         run: |
