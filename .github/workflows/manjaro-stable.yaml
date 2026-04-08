@@ -172,6 +172,16 @@ jobs:
 
           chmod -R 777 /mnt
 
+      - name: Disable broken Manjaro disk repository
+        run: |
+          echo "=== Disabling [disk] repository in pacman.conf ==="
+          if grep -q '^\[disk\]' /etc/pacman.conf; then
+            echo "Commenting out the [disk] repository section to prevent pacman from reading /build/packages/packages.db"
+            sed -i '/^\[disk\]/,/^\[/ s/^/#/' /etc/pacman.conf
+          else
+            echo "No [disk] repository section found in pacman.conf"
+          fi
+
       - name: Install Python and Dependencies
         run: |
           echo "=== Installing Python and Core Dependencies ==="
@@ -695,7 +705,7 @@ jobs:
           # Tier detection (znver4/5 > v4 > v3)
           tier="v3"
           if command -v gcc >/dev/null 2>&1; then
-            march="$(gcc -march=native -Q --help=target 2>/dev/null | awk '/^\\s+-march=/{print $2; exit}' || true)"
+            march="$(gcc -march=native -Q --help=target 2>/dev/null | awk '/^\s+-march=/{print $2; exit}' || true)"
             if [ "${march:-}" = "znver4" ] || [ "${march:-}" = "znver5" ]; then
               tier="znver4"
             fi
