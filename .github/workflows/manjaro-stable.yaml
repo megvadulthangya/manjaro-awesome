@@ -207,13 +207,39 @@ jobs:
           echo "=== Relevant pacman config lines after cleanup ==="
           grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
-      - name: Install Python and Dependencies
+      - name: System Initialization
         run: |
-          echo "=== Fixing keyring and performing full system upgrade ==="
+          echo "=== System Initialization: Fixing keyring and performing full system upgrade ==="
+
+          # Backup original pacman.conf
+          cp /etc/pacman.conf /etc/pacman.conf.backup-init
+
+          # Temporarily set SigLevel = Never to allow updating keyring packages
+          echo "Temporarily setting SigLevel = Never in /etc/pacman.conf"
+          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
+
+          # Clear pacman cache to fix "file not found" transaction errors
+          echo "Clearing pacman cache"
+          rm -rf /var/cache/pacman/pkg/*
+
+          # Update keyrings first
+          echo "Updating manjaro-keyring and archlinux-keyring"
+          pacman -Sy --noconfirm manjaro-keyring archlinux-keyring
+
+          # Initialize and populate pacman keyring
+          echo "Initializing pacman keyring"
           pacman-key --init
           pacman-key --populate archlinux manjaro
-          pacman -Syu --noconfirm python python-yaml python-setuptools
-          echo "✅ Python and dependencies installed after full system upgrade"
+
+          # Restore secure SigLevel
+          echo "Restoring secure SigLevel"
+          mv /etc/pacman.conf.backup-init /etc/pacman.conf
+
+          # Full system upgrade and install required dependencies
+          echo "Running full system upgrade and installing dependencies"
+          pacman -Syu --noconfirm --needed python python-yaml python-setuptools
+
+          echo "✅ System initialization complete"
 
       - name: Run Preflight Checker
         run: |
