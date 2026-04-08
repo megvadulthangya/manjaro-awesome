@@ -1,9 +1,9 @@
-name: Manjaro Package Builder
+name: Stable Manjaro Package Builder
 
 on:
   workflow_dispatch:
-#  schedule:
-#    - cron: '0 3 * * *'  # Daily at 4 AM UTC
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 4 AM UTC
   push:
     paths:
       - 'packages.py'
@@ -64,7 +64,7 @@ jobs:
       contents: write  # Required for token-based git push
 
     container:
-      image: archlinux:base-devel
+      image: manjarolinux/build-stable:latest
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
@@ -607,7 +607,6 @@ jobs:
           echo "=== Initializing GPG and Pacman Keyring ==="
 
           # Initialize pacman keyring FIRST
-          echo "Initializing pacman keyring..."
           sudo pacman-key --init
 
           # Import GPG key if provided
@@ -659,7 +658,10 @@ jobs:
           if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.kbx ]; then
             echo "CACHYOS: KEYRING_INIT (missing keyring dir/files)"
             pacman-key --init
-            pacman-key --populate archlinux
+            #pacman-key --populate archlinux
+            # Manjaro build-stable note: if the Manjaro keyring needs to be populated here too,
+            # uncomment the next line and keep it directly under the existing archlinux populate line.
+            pacman-key --populate archlinux manjaro
           fi
 
           # Ensure secret key exists for lsign
@@ -667,6 +669,9 @@ jobs:
             echo "CACHYOS: KEYRING_INIT (no secret keys found)"
             pacman-key --init
             pacman-key --populate archlinux
+            # Manjaro build-stable note: if the Manjaro keyring needs to be populated here too,
+            # uncomment the next line and keep it directly under the existing archlinux populate line.
+            # pacman-key --populate archlinux manjaro
           fi
 
           echo "CACHYOS: IMPORT_KEY"
