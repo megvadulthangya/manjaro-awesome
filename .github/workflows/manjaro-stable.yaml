@@ -160,8 +160,7 @@ jobs:
           mkdir -p /mnt/vps_cache
           mkdir -p /mnt/build_artifacts
 
-          rm -rf /var/cache/pacman/pkg
-          ln -sf /mnt/pacman_cache /var/cache/pacman/pkg
+          chmod 777 /mnt/pacman_cache
 
           mkdir -p /root/.cache
           ln -sf /mnt/yay_cache /root/.cache/yay
@@ -207,39 +206,49 @@ jobs:
           echo "=== Relevant pacman config lines after cleanup ==="
           grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
-      - name: System Initialization
+          echo ""
+          echo "=== Configuring CacheDir to /mnt/pacman_cache ==="
+          # Replace existing CacheDir line or add if not present
+          if grep -q "^CacheDir" /etc/pacman.conf; then
+            sed -i 's|^CacheDir.*|CacheDir = /mnt/pacman_cache|' /etc/pacman.conf
+          else
+            echo "CacheDir = /mnt/pacman_cache" >> /etc/pacman.conf
+          fi
+          echo "CacheDir set to /mnt/pacman_cache"
+
+      - name: Install Python and Dependencies
         run: |
-          echo "=== System Initialization: Fixing keyring and performing full system upgrade ==="
+          echo "=== Nuclear Environment Initialization ==="
 
           # Backup original pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup-init
 
-          # Temporarily set SigLevel = Never to allow updating keyring packages
-          echo "Temporarily setting SigLevel = Never in /etc/pacman.conf"
+          # a) Globally set 'SigLevel = Never' to bypass signature checks
+          echo "Setting SigLevel = Never"
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
 
-          # Clear pacman cache to fix "file not found" transaction errors
-          echo "Clearing pacman cache"
-          rm -rf /var/cache/pacman/pkg/*
+          # b) Run 'pacman -Scc' to wipe any corrupt cache indices
+          echo "Wiping package cache completely"
+          pacman -Scc --noconfirm
 
-          # Update keyrings first
-          echo "Updating manjaro-keyring and archlinux-keyring"
-          pacman -Sy --noconfirm manjaro-keyring archlinux-keyring
+          # c) Sync and update ONLY the keyrings first
+          echo "Updating keyrings"
+          pacman -Sy --noconfirm archlinux-keyring manjaro-keyring
 
-          # Initialize and populate pacman keyring
+          # d) Initialize and populate keyrings
           echo "Initializing pacman keyring"
           pacman-key --init
           pacman-key --populate archlinux manjaro
 
-          # Restore secure SigLevel
+          # e) Perform full system upgrade and install dependencies
+          echo "Performing full system upgrade and installing dependencies"
+          pacman -Syu --noconfirm --needed python python-yaml python-setuptools
+
+          # f) Reset SigLevel to secure setting
           echo "Restoring secure SigLevel"
           mv /etc/pacman.conf.backup-init /etc/pacman.conf
 
-          # Full system upgrade and install required dependencies
-          echo "Running full system upgrade and installing dependencies"
-          pacman -Syu --noconfirm --needed python python-yaml python-setuptools
-
-          echo "✅ System initialization complete"
+          echo "✅ Nuclear initialization complete"
 
       - name: Run Preflight Checker
         run: |
@@ -256,10 +265,6 @@ jobs:
           echo "  - VPS mirror: $(ls -1 /tmp/repo_mirror/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - Built packages: $(ls -1 /tmp/build_artifacts/*.pkg.tar.* 2>/dev/null | wc -l) files"
           echo "  - AUR sources: $(ls -1 build_aur/*/ 2>/dev/null | wc -l) directories"
-
-          # Skip key signing issues for system updates
-          echo "Setting up pacman without key signing for updates..."
-          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
 
           # UPDATE SYSTEM WITHOUT OUR REPOSITORY
           echo "Updating system (ignoring our repository for now)..."
