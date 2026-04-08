@@ -209,9 +209,11 @@ jobs:
 
       - name: Install Python and Dependencies
         run: |
-          echo "=== Installing Python and Core Dependencies ==="
-          pacman -Sy --noconfirm python python-yaml python-setuptools
-          echo "✅ Python installed"
+          echo "=== Fixing keyring and performing full system upgrade ==="
+          pacman-key --init
+          pacman-key --populate archlinux manjaro
+          pacman -Syu --noconfirm python python-yaml python-setuptools
+          echo "✅ Python and dependencies installed after full system upgrade"
 
       - name: Run Preflight Checker
         run: |
