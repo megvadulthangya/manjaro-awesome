@@ -206,30 +206,22 @@ jobs:
           echo "=== Relevant pacman config lines after cleanup ==="
           grep -R -nE '^\[disk\]|^\[packages\]|/build/packages|packages\.db|file://' /etc/pacman.conf /etc/pacman.d 2>/dev/null || true
 
-          echo ""
-          echo "=== Configuring CacheDir to /mnt/pacman_cache ==="
-          # Replace existing CacheDir line or add if not present
-          if grep -q "^CacheDir" /etc/pacman.conf; then
-            sed -i 's|^CacheDir.*|CacheDir = /mnt/pacman_cache|' /etc/pacman.conf
-          else
-            echo "CacheDir = /mnt/pacman_cache" >> /etc/pacman.conf
-          fi
-          echo "CacheDir set to /mnt/pacman_cache"
+          # NOTE: CacheDir modification is intentionally omitted here.
+          # It will be applied AFTER the bootstrap/system upgrade to avoid
+          # interfering with pacman's self-upgrade transaction.
 
       - name: Install Python and Dependencies
         run: |
-          echo "=== Nuclear Environment Initialization ==="
+          echo "=== Bootstrap System Upgrade (CacheDir untouched) ==="
 
           # Backup original pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup-init
 
-          # a) Globally set 'SigLevel = Never' to bypass signature checks
+          # a) Temporarily set 'SigLevel = Never' to bypass signature checks
           echo "Setting SigLevel = Never"
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
 
-          # b) Run 'pacman -Scc' to wipe any corrupt cache indices
-          echo "Wiping package cache completely"
-          pacman -Scc --noconfirm
+          # b) Do NOT run 'pacman -Scc' – it wipes the cache and breaks self-upgrade
 
           # c) Sync and update ONLY the keyrings first
           echo "Updating keyrings"
@@ -248,7 +240,18 @@ jobs:
           echo "Restoring secure SigLevel"
           mv /etc/pacman.conf.backup-init /etc/pacman.conf
 
-          echo "✅ Nuclear initialization complete"
+          echo "✅ Bootstrap upgrade complete"
+
+      - name: Enable Persistent Pacman Cache
+        run: |
+          echo "=== Enabling Persistent Pacman Cache ==="
+          # Now that pacman is fully upgraded and stable, redirect the cache
+          # to the persistent /mnt/pacman_cache directory.
+          sed -i 's|^#*CacheDir.*|CacheDir = /mnt/pacman_cache|' /etc/pacman.conf
+          if ! grep -q "^CacheDir" /etc/pacman.conf; then
+            echo "CacheDir = /mnt/pacman_cache" >> /etc/pacman.conf
+          fi
+          echo "CacheDir set to /mnt/pacman_cache"
 
       - name: Run Preflight Checker
         run: |
