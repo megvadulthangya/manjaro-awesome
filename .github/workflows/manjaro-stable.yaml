@@ -296,9 +296,14 @@ jobs:
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
 
-          # Create builder user (container invariant)
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          # Create builder user (only if it does not already exist)
+          if ! id builder >/dev/null 2>&1; then
+            useradd -m builder
+          fi
+          # Add sudoers entry only if not already present
+          if ! grep -q '^builder ALL=(ALL) NOPASSWD: ALL$' /etc/sudoers; then
+            echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          fi
 
           # Set ownership
           chown -R builder:builder "$(pwd)"
