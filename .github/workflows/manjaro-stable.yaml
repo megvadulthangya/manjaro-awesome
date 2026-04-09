@@ -64,7 +64,7 @@ jobs:
       contents: write  # Required for token-based git push
 
     container:
-      image: manjarolinux/build-stable:latest
+      image: manjarolinux/build:latest
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
