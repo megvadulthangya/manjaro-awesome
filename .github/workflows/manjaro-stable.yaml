@@ -296,25 +296,44 @@ jobs:
           # Restore pacman.conf
           mv /etc/pacman.conf.backup /etc/pacman.conf
 
-          # Create builder user (only if it does not already exist)
-          if ! id builder >/dev/null 2>&1; then
-            useradd -m builder
+          # ========== DESTROY AND REBUILD BUILDER USER ==========
+          echo "=== DESTROY AND REBUILD BUILDER USER ==="
+
+          # 1. DEBUG: List existing users and home directories
+          echo "DEBUG: Current users and home directories:"
+          cut -d: -f1,6 /etc/passwd | grep builder || echo "No builder user found"
+
+          # 2. CLEANUP: Delete builder user if exists (forcefully with -r)
+          if id builder >/dev/null 2>&1; then
+            echo "CLEANUP: Removing existing builder user..."
+            userdel -r builder || true
+          else
+            echo "CLEANUP: No builder user exists, skipping deletion."
           fi
-          # Add sudoers entry only if not already present
+
+          # 3. SETUP: Create builder user with proper home directory
+          echo "SETUP: Creating builder user..."
+          useradd -m -d /home/builder -s /bin/bash builder
+
+          # Ensure the directory and required subdirs exist with correct permissions
+          echo "SETUP: Ensuring /home/builder and dot directories exist with correct permissions..."
+          mkdir -p /home/builder/.ssh /home/builder/.gnupg
+          chmod 700 /home/builder/.ssh /home/builder/.gnupg
+
+          # Fix ownership recursively
+          echo "SETUP: Fixing ownership recursively..."
+          chown -R builder:builder /home/builder
+
+          # Grant NOPASSWD sudo access (required for build process)
+          echo "SETUP: Granting NOPASSWD sudo access..."
           if ! grep -q '^builder ALL=(ALL) NOPASSWD: ALL$' /etc/sudoers; then
             echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           fi
 
-          # ========== FIX MANJARO CONTAINER HOME DIRECTORY PERMISSIONS ==========
-          # The manjarolinux/build image ships with /home/builder owned by root.
-          # This breaks GPG and SSH for the builder user. Fix ownership and create required dot dirs.
-          chown -R builder:builder /home/builder
-          mkdir -p /home/builder/.gnupg /home/builder/.ssh
-          chmod 700 /home/builder/.gnupg /home/builder/.ssh
-          chown -R builder:builder /home/builder/.gnupg /home/builder/.ssh
-          # =========================================================================
+          echo "✅ Builder user setup complete."
 
-          # Set ownership
+          # 4. WORKSPACE: Ensure GITHUB_WORKSPACE is owned by builder
+          echo "WORKSPACE: Setting ownership of GITHUB_WORKSPACE ($(pwd))..."
           chown -R builder:builder "$(pwd)"
 
           # Create build directories with correct permissions (if they don't exist from cache)
@@ -327,6 +346,7 @@ jobs:
           mkdir -p /home/builder/.cache
           ln -sf /mnt/yay_cache /home/builder/.cache/yay
           ln -sf /mnt/build_artifacts /home/builder/build_artifacts
+          chown -h builder:builder /home/builder/.cache/yay /home/builder/build_artifacts
 
           # Optimize makepkg for faster builds
           echo "Optimizing makepkg configuration..."
