@@ -305,6 +305,15 @@ jobs:
             echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           fi
 
+          # ========== FIX MANJARO CONTAINER HOME DIRECTORY PERMISSIONS ==========
+          # The manjarolinux/build image ships with /home/builder owned by root.
+          # This breaks GPG and SSH for the builder user. Fix ownership and create required dot dirs.
+          chown -R builder:builder /home/builder
+          mkdir -p /home/builder/.gnupg /home/builder/.ssh
+          chmod 700 /home/builder/.gnupg /home/builder/.ssh
+          chown -R builder:builder /home/builder/.gnupg /home/builder/.ssh
+          # =========================================================================
+
           # Set ownership
           chown -R builder:builder "$(pwd)"
 
