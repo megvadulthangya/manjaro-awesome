@@ -889,6 +889,37 @@ jobs:
           pacman -Ss gcc14
           echo "CACHYOS: DONE"
 
+      # Új lépés: Rendszer és Ág Információk Listázása
+      - name: 🔍 Rendszer és Ág (Branch) Információk Listázása
+        run: |
+          echo "========================================="
+          echo " OS RELEASE INFO (Operációs Rendszer)"
+          echo "========================================="
+          cat /etc/os-release
+          
+          echo ""
+          echo "========================================="
+          echo " KERNEL & ARCHITEKTÚRA"
+          echo "========================================="
+          uname -a
+          
+          echo ""
+          echo "========================================="
+          echo " MANJARO BRANCH (stable / testing / unstable)"
+          echo "========================================="
+          if command -v pacman-mirrors &> /dev/null; then
+            echo "Aktív Manjaro ág:"
+            pacman-mirrors -G
+          else
+            echo "A 'pacman-mirrors' nem található. (Valószínűleg tiszta Arch Linux konténer)"
+          fi
+          
+          echo ""
+          echo "========================================="
+          echo " ENGEDÉLYEZETT PACMAN REPÓK (core, extra, stb.)"
+          echo "========================================="
+          grep -E '^\[.*\]' /etc/pacman.conf
+
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
