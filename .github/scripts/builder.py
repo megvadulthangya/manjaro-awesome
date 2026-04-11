@@ -11,6 +11,7 @@ import tempfile
 import random
 import string
 import datetime
+import filecmp
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 
@@ -499,6 +500,53 @@ class PackageBuilderOrchestrator:
         
         return built_packages, skipped_packages
     
+    def _filter_upload_files(self, files: List[Path]) -> List[Path]:
+        """
+        Filter files to upload by comparing against local mirror of VPS state.
+        Only files that are NEW or MODIFIED (compared to mirror) are returned.
+        Database and signature files are always included.
+        
+        Args:
+            files: List of Path objects from output_dir
+            
+        Returns:
+            Filtered list of Path objects to upload
+        """
+        if not self.mirror_temp_dir.exists():
+            logger.warning("Mirror temp directory does not exist, uploading all files")
+            return files
+        
+        filtered = []
+        skipped_count = 0
+        
+        for file_path in files:
+            file_name = file_path.name
+            mirror_path = self.mirror_temp_dir / file_name
+            
+            # Database and signature files: always upload
+            if (file_name.startswith(f"{self.repo_name}.db") or
+                file_name.startswith(f"{self.repo_name}.files") or
+                file_name.endswith('.sig')):
+                filtered.append(file_path)
+                logger.debug(f"UPLOAD_INCLUDE (db/sig): {file_name}")
+                continue
+            
+            # Package file: compare with mirror
+            if mirror_path.exists():
+                # Use filecmp for reliable byte-for-byte comparison
+                if filecmp.cmp(file_path, mirror_path, shallow=False):
+                    logger.info(f"UPLOAD_SKIP (identical to mirror): {file_name}")
+                    skipped_count += 1
+                else:
+                    logger.info(f"UPLOAD_INCLUDE (modified): {file_name}")
+                    filtered.append(file_path)
+            else:
+                logger.info(f"UPLOAD_INCLUDE (new): {file_name}")
+                filtered.append(file_path)
+        
+        logger.info(f"Upload filtering complete: {len(filtered)} files to upload, {skipped_count} skipped (already on VPS)")
+        return filtered
+    
     def phase_v_sign_and_update(self) -> bool:
         """
         Phase V: Sign and Update WITH STAGING PUBLISH, ATOMIC PROMOTION,
@@ -573,19 +621,29 @@ class PackageBuilderOrchestrator:
             self._run_safe_operations_only()
             return False
         
-        # 5b: Generate unique run ID and staging path
+        # 5b: Filter files to upload (only new/modified compared to mirror)
+        files_to_upload = self._filter_upload_files(files_to_upload)
+        if not files_to_upload:
+            logger.info("No new or modified files to upload after diffing against mirror")
+            self.gate_state['upload_success'] = True
+            self.gate_state['up3_success'] = True
+            self.gate_state['promotion_success'] = True
+            self._run_safe_operations_only()
+            return True
+        
+        # 5c: Generate unique run ID and staging path
         self.current_run_id = self._generate_run_id()
         staging_path = f"{self.remote_dir}/.staging/{self.current_run_id}"
         logger.info(f"STAGING_RUN_ID={self.current_run_id} path={staging_path}")
         
-        # 5c: Ensure staging directory exists on VPS
+        # 5d: Ensure staging directory exists on VPS
         if not self.ssh_client.ensure_staging_dir(self.current_run_id):
             logger.error("Failed to create staging directory on VPS")
             self.gate_state['upload_success'] = False
             self._run_safe_operations_only()
             return False
         
-        # 5d: Upload all files to staging directory
+        # 5e: Upload filtered files to staging directory
         upload_success = self.rsync_client.upload_files(
             [str(f) for f in files_to_upload],
             self.output_dir,
@@ -593,7 +651,7 @@ class PackageBuilderOrchestrator:
             remote_path=staging_path
         )
         
-        # 5e: PRE‑PROMOTE VERIFICATION (P0)
+        # 5f: PRE‑PROMOTE VERIFICATION (P0)
         promotion_success = False
         if upload_success:
             expected_basenames = {f.name for f in files_to_upload}
@@ -608,22 +666,21 @@ class PackageBuilderOrchestrator:
             
             logger.info(f"Upload to staging verified. All {len(expected_basenames)} files present.")
             
-            # 5f: Promote staging to live (with remote lock)
+            # 5g: Promote staging to live (with remote lock)
             logger.info(f"Promoting staging -> live...")
             promotion_success = self.ssh_client.promote_staging(self.current_run_id)
             self.gate_state['promotion_success'] = promotion_success
             
             if not promotion_success:
                 logger.error(f"Staging promotion FAILED. Staging directory left at {staging_path} for debugging.")
-                # Keep staging dir, do not delete; exit with error later
         else:
             logger.error("Upload to staging failed. Promotion aborted.")
         
-        # 5g: Overall upload success = upload succeeded AND promotion succeeded
+        # 5h: Overall upload success = upload succeeded AND promotion succeeded
         overall_upload_success = upload_success and promotion_success
         self.gate_state['upload_success'] = overall_upload_success
         
-        # 5h: Post‑promotion verification (UP3)
+        # 5i: Post‑promotion verification (UP3)
         up3_success = False
         if overall_upload_success:
             # Verify that all expected files are now present in live remote_dir
@@ -634,11 +691,10 @@ class PackageBuilderOrchestrator:
             
             if not up3_success:
                 logger.error("UP3 POST-UPLOAD VERIFICATION FAILED: missing files after promotion")
-                # Exit with error later; staging dir already removed
         else:
             logger.error("Overall upload/promotion failed; skipping UP3 verification")
         
-        # 5i: Permission normalization (only if overall success)
+        # 5j: Permission normalization (only if overall success)
         if overall_upload_success and up3_success:
             if not self.ssh_client.normalize_permissions():
                 logger.error("VPS permission normalization failed, aborting pipeline")
@@ -649,7 +705,7 @@ class PackageBuilderOrchestrator:
         else:
             logger.warning("Skipping permission normalization due to upload/promotion failure")
         
-        # 5j: EXTRAS CLASSIFICATION (P0) - Log detailed summary of remote files not expected
+        # 5k: EXTRAS CLASSIFICATION (P0) - Log detailed summary of remote files not expected
         # Get current remote files list after promotion (or after upload if promotion failed)
         remote_files_after = self.ssh_client.list_remote_files(self.remote_dir)
         expected_basenames = {f.name for f in files_to_upload}
@@ -687,7 +743,7 @@ class PackageBuilderOrchestrator:
         else:
             logger.info("EXTRAS_CLASSIFICATION: no extra files found on VPS")
         
-        # 5k: VPS HYGIENE (if enabled)
+        # 5l: VPS HYGIENE (if enabled)
         try:
             import config
             if getattr(config, 'ENABLE_VPS_HYGIENE', False):
