@@ -1,4 +1,4 @@
-name: Manjaro Package Builder
+name: Arch Package Builder
 
 on:
   workflow_dispatch:
