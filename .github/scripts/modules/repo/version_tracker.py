@@ -85,6 +85,17 @@ class VersionTracker:
             logger.info(f"PARSE_VPS_FAIL_COUNT={fail_count}")
         
         logger.info(f"Remote version index built: {processed_count} packages indexed")
+        
+        # Log packages from packages.py that were NOT found in the remote index
+        try:
+            import packages
+            all_expected = list(packages.LOCAL_PACKAGES) + list(packages.AUR_PACKAGES)
+            missing = [p for p in all_expected if p not in self._remote_version_index]
+            if missing:
+                logger.warning(f"REMOTE_INDEX_MISSING_PACKAGES: {missing}")
+                logger.warning(f"These packages from packages.py were NOT found in VPS remote index")
+        except ImportError:
+            pass
     
     def _parse_package_filename_for_index(self, filename: str) -> Tuple[Optional[str], Optional[str]]:
         """

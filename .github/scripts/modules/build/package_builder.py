@@ -157,6 +157,7 @@ class PackageBuilder:
             should_build = self.version_manager.compare_versions(
                 remote_version, pkgver, pkgrel, epoch, pkg_dir  # Pass pkg_dir for VCS detection
             )
+            logger.info(f"BUILD_DECISION: pkg={pkg_dir.name} source_ver={source_version} remote_ver={remote_version or 'NONE'} decision={'BUILD' if should_build else 'SKIP'}")
             if not should_build:
                 # NEW: Only check completeness if versions are equal (not when remote is newer)
                 # Get full remote version string for comparison
@@ -182,7 +183,7 @@ class PackageBuilder:
                         logger.info(f"🔄 {pkg_dir.name}: Version matches but VPS is incomplete - FORCING BUILD")
                 else:
                     # Remote version is newer than source - skip without completeness check
-                    logger.info(f"⏭️ {pkg_dir.name}: Remote version {remote_version} is newer than source {source_version}; skipping without completeness override")
+                    logger.info(f"⏭️ {pkg_dir.name}: Remote version {remote_version} is newer than source {source_version}; skipping (compare_versions already checked VCS upstream)")
                     # Register skipped package for ALL pkgname entries
                     self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                     return False, source_version, {
@@ -363,6 +364,7 @@ class PackageBuilder:
                 should_build = self.version_manager.compare_versions(
                     remote_version, pkgver, pkgrel, epoch, temp_path  # Pass temp_path for VCS detection
                 )
+                logger.info(f"BUILD_DECISION: pkg={aur_package_name} source_ver={source_version} remote_ver={remote_version or 'NONE'} decision={'BUILD' if should_build else 'SKIP'}")
                 if not should_build:
                     # NEW: Only check completeness if versions are equal (not when remote is newer)
                     # Get full remote version string for comparison
@@ -388,7 +390,7 @@ class PackageBuilder:
                             logger.info(f"🔄 {aur_package_name}: Version matches but VPS is incomplete - FORCING BUILD")
                     else:
                         # Remote version is newer than source - skip without completeness check
-                        logger.info(f"⏭️ {aur_package_name}: Remote version {remote_version} is newer than source {source_version}; skipping without completeness override")
+                        logger.info(f"⏭️ {aur_package_name}: Remote version {remote_version} is newer than source {source_version}; skipping (compare_versions already checked VCS upstream)")
                         # Register skipped package for ALL pkgname entries
                         self.version_tracker.register_split_packages(pkg_names, remote_version, is_built=False)
                         return False, source_version, {
