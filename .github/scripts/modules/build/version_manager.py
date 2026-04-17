@@ -259,6 +259,19 @@ class VersionManager:
         """
         Detect if a package is a VCS package using only local PKGBUILD content.
         
+        A package is considered VCS only if BOTH conditions hold:
+          1. It defines a pkgver() function (so its version is generated
+             dynamically from a repo at build time).
+          2. At least one entry in the source=() array is a git URL
+             (starts with 'git+' / 'git://' / contains '.git').
+        
+        Having just a pkgver() function (e.g. a binary package that derives
+        its version from a downloaded archive) is NOT enough — without a git
+        source we have no way to do an upstream HEAD check. Having just a
+        git source without a pkgver() function is also NOT enough — the
+        pinned version in the PKGBUILD won't track upstream HEAD anyway, so
+        normal version comparison is the right behavior.
+        
         Args:
             pkg_dir: Path to package directory
             
@@ -274,17 +287,28 @@ class VersionManager:
                 pkgbuild_content = f.read()
             
             # Check for pkgver() function
-            if re.search(r'^\s*pkgver\s*\(\)\s*\{', pkgbuild_content, re.MULTILINE):
-                return True, "pkgver_function"
+            has_pkgver_fn = bool(re.search(r'^\s*pkgver\s*\(\)\s*\{', pkgbuild_content, re.MULTILINE))
             
-            # Check for VCS-like sources
-            lines = pkgbuild_content.split('\n')
-            for line in lines:
-                line = line.strip()
-                if line.startswith('source=') or line.startswith('_source='):
-                    # Check for VCS URLs
-                    if any(vcs in line for vcs in ['git+', 'git://', '.git', 'svn+', 'hg+', 'bzr+']):
-                        return True, "vcs_source"
+            # Check for at least one git source URL in the source=() array.
+            # We reuse _parse_git_source_from_pkgbuild which already handles
+            # multi-line arrays and variable-expansion of ${pkgver}/${pkgname}
+            # references; it returns a non-None git_url only when a 'git+'
+            # or '.git' entry is actually present.
+            git_url, _, _ = self._parse_git_source_from_pkgbuild(pkgbuild_content)
+            has_git_source = git_url is not None
+            
+            if has_pkgver_fn and has_git_source:
+                return True, "pkgver_function_and_git_source"
+            if has_pkgver_fn and not has_git_source:
+                # Common false-positive case (e.g. binary AUR packages like
+                # *-bin that use pkgver() to inspect a downloaded archive).
+                # Treat as non-VCS so we don't attempt git ls-remote.
+                return False, "pkgver_function_no_git_source"
+            if has_git_source and not has_pkgver_fn:
+                # Rare: static-version git package. Skip the upstream check
+                # because the pinned PKGBUILD version intentionally doesn't
+                # track HEAD.
+                return False, "git_source_no_pkgver_function"
             
             return False, "none"
         except Exception as e:
@@ -332,6 +356,117 @@ class VersionManager:
         
         return False
     
+    def _extract_pkgbuild_variables(self, pkgbuild_content: str) -> Dict[str, str]:
+        """
+        Extract simple scalar variable assignments from PKGBUILD content for
+        later substitution into source=() URLs.
+        
+        Only handles trivial top-level assignments of the form
+        `name=value`, `name="value"`, or `name='value'`. Array assignments
+        (value starts with `(`) and function bodies are skipped. No shell
+        execution is performed — this is a pure text scan.
+        
+        Args:
+            pkgbuild_content: PKGBUILD content as string
+        
+        Returns:
+            Dict mapping variable name -> literal string value.
+        """
+        variables: Dict[str, str] = {}
+        try:
+            in_function = False
+            brace_depth = 0
+            for line in pkgbuild_content.split('\n'):
+                stripped = line.strip()
+                # Track function bodies so we don't treat locals as top-level
+                # assignments.
+                if not in_function:
+                    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{?\s*$', stripped) or \
+                       re.match(r'^[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{', stripped):
+                        in_function = True
+                        brace_depth = stripped.count('{') - stripped.count('}')
+                        continue
+                else:
+                    brace_depth += stripped.count('{') - stripped.count('}')
+                    if brace_depth <= 0:
+                        in_function = False
+                    continue
+                
+                if not stripped or stripped.startswith('#'):
+                    continue
+                
+                m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', stripped)
+                if not m:
+                    continue
+                name = m.group(1)
+                value = m.group(2).strip()
+                # Skip array assignments — handled elsewhere.
+                if value.startswith('('):
+                    continue
+                # Strip surrounding quotes (single or double). Remember
+                # whether the value was originally quoted so we don't
+                # later treat a legitimate '#' inside it (e.g. the
+                # fragment in "git+https://...#branch=master") as an
+                # inline shell comment.
+                was_quoted = (
+                    len(value) >= 2
+                    and value[0] == value[-1]
+                    and value[0] in ('"', "'")
+                )
+                if was_quoted:
+                    value = value[1:-1]
+                # Strip trailing inline comment (best effort, only for
+                # values that were NOT originally quoted — inside a
+                # quoted string '#' is a literal character, not the
+                # start of a shell comment).
+                if '#' in value and not was_quoted:
+                    value = value.split('#', 1)[0].rstrip()
+                variables[name] = value
+            return variables
+        except Exception as e:
+            logger.warning(f"Error extracting PKGBUILD variables: {e}")
+            return variables
+    
+    def _expand_pkgbuild_variables(self, text: str, variables: Dict[str, str]) -> str:
+        """
+        Expand ${var} and $var references in text using the variables map.
+        
+        Performs a bounded number of substitution passes so nested references
+        (e.g. `${pkgname}` -> "${_pkgname}-git" -> "ComfyUI-git") resolve.
+        Unknown variables are left untouched (preserves `${var}` literal),
+        which makes the failure obvious in logs instead of silently producing
+        a broken URL.
+        
+        Args:
+            text: String possibly containing shell variable references.
+            variables: Name -> value map from _extract_pkgbuild_variables.
+        
+        Returns:
+            Expanded string.
+        """
+        if not text or '$' not in text:
+            return text
+        prev = None
+        current = text
+        iterations = 0
+        while prev != current and iterations < 5:
+            prev = current
+            # ${var}
+            current = re.sub(
+                r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',
+                lambda m: variables.get(m.group(1), m.group(0)),
+                current,
+            )
+            # $var (stop at first non-identifier char). Skip positional
+            # parameters like $1, $2, etc. by not matching digits-first.
+            current = re.sub(
+                r'\$([A-Za-z_][A-Za-z0-9_]*)',
+                lambda m: variables.get(m.group(1), m.group(0)),
+                current,
+            )
+            iterations += 1
+        return current
+    
     def _parse_git_source_from_pkgbuild(self, pkgbuild_content: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Parse git source URL, branch, and commit from PKGBUILD content.
@@ -344,6 +479,10 @@ class VersionManager:
         """
         try:
             lines = pkgbuild_content.split('\n')
+            # Extract scalar variables once so we can expand ${pkgver},
+            # ${pkgname}, ${_pkgname}, etc. inside source=() entries before
+            # URL parsing.
+            variables = self._extract_pkgbuild_variables(pkgbuild_content)
             
             i = 0
             while i < len(lines):
@@ -384,10 +523,20 @@ class VersionManager:
                         continue
                     
                     for part in parts:
-                        # Check for git URLs
-                        if 'git+' in part or '.git' in part or 'git://' in part:
+                        # Expand ${var}/$var references (e.g. ${pkgver},
+                        # ${pkgname}) BEFORE URL/fragment parsing so that
+                        # URLs like "https://…/v${pkgver}/archive.tar.gz"
+                        # and "${pkgname}::git+https://…" become literal
+                        # strings. Required for branches like "${pkgver}"
+                        # to reach git ls-remote correctly too.
+                        expanded_part = self._expand_pkgbuild_variables(part, variables)
+                        
+                        # Check for git URLs (on the expanded form so that
+                        # e.g. a filename pattern like "foo-${pkgver}.tgz"
+                        # isn't misidentified due to stray '$').
+                        if 'git+' in expanded_part or '.git' in expanded_part or 'git://' in expanded_part:
                             # Parse URL and fragments
-                            url_parts = part.split('#')
+                            url_parts = expanded_part.split('#')
                             git_url = url_parts[0]
                             
                             branch = None
@@ -542,17 +691,38 @@ class VersionManager:
                                     short_hash = full_hash[:8]
                                     return full_hash, short_hash
             
-            # Log detailed failure information
+            # Log detailed failure information.
+            # Sanity check: if the failure clearly indicates the URL is NOT
+            # a git repository (404, "repository not found",
+            # "not a git repository", etc.) treat it as an expected
+            # non-VCS outcome — log at INFO level with an explicit reason
+            # so it doesn't surface as a system failure warning.
             stderr_snip = result.stderr[:160] if result.stderr else ''
-            logger.warning(f"VCS_GIT_LS_REMOTE_FAIL pkg={pkg_name} rc={result.returncode} stderr_snip={stderr_snip} url={sanitized_url}")
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=ls_remote_failed")
+            stderr_lower = (result.stderr or '').lower()
+            not_a_repo_markers = (
+                'not a git repository',
+                'repository not found',
+                'could not read from remote repository',
+                'does not appear to be a git repository',
+                'authentication failed',
+                'http 404',
+                '404 not found',
+                'remote: not found',
+            )
+            is_not_a_repo = any(marker in stderr_lower for marker in not_a_repo_markers)
+            if is_not_a_repo:
+                logger.info(f"VCS_GIT_LS_REMOTE_NOT_A_REPO pkg={pkg_name} rc={result.returncode} stderr_snip={stderr_snip} url={sanitized_url}")
+                logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=not_a_git_repo fallback=version_compare")
+            else:
+                logger.warning(f"VCS_GIT_LS_REMOTE_FAIL pkg={pkg_name} rc={result.returncode} stderr_snip={stderr_snip} url={sanitized_url}")
+                logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=ls_remote_failed fallback=version_compare")
             return None, None
             
         except subprocess.TimeoutExpired:
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=timeout")
+            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=timeout fallback=version_compare")
             return None, None
         except Exception as e:
-            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=exception:{str(e)[:50]}")
+            logger.warning(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} url={sanitized_url} reason=exception:{str(e)[:50]} fallback=version_compare")
             return None, None
     
     def _extract_git_hash_from_version_string(self, version_string: str) -> Optional[str]:
