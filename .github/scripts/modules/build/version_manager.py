@@ -467,6 +467,69 @@ class VersionManager:
             iterations += 1
         return current
     
+    def _is_git_source_url(self, src: str) -> bool:
+        """
+        Strictly determine whether a single source=() entry refers to a
+        git repository.
+        
+        The previous implementation checked `'.git' in src` which produced
+        false positives on perfectly normal HTTPS URLs that merely contain
+        the substring '.git' as part of a hostname or path (e.g.
+        "https://raw.githubusercontent.com/..." — note the '.git' inside
+        '.githubusercontent'). Such URLs are NOT git repositories and
+        should not trigger `git ls-remote`.
+        
+        A source entry is treated as a git repo **only** if, after
+        stripping any makepkg `alias::` filename prefix and any `#...`
+        fragment, the URL:
+          * starts with `git+` (e.g. `git+https://…`, `git+ssh://…`), OR
+          * starts with `git://`, OR
+          * uses the makepkg `git::` transport prefix, OR
+          * has a path that ends with `.git` (optionally followed by `/`),
+            e.g. `https://example.com/user/repo.git` or
+            `https://example.com/user/repo.git/`.
+        
+        Anything else — including `https://raw.githubusercontent.com/…`,
+        `https://github.com/.../archive/v1.0.0.tar.gz`, or a plain
+        `.zip` / `.tar.gz` — is treated as a non-git source.
+        
+        Args:
+            src: A single (already variable-expanded) source=() entry.
+        
+        Returns:
+            True if this entry is a git repository URL, False otherwise.
+        """
+        if not src:
+            return False
+        
+        # Strip makepkg `alias::` filename prefix. The one exception is
+        # `git::` which is itself a transport prefix (not a filename
+        # alias) and unambiguously marks a git source.
+        working = src
+        if '::' in working:
+            prefix, rest = working.split('::', 1)
+            if prefix == 'git':
+                return True
+            working = rest
+        
+        # Drop any URL fragment (#branch=, #tag=, #commit=, #readme, …).
+        # The `.git` suffix check must happen against the URL path, NOT
+        # the fragment — a fragment containing the literal substring
+        # ".git" (rare but possible) must not flip the decision.
+        url_only = working.split('#', 1)[0]
+        
+        # Explicit VCS schemes.
+        if url_only.startswith('git+') or url_only.startswith('git://'):
+            return True
+        
+        # Repo URLs that end with `.git` (optionally with a trailing
+        # slash). `rstrip('/')` collapses any trailing slashes so e.g.
+        # `https://example.com/repo.git/` still matches.
+        if url_only.rstrip('/').endswith('.git'):
+            return True
+        
+        return False
+    
     def _parse_git_source_from_pkgbuild(self, pkgbuild_content: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Parse git source URL, branch, and commit from PKGBUILD content.
@@ -534,7 +597,13 @@ class VersionManager:
                         # Check for git URLs (on the expanded form so that
                         # e.g. a filename pattern like "foo-${pkgver}.tgz"
                         # isn't misidentified due to stray '$').
-                        if 'git+' in expanded_part or '.git' in expanded_part or 'git://' in expanded_part:
+                        # Use _is_git_source_url for strict matching —
+                        # the old substring check (`'.git' in part`) had
+                        # false positives on normal HTTPS URLs like
+                        # https://raw.githubusercontent.com/... (the
+                        # substring '.git' appears inside
+                        # '.githubusercontent').
+                        if self._is_git_source_url(expanded_part):
                             # Parse URL and fragments
                             url_parts = expanded_part.split('#')
                             git_url = url_parts[0]
