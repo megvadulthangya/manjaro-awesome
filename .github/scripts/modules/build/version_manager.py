@@ -570,16 +570,30 @@ class VersionManager:
         # 1. .g<short_hash> (e.g., 4.3.1711.gcab3e81dc-1)
         # 2. -g<short_hash> (e.g., r1234.gcab3e81dc-1)
         # 3. .r<num>.<short_hash> (e.g., 1.0.r123.abc12345-1)
+        # 4. r<num>.<short_hash> at start (e.g., r4984.225c52f6-1) — NEW
+        # 5. g<short_hash> at start (e.g., gcab3e81dc-1) — NEW
+        # 6. Bare 8-char hex at end of pkgver (e.g., r4984.225c52f6) — NEW fallback
+        
+        # Strip epoch prefix ("N:") if present so start-anchored patterns work
+        # on the pkgver portion.
+        vs = version_string
+        if ':' in vs:
+            vs = vs.split(':', 1)[1]
         
         patterns = [
-            r'\.g([0-9a-f]{7,})',      # .g<short_hash>
-            r'-g([0-9a-f]{7,})',       # -g<short_hash>
-            r'\.r[0-9]+\.([0-9a-f]{7,})', # .r123.<short_hash>
-            r'-r[0-9]+\.([0-9a-f]{7,})',  # -r123.<short_hash>
+            r'\.g([0-9a-f]{7,})',          # .g<short_hash>
+            r'-g([0-9a-f]{7,})',           # -g<short_hash>
+            r'\.r[0-9]+\.([0-9a-f]{7,})',  # .r123.<short_hash>
+            r'-r[0-9]+\.([0-9a-f]{7,})',   # -r123.<short_hash>
+            # NEW: bare "r<num>.<hash>" at the beginning (no leading '.' or '-').
+            # Matches Arch VCS pkgver() outputs like "r4984.225c52f6".
+            r'^r[0-9]+\.([0-9a-f]{7,})',
+            # NEW: bare "g<hash>" at the beginning.
+            r'^g([0-9a-f]{7,})',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, version_string)
+            match = re.search(pattern, vs)
             if match:
                 # Return full matched hash (no truncation)
                 return match.group(1)
