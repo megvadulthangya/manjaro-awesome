@@ -345,13 +345,34 @@ class VersionManager:
         try:
             lines = pkgbuild_content.split('\n')
             
-            for line in lines:
-                line = line.strip()
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
                 if line.startswith('source=') or line.startswith('_source='):
                     if '=' not in line:
+                        i += 1
                         continue
                     
                     value = line.split('=', 1)[1].strip()
+                    
+                    # NEW: Handle multi-line source arrays. If the value opens an
+                    # array with '(' but the closing ')' is on a later line,
+                    # accumulate subsequent lines until the array is closed.
+                    # Only treat a line that *ends* with ')' (after strip) as the
+                    # array terminator — matching ')' anywhere in the line would
+                    # break on quoted URLs/filenames that contain ')' (e.g.
+                    # "file_(v2).tar.gz").
+                    if value.startswith('(') and not value.endswith(')'):
+                        collected = [value]
+                        j = i + 1
+                        while j < len(lines):
+                            next_line = lines[j].strip()
+                            collected.append(next_line)
+                            if next_line.endswith(')'):
+                                break
+                            j += 1
+                        value = ' '.join(collected)
+                    
                     # Remove array parentheses if present
                     if value.startswith('(') and value.endswith(')'):
                         value = value[1:-1].strip()
@@ -359,6 +380,7 @@ class VersionManager:
                     # Remove quotes and split by spaces
                     parts = re.findall(r'[\"\']([^\"\']+)[\"\']', value)
                     if not parts:
+                        i += 1
                         continue
                     
                     for part in parts:
@@ -386,6 +408,7 @@ class VersionManager:
                                         commit_hash = commit_hash_match.group(1)
                             
                             return git_url, branch, commit_hash
+                i += 1
             
             return None, None, None
         except Exception as e:
@@ -640,6 +663,7 @@ class VersionManager:
         try:
             pkgbuild_path = pkg_dir / "PKGBUILD"
             if not pkgbuild_path.exists():
+                logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=no_pkgbuild fallback=version_compare")
                 return False, "no_pkgbuild"
             
             with open(pkgbuild_path, 'r', encoding='utf-8') as f:
@@ -648,6 +672,7 @@ class VersionManager:
             # Parse git source from PKGBUILD
             git_url, branch, commit_hash = self._parse_git_source_from_pkgbuild(pkgbuild_content)
             if not git_url:
+                logger.info(f"VCS_UPSTREAM_CHECK=0 pkg={pkg_name} reason=no_git_source fallback=version_compare")
                 return False, "no_git_source"
             
             # Get upstream HEAD commit (full 40-char SHA)
