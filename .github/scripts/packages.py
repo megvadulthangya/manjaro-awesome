@@ -28,7 +28,7 @@ LOCAL_PACKAGES = [
     "awesome-freedesktop-git",
     "lain-git",
     "awesome-rofi",
-    "awesome53-git",
+    "awesome-git",
     "awesome54-git",
     "awesome-welcome",
     "tilix-git",

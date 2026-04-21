@@ -1,6 +1,6 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
-pkgname=awesome53-git
+pkgname=awesome-git
 pkgver=4.3.1736.g994f9d6ed
 pkgrel=1
 pkgdesc='Highly configurable framework window manager'
