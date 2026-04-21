@@ -21,12 +21,11 @@ install="${pkgname}.install"
 source=(
   "${pkgname}::git+https://github.com/Comfy-Org/ComfyUI.git#branch=master"
   "comfyui.service"
-  "requirements.txt"
   "extra_model_paths.yaml"
   "setup.sh"
 )
 
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
@@ -50,9 +49,28 @@ prepare() {
   cd "$srcdir/$pkgname"
   git submodule update --init --recursive
 
-  cp -v "$srcdir/requirements.txt" "requirements.txt"
-  cp -v "$srcdir/extra_model_paths.yaml" "extra_model_paths.yaml"
-  cp -v "$srcdir/setup.sh" "setup.sh"
+  msg "Patching requirements.txt for CUDA 12.6 (PyTorch 2.6)..."
+
+  # 1. Extra index URL beszúrása a fájl elejére
+  sed -i '1i--extra-index-url https://download.pytorch.org/whl/cu126' requirements.txt
+
+  # 2. Torch csomagok fix verzióinak beállítása
+  sed -i \
+    -e 's/^torch[[:space:]]*$/torch==2.6.0/' \
+    -e 's/^torchvision[[:space:]]*$/torchvision==0.21.0/' \
+    -e 's/^torchaudio[[:space:]]*$/torchaudio==2.6.0/' \
+    -e 's/^torchsde[[:space:]]*$/torchsde==0.2.6/' \
+    requirements.txt
+
+  # Ellenőrzés
+  if ! grep -q 'torch==2.6.0' requirements.txt; then
+    error "Failed to patch torch version in requirements.txt"
+    return 1
+  fi
+
+  # Egyedi kiegészítő fájlok másolása
+  cp -v "$srcdir/extra_model_paths.yaml" .
+  cp -v "$srcdir/setup.sh" .
 }
 
 package() {
@@ -65,7 +83,7 @@ package() {
   # Biztonsági törlés: build-maradvány vagy véletlenül létrejött venv ne csússzon be a csomagba
   rm -rf "$pkgdir${_appdir}/venv"
 
-#  mkdir -p "$pkgdir${_appdir}/models/vae-approx"
+  # Szimbolikus linkek meglévő modellekhez
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae_approx/approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae_approx/taesd"
 
