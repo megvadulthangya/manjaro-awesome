@@ -2,9 +2,8 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-cu126"
-pkgver=0.4.2   # <- kézzel frissíthető, vagy használhatsz pkgver() függvényt API-val
 pkgrel=1
-pkgdesc="ComfyUI GUI (CUDA 12.6 backend - PyTorch 2.6) - Stable release version"
+pkgdesc="ComfyUI GUI (CUDA 12.6 backend - PyTorch 2.6) - Latest stable release version"
 arch=('x86_64')
 url="https://github.com/Comfy-Org/ComfyUI"
 license=('GPL3')
@@ -13,36 +12,38 @@ depends=(
   'git'
   'acl'
 )
-makedepends=('git' 'curl' 'jq')  # jq az API válasz feldolgozásához, opcionális
-provides=('comfyui' 'comfyui-cu126')
+makedepends=('git' 'curl' 'jq')
+provides=('comfyui-cu126')
 conflicts=('comfyui' 'comfyui-git' 'comfyui-cu126-git')
 install="${pkgname}.install"
 
-# Forrás: a megadott tag archivált tömörített változata
-_tag="v${pkgver}"
+# Dinamikus verzió lekérése a legfrissebb GitHub release-ből
+pkgver() {
+  curl -s "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest" | \
+    jq -r '.tag_name' | sed 's/^v//'
+}
+
+# A forrás URL-je a pkgver() által visszaadott értékkel
 source=(
-  "${pkgname}-${pkgver}.tar.gz::https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/${_tag}.tar.gz"
+  "${pkgname}-${pkgver}.tar.gz::https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/v${pkgver}.tar.gz"
   "comfyui.service"
   "extra_model_paths.yaml"
   "setup.sh"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')  # élesben érdemes generálni `updpkgsums`-el
+
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
-
-# Opcionális: automatikus pkgver frissítés a GitHub API alapján
-# pkgver() {
-#   curl -s "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest" | \
-#     jq -r '.tag_name' | sed 's/^v//'
-# }
 
 prepare() {
   cd "$srcdir/ComfyUI-${pkgver}"
 
   msg "Patching requirements.txt for CUDA 12.6 (PyTorch 2.6)..."
 
-  # Ugyanaz a patchelés, mint korábban
+  # 1. Extra index URL beszúrása a fájl elejére
   sed -i '1i--extra-index-url https://download.pytorch.org/whl/cu126' requirements.txt
+
+  # 2. Torch csomagok fix verzióinak beállítása
   sed -i \
     -e 's/^torch[[:space:]]*$/torch==2.6.0/' \
     -e 's/^torchvision[[:space:]]*$/torchvision==0.21.0/' \
@@ -50,11 +51,13 @@ prepare() {
     -e 's/^torchsde[[:space:]]*$/torchsde==0.2.6/' \
     requirements.txt
 
+  # Ellenőrzés
   if ! grep -q 'torch==2.6.0' requirements.txt; then
-    error "Failed to patch torch version"
+    error "Failed to patch torch version in requirements.txt"
     return 1
   fi
 
+  # Egyedi kiegészítő fájlok másolása
   cp -v "$srcdir/extra_model_paths.yaml" .
   cp -v "$srcdir/setup.sh" .
 }
@@ -66,8 +69,10 @@ package() {
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/ComfyUI-${pkgver}/." "$pkgdir${_appdir}/"
 
+  # Biztonsági törlés: build-maradvány vagy véletlenül létrejött venv ne csússzon be a csomagba
   rm -rf "$pkgdir${_appdir}/venv"
 
+  # Szimbolikus linkek meglévő modellekhez
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae_approx/approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae_approx/taesd"
 
@@ -75,6 +80,6 @@ package() {
   find "$pkgdir${_appdir}" -type f -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
 
-  rm -rf "$pkgdir${_appdir}/.git"   # release csomagban nincs .git, de biztos ami biztos
+  rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
 }

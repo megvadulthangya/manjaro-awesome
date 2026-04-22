@@ -2,9 +2,8 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui"
-pkgver=0.4.2   # <-- Itt frissíthető az új release verzióra
 pkgrel=1
-pkgdesc="ComfyUI GUI - Stable release version"
+pkgdesc="ComfyUI GUI - Latest stable release version"
 arch=('x86_64')
 url="https://github.com/Comfy-Org/ComfyUI"
 license=('GPL3')
@@ -13,37 +12,32 @@ depends=(
   'git'
   'acl'
 )
-makedepends=('git' 'curl' 'jq')   # jq csak akkor kell, ha használod a pkgver() automatikus frissítést
+makedepends=('git' 'curl' 'jq')   # curl és jq a pkgver()-hez szükséges
 provides=('comfyui')
 conflicts=('comfyui-git' 'comfyui-cu126' 'comfyui-cu126-git')
 install="${pkgname}.install"
 
-_tag="v${pkgver}"
+# Dinamikus verzió lekérése a legfrissebb GitHub release-ből
+pkgver() {
+  curl -s "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest" | \
+    jq -r '.tag_name' | sed 's/^v//'
+}
+
+# A forrás URL-je a pkgver() által visszaadott értékkel
 source=(
-  "${pkgname}-${pkgver}.tar.gz::https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/${_tag}.tar.gz"
+  "${pkgname}-${pkgver}.tar.gz::https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/v${pkgver}.tar.gz"
   "comfyui.service"
   "extra_model_paths.yaml"
   "setup.sh"
 )
 
-# Éles kiadáshoz érdemes `updpkgsums` parancsot futtatni, hogy valódi sha256sum-ok kerüljenek ide.
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 _appdir="/opt/${_pkgname}"
 
-# Opcionális: automatikus pkgver meghatározás a GitHub API segítségével
-# Ha használod, kommentezd ki a statikus pkgver sort fent, és ezt a függvényt tartsd meg.
-#pkgver() {
-#  curl -s "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest" | \
-#    jq -r '.tag_name' | sed 's/^v//'
-#}
-
 prepare() {
   cd "$srcdir/ComfyUI-${pkgver}"
-
-  # Nincs CUDA-specifikus patchelés – a requirements.txt marad az eredeti
-
-  # Egyedi kiegészítő fájlok másolása
+  # Nincs CUDA patchelés
   cp -v "$srcdir/extra_model_paths.yaml" .
   cp -v "$srcdir/setup.sh" .
 }
@@ -55,10 +49,8 @@ package() {
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/ComfyUI-${pkgver}/." "$pkgdir${_appdir}/"
 
-  # Biztonsági törlés: build-maradvány vagy véletlenül létrejött venv ne csússzon be a csomagba
   rm -rf "$pkgdir${_appdir}/venv"
 
-  # Szimbolikus linkek meglévő modellekhez
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-approx "$pkgdir${_appdir}/models/vae_approx/approx"
   ln -s /opt/stable-diffusion-webui-forge/models/VAE-taesd "$pkgdir${_appdir}/models/vae_approx/taesd"
 
@@ -66,7 +58,6 @@ package() {
   find "$pkgdir${_appdir}" -type f -exec chmod 664 {} \;
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 775 {} \;
 
-  # Töröljük a nem szükséges metaadatokat (release tarball nem tartalmaz .git-et, de biztos, ami biztos)
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
 }
