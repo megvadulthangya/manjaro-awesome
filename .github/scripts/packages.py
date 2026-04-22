@@ -45,7 +45,8 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "libinput-gestures",   
+    "libinput-gestures",
+    "picom-pijulius-next-git",
     "gtkd",
     "qt5-styleplugins",
     "urxvt-resize-font-git",
