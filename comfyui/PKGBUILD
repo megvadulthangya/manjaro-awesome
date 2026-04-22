@@ -2,6 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui"
+pkgver=0.19.2   # statikus alapérték, a pkgver() felülírja buildnél
 pkgrel=1
 pkgdesc="ComfyUI GUI - Latest stable release version"
 arch=('x86_64')
@@ -12,18 +13,17 @@ depends=(
   'git'
   'acl'
 )
-makedepends=('git' 'curl' 'jq')   # curl és jq a pkgver()-hez szükséges
+makedepends=('git' 'curl' 'jq')
 provides=('comfyui')
 conflicts=('comfyui-git' 'comfyui-cu126' 'comfyui-cu126-git')
 install="${pkgname}.install"
 
-# Dinamikus verzió lekérése a legfrissebb GitHub release-ből
+# Dinamikus verzió lekérése build időben
 pkgver() {
   curl -s "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest" | \
     jq -r '.tag_name' | sed 's/^v//'
 }
 
-# A forrás URL-je a pkgver() által visszaadott értékkel
 source=(
   "${pkgname}-${pkgver}.tar.gz::https://github.com/Comfy-Org/ComfyUI/archive/refs/tags/v${pkgver}.tar.gz"
   "comfyui.service"
@@ -37,7 +37,6 @@ _appdir="/opt/${_pkgname}"
 
 prepare() {
   cd "$srcdir/ComfyUI-${pkgver}"
-  # Nincs CUDA patchelés
   cp -v "$srcdir/extra_model_paths.yaml" .
   cp -v "$srcdir/setup.sh" .
 }
