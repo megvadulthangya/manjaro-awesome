@@ -1,0 +1,33 @@
+[Unit]
+Description=ComfyUI GUI (Latest PyTorch)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=diffusion
+Group=diffusion
+WorkingDirectory=/opt/ComfyUI
+
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/ComfyUI/venv/bin/python /opt/ComfyUI/main.py --listen 0.0.0.0 --port 8188
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=15
+
+TimeoutStartSec=0
+TimeoutStopSec=30
+KillSignal=SIGINT
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=comfyui
+
+UMask=007
+
+[Install]
+WantedBy=multi-user.target

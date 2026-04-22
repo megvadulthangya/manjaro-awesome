@@ -1,0 +1,50 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+# UI Packages
+comfyui-frontend-package==1.42.8
+comfyui-workflow-templates>=0.9.38
+comfyui-embedded-docs>=0.4.3
+
+# Core PyTorch + ecosystem
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+torchsde==0.2.6
+
+# ML / NLP / utilities
+numpy>=2.1.0
+einops>=0.8.0
+transformers>=4.50.3
+tokenizers>=0.20.0
+sentencepiece>=0.2.0
+safetensors>=0.4.5
+
+# Networking / IO / misc
+aiohttp>=3.11.8
+yarl>=1.18.0
+pyyaml>=6.0.2
+Pillow>=10.0.0
+scipy>=1.14.0
+tqdm>=4.66.0
+psutil>=6.0.0
+alembic>=1.13.0
+SQLAlchemy>=2.0.30
+filelock>=3.13.0
+av>=14.2.0
+
+# Comfy extras / integrations
+comfy-kitchen>=0.2.8
+comfy-aimdo>=0.2.12
+
+# HTTP / evaluation / hashing
+requests>=2.32.0
+simpleeval>=1.0.0
+blake3>=0.4.0
+
+# Non-essential
+kornia>=0.7.3
+spandrel>=0.4.2
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+PyOpenGL>=3.1.7
+glfw>=2.10.0

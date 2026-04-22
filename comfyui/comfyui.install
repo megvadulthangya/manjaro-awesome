@@ -1,0 +1,63 @@
+#!/bin/bash
+
+_appname="ComfyUI"
+_appdir="/opt/ComfyUI"
+_appuser="diffusion"
+_userhome="/var/lib/diffusion"
+
+pre_install() {
+  if ! getent passwd "${_appuser}" >/dev/null; then
+    useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
+  fi
+
+  if [ ! -d "${_userhome}" ]; then
+    mkdir -p "${_userhome}"
+    chown "${_appuser}:${_appuser}" "${_userhome}"
+    chmod 0755 "${_userhome}"
+  fi
+}
+
+_ensure_venv() {
+  if [ ! -x "${_appdir}/venv/bin/python" ]; then
+    mkdir -p "${_appdir}"
+    python3.13 -m venv "${_appdir}/venv"
+  fi
+}
+
+_fix_permissions() {
+  echo "Jogosultságok beállítása a következő könyvtáron: ${_appdir}..."
+
+  chown -R "${_appuser}:${_appuser}" "${_appdir}"
+
+  find "${_appdir}" -type d -exec chmod 2775 {} +
+  find "${_appdir}" -type f -exec chmod 664 {} +
+  find "${_appdir}" -type f -name "*.sh" -exec chmod 775 {} +
+
+  if [ -d "${_appdir}/venv/bin" ]; then
+    find "${_appdir}/venv/bin" -type f -exec chmod 775 {} +
+  fi
+
+  setfacl -R -m g:${_appuser}:rwX "${_appdir}" 2>/dev/null || true
+  setfacl -R -d -m g:${_appuser}:rwX "${_appdir}" 2>/dev/null || true
+}
+
+post_install() {
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  _ensure_venv
+  _fix_permissions
+
+  for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
+    usermod -aG "${_appuser}" "$user" 2>/dev/null || true
+  done
+
+  echo "ComfyUI fájljai elhelyezve: ${_appdir}"
+  echo "FONTOS: Ha most lettél hozzáadva a '${_appuser}' csoporthoz, jelentkezz ki és be a változások érvényesítéséhez!"
+}
+
+post_upgrade() {
+  usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
+
+  _ensure_venv
+  _fix_permissions
+}
