@@ -44,7 +44,7 @@ optdepends=(
 )
 
 provides=('notification-daemon' 'awesome')
-conflicts=('awesome' 'awesome-git' 'awesome54-git')
+conflicts=('awesome' 'awesome54-git')
 
 source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
