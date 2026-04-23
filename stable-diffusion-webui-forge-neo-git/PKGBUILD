@@ -1,0 +1,81 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+_pkgname="stable-diffusion-webui-forge-neo"
+pkgname="${_pkgname}-git"
+pkgver=r8627.dfdcbab6
+pkgrel=1
+pkgdesc="Stable Diffusion WebUI Forge Neo (Experimental fork, PyTorch 2.6 / CUDA 12.6)"
+arch=('x86_64')
+url="https://github.com/Haoming02/sd-webui-forge-classic"
+license=('AGPL3')
+
+depends=(
+  'python313'
+  'git'
+  'acl'
+)
+
+# Fontos: provides és conflicts a hivatalos csomag nevére mutat,
+# mert ugyanoda települ és ugyanazt a szolgáltatásnevet használja.
+provides=("stable-diffusion-webui-forge")
+conflicts=("stable-diffusion-webui-forge")
+
+makedepends=('git')
+
+install="${pkgname}.install"
+
+source=(
+  "${_pkgname}::git+${url}.git#branch=neo"
+  "stable-diffusion-webui-forge.service"
+)
+
+sha256sums=('SKIP' 'SKIP')
+
+_appdir="/opt/stable-diffusion-webui-forge"
+
+pkgver() {
+  cd "$srcdir/$_pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$_pkgname"
+
+  msg "Patching requirements.txt for CUDA 12.6 (PyTorch 2.6)..."
+
+  # 1. Extra index URL beszúrása a fájl elejére
+  sed -i '1i--extra-index-url https://download.pytorch.org/whl/cu126' requirements.txt
+
+  # 2. Torch csomagok verzióinak rögzítése
+  sed -i \
+    -e 's/^torch[[:space:]]*$/torch==2.6.0/' \
+    -e 's/^torchvision[[:space:]]*$/torchvision==0.21.0/' \
+    -e 's/^torchaudio[[:space:]]*$/torchaudio==2.6.0/' \
+    -e 's/^torchsde[[:space:]]*$/torchsde==0.2.6/' \
+    requirements.txt
+
+  if ! grep -q 'torch==2.6.0' requirements.txt; then
+    error "Failed to patch torch version in requirements.txt"
+    return 1
+  fi
+}
+
+package() {
+  # systemd unit – a fájl neve stable-diffusion-webui-forge.service
+  install -Dm644 "$srcdir/stable-diffusion-webui-forge.service" \
+    "$pkgdir/usr/lib/systemd/system/stable-diffusion-webui-forge.service"
+
+  # Alkalmazás fájljai – SGID-es főkönyvtár
+  install -d -m 2775 "$pkgdir${_appdir}"
+  cp -a "$srcdir/$_pkgname/." "$pkgdir${_appdir}/"
+
+  # Opcionális VAE‑taesd könyvtár
+  install -d -m 2775 "$pkgdir${_appdir}/models/VAE-taesd"
+
+  # Minden .sh fájl futtatható
+  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
+
+  # Fejlesztői könyvtárak eltávolítása
+  rm -rf "$pkgdir${_appdir}/.git"
+  rm -rf "$pkgdir${_appdir}/.github"
+}

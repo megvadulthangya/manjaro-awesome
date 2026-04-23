@@ -11,6 +11,7 @@ LOCAL_PACKAGES = [
     "gghelper",
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
+    "stable-diffusion-webui-forge-neo-git",
     "kohya_ss",
     "kohya_ss-cu124",
     "kohya_ss-cu126",
