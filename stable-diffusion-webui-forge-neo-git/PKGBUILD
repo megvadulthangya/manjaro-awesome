@@ -2,7 +2,7 @@
 
 _pkgname="stable-diffusion-webui-forge-neo"
 pkgname="${_pkgname}-git"
-pkgver=r9335.030519a0
+pkgver=r8627.dfdcbab6
 pkgrel=1
 pkgdesc="Stable Diffusion WebUI Forge Neo (Experimental fork, PyTorch 2.6 / CUDA 12.6)"
 arch=('x86_64')
@@ -15,8 +15,6 @@ depends=(
   'acl'
 )
 
-# Fontos: provides és conflicts a hivatalos csomag nevére mutat,
-# mert ugyanoda települ és ugyanazt a szolgáltatásnevet használja.
 provides=("stable-diffusion-webui-forge")
 conflicts=("stable-diffusion-webui-forge")
 
@@ -41,41 +39,38 @@ pkgver() {
 prepare() {
   cd "$srcdir/$_pkgname"
 
-  msg "Patching requirements.txt for CUDA 12.6 (PyTorch 2.6)..."
+  msg "Patching webui-user.sh for CUDA 12.6 (PyTorch 2.6)..."
 
-  # 1. Extra index URL beszúrása a fájl elejére
-  sed -i '1i--extra-index-url https://download.pytorch.org/whl/cu126' requirements.txt
-
-  # 2. Torch csomagok verzióinak rögzítése
+  # Replace the TORCH_COMMAND line with the correct version and add TORCH_INDEX_URL
   sed -i \
-    -e 's/^torch[[:space:]]*$/torch==2.6.0/' \
-    -e 's/^torchvision[[:space:]]*$/torchvision==0.21.0/' \
-    -e 's/^torchaudio[[:space:]]*$/torchaudio==2.6.0/' \
-    -e 's/^torchsde[[:space:]]*$/torchsde==0.2.6/' \
-    requirements.txt
+    -e 's|^export TORCH_COMMAND=.*|export TORCH_COMMAND="pip install torch==2.6.0+cu126 torchvision==0.21.0+cu126 --extra-index-url https://download.pytorch.org/whl/cu126"|' \
+    webui-user.sh
 
-  if ! grep -q 'torch==2.6.0' requirements.txt; then
-    error "Failed to patch torch version in requirements.txt"
-    return 1
+  # Insert TORCH_INDEX_URL before TORCH_COMMAND if not already present
+  if ! grep -q 'TORCH_INDEX_URL' webui-user.sh; then
+    sed -i '/^export TORCH_COMMAND=/i export TORCH_INDEX_URL="https://download.pytorch.org/whl/cu126"' webui-user.sh
   fi
+
+  # Keep --uv and other settings; ensure COMMANDLINE_ARGS="--uv" remains
+  # (the original file already has it, so no change needed)
 }
 
 package() {
-  # systemd unit – a fájl neve stable-diffusion-webui-forge.service
+  # Install systemd service file
   install -Dm644 "$srcdir/stable-diffusion-webui-forge.service" \
     "$pkgdir/usr/lib/systemd/system/stable-diffusion-webui-forge.service"
 
-  # Alkalmazás fájljai – SGID-es főkönyvtár
+  # Copy application files with SGID directory
   install -d -m 2775 "$pkgdir${_appdir}"
   cp -a "$srcdir/$_pkgname/." "$pkgdir${_appdir}/"
 
-  # Opcionális VAE‑taesd könyvtár
+  # Optional VAE-taesd directory
   install -d -m 2775 "$pkgdir${_appdir}/models/VAE-taesd"
 
-  # Minden .sh fájl futtatható
+  # Make all .sh files executable
   find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
 
-  # Fejlesztői könyvtárak eltávolítása
+  # Remove developer files
   rm -rf "$pkgdir${_appdir}/.git"
   rm -rf "$pkgdir${_appdir}/.github"
 }

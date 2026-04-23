@@ -6,9 +6,11 @@ _appuser="diffusion"
 _userhome="/var/lib/diffusion"
 
 pre_install() {
+  # Create diffusion user if it does not exist
   if ! getent passwd "${_appuser}" >/dev/null; then
     useradd -r -s /bin/bash -d "${_userhome}" "${_appuser}"
   fi
+  # Ensure home directory exists
   if [ ! -d "${_userhome}" ]; then
     mkdir -p "${_userhome}"
     chown "${_appuser}:${_appuser}" "${_userhome}"
@@ -40,49 +42,24 @@ _fix_permissions() {
   setfacl -R -d -m g:${_appuser}:rwX "${_apphome}"
 }
 
-_show_info() {
-  cat <<EOF
-
-=============================================================================
-       Stable Diffusion WebUI Forge Neo – Telepítés utáni információk
-=============================================================================
-
-1. A csoporttagság érvénybe lépéséhez (írás a /opt/stable-diffusion-webui-forge
-   könyvtárba) ki- és be kell jelentkezni (vagy új terminált nyitni).
-
-2. (Opcionális) Modellfájl letöltése, például:
-   wget -O "/opt/stable-diffusion-webui-forge/models/Stable-diffusion/DreamShaperXL_Lightning.safetensors" \\
-        "https://civitai.com/api/download/models/354657?type=Model&format=SafeTensor&size=full&fp=fp16"
-
-3. A systemd szolgáltatás engedélyezése és indítása:
-   sudo systemctl enable stable-diffusion-webui-forge.service
-   sudo systemctl start stable-diffusion-webui-forge.service
-
-   ⚠️  Az első indításkor kb. 3,5–3,6 GB Python függőség letöltése történik.
-      Ez eltarthat egy ideig. A folyamatot 'btop' vagy 'htop' segítségével
-      követheti.
-
-4. A szolgáltatás futása után böngészőben nyissa meg:
-   http://localhost:7860
-
-=============================================================================
-EOF
-}
-
 post_install() {
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
   _create_venv
   _fix_permissions
 
+  # Add regular users to the diffusion group
   for user in $(getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1}'); do
     usermod -aG "${_appuser}" "$user" 2>/dev/null || true
   done
 
-  _show_info
+  echo ">>> To start the service:"
+  echo "    sudo systemctl enable --now stable-diffusion-webui-forge.service"
+  echo "    WebUI will be available at http://localhost:7860"
 }
 
 post_upgrade() {
   usermod -s /bin/bash "${_appuser}" 2>/dev/null || true
   _create_venv
   _fix_permissions
+  echo ">>> Forge Neo upgraded. Restart the service if it was running."
 }
