@@ -67,8 +67,10 @@ package() {
   # Optional VAE-taesd directory
   install -d -m 2775 "$pkgdir${_appdir}/models/VAE-taesd"
 
-  # Make all .sh files executable
-  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod +x {} \;
+  # Normalize permissions explicitly after copy
+  find "$pkgdir${_appdir}" -type d -exec chmod 755 {} \;
+  find "$pkgdir${_appdir}" -type f -exec chmod 644 {} \;
+  find "$pkgdir${_appdir}" -type f -name "*.sh" -exec chmod 755 {} \;
 
   # Remove developer files
   rm -rf "$pkgdir${_appdir}/.git"

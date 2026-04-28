@@ -30,16 +30,23 @@ _create_venv() {
 _fix_permissions() {
   echo "Setting permissions on ${_apphome}..."
   chown -R "${_appuser}:${_appuser}" "${_apphome}"
-  find "${_apphome}" -type d -exec chmod 2775 {} +
-  find "${_apphome}" -type f -exec chmod 664 {} +
-  find "${_apphome}" -type f -name "*.sh" -exec chmod 775 {} +
 
+  # Exclude venv from broad recursive permission changes to protect Python binaries/shared libs
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type d -exec chmod 2775 {} +
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type f -exec chmod 644 {} +
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type f -name "*.sh" -exec chmod 755 {} +
+
+  # Ensure venv executables are runnable, leave .so untouched
   if [ -d "${_apphome}/venv/bin" ]; then
-    find "${_apphome}/venv/bin" -type f -exec chmod 775 {} +
+    find "${_apphome}/venv/bin" -type f -exec chmod 755 {} +
   fi
 
-  setfacl -R -m g:${_appuser}:rwX "${_apphome}"
-  setfacl -R -d -m g:${_appuser}:rwX "${_apphome}"
+  # Standard ACLs: directories get rwx, regular files get rw- (no x)
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type d -exec setfacl -m g:${_appuser}:rwx {} +
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type f -exec setfacl -m g:${_appuser}:rw- {} +
+
+  # Default ACLs strictly on directories only – rwX prevents new non-executable files from inheriting the x bit
+  find "${_apphome}" -not \( -path "${_apphome}/venv" -o -path "${_apphome}/venv/*" \) -type d -exec setfacl -d -m g:${_appuser}:rwX {} +
 }
 
 post_install() {
