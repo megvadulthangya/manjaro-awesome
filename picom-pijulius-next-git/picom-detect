@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# ==========================================================================
+#  picom-detect
+#  GPU detection for Picom – SAFE VERSION (copies pre-made configs)
+#  Two-language: Hungarian / English
+# ==========================================================================
+
+set -uo pipefail
+
+# --- Language support ---
+print_msg() {
+    local id="$1"
+    if [[ "${LANG:-}" == hu* ]]; then
+        case "$id" in
+            missing) echo "Hiányzik valamelyik profilfájl a /usr/share/picom-pijulius-next-git/ mappából.";;
+            glx_missing) echo "glxinfo hiányzik, telepítem...";;
+            detecting) echo "GPU detektálása...";;
+            vendor) echo "  Vendor: $VENDOR";;
+            glver) echo "  OpenGL verzió: $GL_VERSION";;
+            profile) echo "Kiválasztott profil: $PROFILE";;
+            done) echo "Kész! A picom konfig $PROFILE profilra állítva a ~/.config/picom/picom.conf fájlban.";;
+            restart) echo "Újraindítás: pkill picom ; picom &";;
+            unknown_pm) echo "Ismeretlen csomagkezelő. Telepítsd a mesa-utils csomagot.";;
+            gentoo) echo "Gentoo: emerge -av mesa-progs";;
+        esac
+    else
+        case "$id" in
+            missing) echo "Missing one or more profile files from /usr/share/picom-pijulius-next-git/.";;
+            glx_missing) echo "glxinfo missing, installing...";;
+            detecting) echo "Detecting GPU...";;
+            vendor) echo "  Vendor: $VENDOR";;
+            glver) echo "  OpenGL version: $GL_VERSION";;
+            profile) echo "Selected profile: $PROFILE";;
+            done) echo "Done! Picom config switched to $PROFILE profile in ~/.config/picom/picom.conf.";;
+            restart) echo "Restart picom: pkill picom ; picom &";;
+            unknown_pm) echo "Unknown package manager. Install mesa-utils manually.";;
+            gentoo) echo "Gentoo: emerge -av mesa-progs";;
+        esac
+    fi
+}
+
+# --- Check for required files ---
+TEMPLATE_DIR="/usr/share/picom-pijulius-next-git"
+WEAK="$TEMPLATE_DIR/picom-weak.conf"
+MODERN="$TEMPLATE_DIR/picom-modern.conf"
+NVIDIA="$TEMPLATE_DIR/picom-nvidia.conf"
+
+CONFDIR="$HOME/.config/picom"
+TARGET="$CONFDIR/picom.conf"
+
+if [[ ! -f "$WEAK" || ! -f "$MODERN" || ! -f "$NVIDIA" ]]; then
+    print_msg missing
+    exit 1
+fi
+
+# --- Ensure config directory exists ---
+mkdir -p "$CONFDIR"
+
+# --- Ensure glxinfo ---
+if ! command -v glxinfo &>/dev/null; then
+    print_msg glx_missing
+    if command -v pacman &>/dev/null; then sudo pacman -S --noconfirm mesa-utils; 
+    elif command -v apt &>/dev/null; then sudo apt update && sudo apt install -y mesa-utils;
+    elif command -v dnf &>/dev/null; then sudo dnf install -y mesa-demos;
+    elif command -v zypper &>/dev/null; then sudo zypper install -y Mesa-demo-x;
+    elif command -v emerge &>/dev/null; then print_msg gentoo; exit 1;
+    else print_msg unknown_pm; exit 1; fi
+fi
+
+# --- Detect GPU ---
+print_msg detecting
+VENDOR=$(glxinfo | grep -i "OpenGL vendor string" | awk -F':' '{print $2}' | xargs)
+GL_VERSION=$(glxinfo | grep -i "OpenGL version string" | grep -oP '\d+\.\d+' | head -1)
+print_msg vendor
+print_msg glver
+
+VENDOR_CLEAN=$(echo "$VENDOR" | tr -d '[:space:]')
+MAJOR=$(echo "$GL_VERSION" | cut -d. -f1)
+MINOR=$(echo "$GL_VERSION" | cut -d. -f2)
+
+# --- Choose profile ---
+if [[ "$VENDOR_CLEAN" == *"NVIDIA"* ]]; then
+    PROFILE="nvidia"
+elif [[ "$MAJOR" -lt 4 ]] || { [[ "$MAJOR" -eq 4 && "$MINOR" -lt 3 ]]; }; then
+    PROFILE="weak"
+else
+    PROFILE="modern"
+fi
+print_msg profile
+
+# --- Copy the right config ---
+case "$PROFILE" in
+    weak) cp "$WEAK" "$TARGET" ;;
+    modern) cp "$MODERN" "$TARGET" ;;
+    nvidia) cp "$NVIDIA" "$TARGET" ;;
+esac
+
+print_msg done
+print_msg restart

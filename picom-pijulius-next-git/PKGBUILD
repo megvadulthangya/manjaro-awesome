@@ -1,0 +1,60 @@
+pkgname=picom-pijulius-next-git
+_gitname=picom
+pkgver=2530.g7094d7a9
+pkgrel=1
+pkgdesc="X compositor (fork of yshui-picom) (git-version), enhanced animation fork"
+arch=(i686 x86_64)
+url="https://github.com/pijulius/${_gitname}"
+license=('MIT' 'MPL-2.0')
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libconfig' 'libdbus' 'libepoxy' 'libev' 'libx11'
+         'libxcb' 'pcre2' 'pixman' 'xcb-util' 'xcb-util-image' 'xcb-util-renderutil' 'mesa-utils')
+makedepends=('asciidoctor' 'cmake' 'git' 'libglvnd' 'mesa' 'meson' 'uthash' 'xorgproto')
+optdepends=('dbus:          To control picom via D-Bus'
+            'python:        For picom-convgen.py'
+            'xorg-xwininfo: For picom-trans'
+            'xorg-xprop:    For picom-trans')
+provides=('compton' 'compton-git' 'picom')
+conflicts=('compton' 'compton-git' 'picom')
+replaces=('compton-git')
+source=(git+"https://github.com/pijulius/${_gitname}.git#branch=next"
+        "picom-modern.conf"
+        "picom-nvidia.conf"
+        "picom-weak.conf"
+        "picom-detect")
+md5sums=('SKIP'
+         'SKIP'
+         'SKIP'
+         'SKIP'
+         'SKIP')
+
+pkgver() {
+  cd "${_gitname}"
+  printf "%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "${srcdir}/${_gitname}"
+  meson setup --buildtype=release . build --prefix=/usr -Dwith_docs=true
+  ninja -C build
+}
+
+package() {
+  cd "${srcdir}/${_gitname}"
+
+  DESTDIR="${pkgdir}" ninja -C build install
+
+  # Install license
+  install -D -m644 "LICENSES/MIT" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MIT"
+
+  # Install templates to the shared directory
+  install -d "${pkgdir}/usr/share/${pkgname}"
+  install -m644 "${srcdir}/picom-modern.conf" "${pkgdir}/usr/share/${pkgname}/"
+  install -m644 "${srcdir}/picom-nvidia.conf" "${pkgdir}/usr/share/${pkgname}/"
+  install -m644 "${srcdir}/picom-weak.conf" "${pkgdir}/usr/share/${pkgname}/"
+
+  # Set picom-weak.conf as the default system-wide configuration
+  install -D -m644 "${srcdir}/picom-weak.conf" "${pkgdir}/etc/xdg/picom.conf"
+
+  # Install the setup script
+  install -D -m755 "${srcdir}/picom-detect" "${pkgdir}/usr/bin/picom-detect"
+}

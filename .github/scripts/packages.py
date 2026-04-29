@@ -12,6 +12,7 @@ LOCAL_PACKAGES = [
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
+    "picom-pijulius-next-git",
     "kohya_ss",
     "kohya_ss-cu124",
     "kohya_ss-cu126",
@@ -47,7 +48,7 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "libinput-gestures",
-    "picom-pijulius-next-git",
+#    "picom-pijulius-next-git",
     "gtkd",
     "qt5-styleplugins",
     "urxvt-resize-font-git",
