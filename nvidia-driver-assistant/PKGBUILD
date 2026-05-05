@@ -3,7 +3,7 @@
 pkgname=nvidia-driver-assistant
 pkgver=0.51.71.05_1.g00e5c6cedc
 pkgrel=1
-pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB (logic from git refactor branch)"
+pkgdesc="Detect and install the best NVIDIA driver packages for the system"
 arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT' 'custom')
