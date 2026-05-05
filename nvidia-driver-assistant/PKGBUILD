@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0.51.71.05_1.g8f2a1b3c4d
+pkgver=0.51.71.05_1.g00e5c6cedc
 pkgrel=1
 pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB (logic from git refactor branch)"
 arch=('any')
