@@ -8,7 +8,7 @@ arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT' 'custom')
 depends=('python')
-makedepends=('git' 'curl' 'libarchive')
+makedepends=('git' 'curl' 'libarchive' 'gzip')
 
 source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=refactor")
 sha256sums=('SKIP')
@@ -18,47 +18,77 @@ _nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubun
 _fetch_packages_index() {
   local text=""
 
-  text="$(curl -fsSL "${_nvidia_repo_base}/Packages" 2>/dev/null)" && {
+  if text="$(curl -fsSL "${_nvidia_repo_base}/Packages" 2>/dev/null)"; then
     printf '%s' "${text}"
     return 0
-  }
+  fi
 
-  text="$(curl -fsSL "${_nvidia_repo_base}/Packages.gz" 2>/dev/null | gzip -dc 2>/dev/null)" && {
+  if text="$(curl -fsSL "${_nvidia_repo_base}/Packages.gz" 2>/dev/null | gzip -dc 2>/dev/null)"; then
     printf '%s' "${text}"
     return 0
-  }
+  fi
 
   return 1
 }
 
+_fetch_directory_listing() {
+  curl -fsSL "${_nvidia_repo_base}/" 2>/dev/null
+}
+
 _latest_deb_info() {
-  _fetch_packages_index | awk '
-    BEGIN { RS=""; FS="\n" }
-    /^Package: nvidia-driver-assistant$/ {
-      ver=""
-      file=""
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^Version: /)  ver  = substr($i, 10)
-        if ($i ~ /^Filename: /) file = substr($i, 11)
+  local meta
+
+  meta="$(
+    _fetch_packages_index 2>/dev/null | awk '
+      BEGIN { RS=""; FS="\n" }
+      /^Package: nvidia-driver-assistant$/ {
+        ver=""
+        file=""
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /^Version: /)  ver  = substr($i, 10)
+          if ($i ~ /^Filename: /) file = substr($i, 11)
+        }
+        if (ver != "" && file != "") {
+          print ver "|" file
+        }
       }
-      if (ver != "" && file != "") {
-        print ver "|" file
-      }
-    }
-  ' | sort -t'|' -k1,1V | tail -n1
+    ' | sort -t'|' -k1,1V | tail -n1
+  )"
+
+  if [[ -n "${meta}" ]]; then
+    printf '%s' "${meta}"
+    return 0
+  fi
+
+  meta="$(
+    _fetch_directory_listing 2>/dev/null |
+      grep -oE 'nvidia-driver-assistant_[0-9][^"]*_all\.deb' |
+      sort -V |
+      tail -n1
+  )"
+
+  if [[ -n "${meta}" ]]; then
+    printf 'unknown|%s' "${meta}"
+    return 0
+  fi
+
+  return 1
 }
 
 pkgver() {
   cd "${srcdir}/${pkgname}" || return 1
 
   local meta deb_ver git_hash
-  meta="$(_latest_deb_info)"
-  [[ -n "${meta}" ]] || return 1
+  meta="$(_latest_deb_info)" || return 1
 
   deb_ver="${meta%%|*}"
   git_hash="$(git rev-parse --short=10 HEAD)"
 
-  # Debian verzió + git hash, Arch-kompatibilis pkgver formában
+  if [[ "${deb_ver}" == "unknown" ]]; then
+    printf '0.g%s\n' "${git_hash}"
+    return 0
+  fi
+
   printf '%s.g%s\n' "${deb_ver//-/_}" "${git_hash}"
 }
 
@@ -66,25 +96,43 @@ prepare() {
   cd "${srcdir}" || return 1
 
   local meta deb_file deb_url tmpdir extract_dir data_tar
-  meta="$(_latest_deb_info)"
-  [[ -n "${meta}" ]] || return 1
+
+  meta="$(_latest_deb_info)" || {
+    echo "ERROR: Nem sikerült meghatározni a legújabb NVIDIA nvidia-driver-assistant DEB-et."
+    return 1
+  }
 
   deb_file="${meta#*|}"
   deb_url="${_nvidia_repo_base}/${deb_file}"
   tmpdir="${TMPDIR:-/tmp}/nvidia-driver-assistant-${UID:-0}-$$"
   extract_dir="${srcdir}/debroot"
 
+  echo "Selected DEB: ${deb_file}"
+  echo "DEB URL: ${deb_url}"
+
   rm -rf "${tmpdir}" "${extract_dir}"
   mkdir -p "${tmpdir}" "${extract_dir}"
 
-  curl -fL --retry 5 --retry-delay 2 -o "${tmpdir}/${deb_file}" "${deb_url}" || return 1
+  curl -fL --retry 5 --retry-delay 2 -o "${tmpdir}/${deb_file}" "${deb_url}" || {
+    echo "ERROR: A DEB letöltése nem sikerült."
+    return 1
+  }
 
-  bsdtar -xf "${tmpdir}/${deb_file}" -C "${extract_dir}" || return 1
+  bsdtar -xf "${tmpdir}/${deb_file}" -C "${extract_dir}" || {
+    echo "ERROR: A DEB kicsomagolása nem sikerült."
+    return 1
+  }
 
-  data_tar="$(find "${extract_dir}" -maxdepth 1 -type f -name 'data.tar.*' | head -n 1)"
-  [[ -n "${data_tar}" ]] || return 1
+  data_tar="$(find "${extract_dir}" -maxdepth 1 -type f \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar.bz2' -o -name 'data.tar' \) | head -n 1)"
+  [[ -n "${data_tar}" ]] || {
+    echo "ERROR: Nem található data.tar.* a DEB-ben."
+    return 1
+  }
 
-  bsdtar -xf "${data_tar}" -C "${extract_dir}" || return 1
+  bsdtar -xf "${data_tar}" -C "${extract_dir}" || {
+    echo "ERROR: A data.tar.* kicsomagolása nem sikerült."
+    return 1
+  }
 
   rm -f "${extract_dir}"/debian-binary
   rm -f "${extract_dir}"/control.tar.*
