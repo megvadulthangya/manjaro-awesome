@@ -1,15 +1,16 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+k# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
 pkgver=0.51.71.05_1.g8f2a1b3c4d
 pkgrel=1
-pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB"
+pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB (logic from git refactor branch)"
 arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT' 'custom')
 depends=('python')
 makedepends=('git' 'curl' 'libarchive' 'gzip')
 
+# A forráskód a git repóból jön, a DEB-et csak az adatfájlok miatt húzzuk le a prepare-ben
 source=("git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=refactor")
 sha256sums=('SKIP')
 
@@ -17,107 +18,87 @@ _nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubun
 
 _latest_deb_info() {
   local html latest_file ver
-  
-  # HTML lista lekérése
   html=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/") || return 1
-  
-  # A legfrissebb verziójú .deb fájl kiválasztása
   latest_file=$(echo "$html" | grep -oP 'nvidia-driver-assistant_[\d\.-]+_all\.deb' | sort -V | tail -n1)
   
   if [[ -z "$latest_file" ]]; then
     return 1
   fi
 
-  # Verzió kinyerése a fájlnévből (pl. 0.51.71.05-1)
   ver=$(echo "$latest_file" | sed -E 's/nvidia-driver-assistant_(.*)_all\.deb/\1/')
-  
   echo "${ver}|${latest_file}"
 }
 
 pkgver() {
-  cd "${srcdir}/${pkgname}" || return 1
-
+  cd "${srcdir}/${pkgname}"
+  
   local meta deb_ver git_hash
   meta="$(_latest_deb_info)" || return 1
-
+  
   deb_ver="${meta%%|*}"
-  # Arch-kompatibilis verziószám (kötőjel helyett alulvonás)
   deb_ver="${deb_ver//-/_}"
   git_hash="$(git rev-parse --short=10 HEAD)"
-
+  
   printf '%s.g%s' "${deb_ver}" "${git_hash}"
 }
 
 prepare() {
-  cd "${srcdir}" || return 1
-
-  local meta deb_file deb_url extract_dir data_tar
-  extract_dir="${srcdir}/debroot"
+  cd "${srcdir}"
   
-  meta="$(_latest_deb_info)" || {
-    echo "ERROR: Unable to determine latest upstream DEB"
-    return 1
-  }
-
+  local meta deb_file deb_url
+  meta="$(_latest_deb_info)" || return 1
   deb_file="${meta#*|}"
   deb_url="${_nvidia_repo_base}/${deb_file}"
 
-  echo "DEBUG: Downloading: ${deb_file}"
-  rm -rf "download_tmp" "${extract_dir}"
-  mkdir -p "download_tmp" "${extract_dir}"
+  rm -rf "debroot"
+  mkdir -p "debroot"
 
-  curl -fL --retry 5 -o "download_tmp/${deb_file}" "${deb_url}" || return 1
+  echo "==> Downloading upstream DEB for assets: ${deb_file}..."
+  curl -fL --retry 5 -o "upstream.deb" "${deb_url}"
 
-  echo "DEBUG: Unpacking DEB..."
-  bsdtar -xf "download_tmp/${deb_file}" -C "${extract_dir}" || return 1
-
-  data_tar=$(find "${extract_dir}" -maxdepth 1 -type f \
-    \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar' \) \
-    | head -n 1)
-
-  if [[ -z "${data_tar}" ]]; then
-    echo "ERROR: data.tar not found"
-    return 1
-  fi
-
-  bsdtar -xf "${data_tar}" -C "${extract_dir}" || return 1
-
-  # Script beillesztése a forrásból
-  if [[ -f "${srcdir}/${pkgname}/nvidia-driver-assistant" ]]; then
-    install -Dm755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
-      "${extract_dir}/usr/bin/nvidia-driver-assistant"
+  echo "==> Unpacking DEB payload..."
+  bsdtar -xf "upstream.deb" -C "debroot"
+  
+  local data_tar
+  data_tar=$(find "debroot" -maxdepth 1 -type f \( -name 'data.tar.*' -o -name 'data.tar' \) | head -n 1)
+  
+  if [[ -n "$data_tar" ]]; then
+    bsdtar -xf "$data_tar" -C "debroot"
+    rm "$data_tar"
   fi
 }
 
 package() {
-  cd "${srcdir}/debroot" || return 1
+  # 1. Könyvtárstruktúra létrehozása
+  install -d "${pkgdir}/usr/bin"
+  install -d "${pkgdir}/usr/share/${pkgname}"
+  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
 
-  # Binárisok
-  if [[ -f usr/bin/nvidia-driver-assistant ]]; then
-    install -Dm755 usr/bin/nvidia-bin/nvidia-driver-assistant \
-      "${pkgdir}/usr/bin/nvidia-driver-assistant"
-  fi
+  # 2. KRITIKUS: A scriptet KIZÁRÓLAG a git repóból telepítjük
+  # Ez felülírja az esetlegesen DEB-ből kicsomagolt szemetet
+  msg2 "Installing main script strictly from git source..."
+  install -m755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
+    "${pkgdir}/usr/bin/nvidia-driver-assistant"
 
-  # Ha van show-driver a git repóban
+  # 3. Egyéb git-es eszközök telepítése
   if [[ -f "${srcdir}/${pkgname}/show-driver" ]]; then
-    install -Dm755 "${srcdir}/${pkgname}/show-driver" \
+    install -m755 "${srcdir}/${pkgname}/show-driver" \
       "${pkgdir}/usr/bin/nvidia-recommended-driver"
   fi
 
-  # Adatfájlok másolása (ha léteznek)
-  if [[ -d usr/share/${pkgname} ]]; then
-    mkdir -p "${pkgdir}/usr/share"
-    cp -a usr/share/${pkgname} "${pkgdir}/usr/share/"
+  # 4. Adatfájlok átvétele a DEB-ből (ikonok, configok, ha vannak)
+  if [[ -d "${srcdir}/debroot/usr/share/${pkgname}" ]]; then
+    cp -ra "${srcdir}/debroot/usr/share/${pkgname}"/* "${pkgdir}/usr/share/${pkgname}/"
   fi
 
-  # Licenc és EULA
-  if [[ -f usr/share/doc/${pkgname}/copyright ]]; then
-    install -Dm644 usr/share/doc/${pkgname}/copyright \
-      "${pkgdir}/usr/share/licenses/${pkgname}/copyright"
+  # 5. Licencek átvétele a DEB-ből
+  local deb_doc="${srcdir}/debroot/usr/share/doc/${pkgname}"
+  if [[ -f "${deb_doc}/copyright" ]]; then
+    install -m644 "${deb_doc}/copyright" "${pkgdir}/usr/share/licenses/${pkgname}/copyright"
   fi
 
-  if [[ -f usr/share/${pkgname}/driver_eula/LICENSE ]]; then
-    install -Dm644 usr/share/${pkgname}/driver_eula/LICENSE \
-      "${pkgdir}/usr/share/licenses/${pkgname}/NVIDIA-EULA"
+  local eula="${srcdir}/debroot/usr/share/${pkgname}/driver_eula/LICENSE"
+  if [[ -f "$eula" ]]; then
+    install -m644 "$eula" "${pkgdir}/usr/share/licenses/${pkgname}/NVIDIA-EULA"
   fi
 }
