@@ -1,9 +1,9 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0
+pkgver=0.51.71.05_1.g8f2a1b3c4d
 pkgrel=1
-pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB and using the refactor-branch script"
+pkgdesc="NVIDIA Driver Assistant for Manjaro, tracking the latest official NVIDIA DEB"
 arch=('any')
 url="https://github.com/megvadulthangya/nvidia-driver-assistant"
 license=('MIT' 'custom')
@@ -15,77 +15,23 @@ sha256sums=('SKIP')
 
 _nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64'
 
-_debug() {
-  echo "===== DEBUG: $1 ====="
-  echo "Time: $(date -u)"
-  echo "PWD:  $(pwd)"
-  echo "SRC:  ${srcdir:-unset}"
-  echo "PKG:  ${pkgdir:-unset}"
-  echo "TMP:  ${TMPDIR:-/tmp}"
-}
-
-_fetch_packages_index() {
-  local out=""
-
-  echo "DEBUG: trying ${_nvidia_repo_base}/Packages"
-  if out="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/Packages" 2>/dev/null)"; then
-    printf '%s' "${out}"
-    return 0
-  fi
-
-  echo "DEBUG: trying ${_nvidia_repo_base}/Packages.gz"
-  if out="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/Packages.gz" 2>/dev/null | gzip -dc 2>/dev/null)"; then
-    printf '%s' "${out}"
-    return 0
-  fi
-
-  return 1
-}
-
-_fetch_directory_listing() {
-  echo "DEBUG: trying directory listing ${_nvidia_repo_base}/"
-  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/" 2>/dev/null
-}
-
 _latest_deb_info() {
-  local meta=""
-
-  meta="$(
-    _fetch_packages_index | awk '
-      BEGIN { RS=""; FS="\n" }
-      /^Package: nvidia-driver-assistant$/ {
-        ver=""
-        file=""
-        for (i = 1; i <= NF; i++) {
-          if ($i ~ /^Version: /)  ver  = substr($i, 10)
-          if ($i ~ /^Filename: /) file = substr($i, 11)
-        }
-        if (ver != "" && file != "") {
-          print ver "|" file
-        }
-      }
-    ' | sort -t'|' -k1,1V | tail -n1
-  )"
-
-  if [[ -n "${meta}" ]]; then
-    echo "DEBUG: Packages index resolved -> ${meta}"
-    printf '%s' "${meta}"
-    return 0
+  local html latest_file ver
+  
+  # HTML lista lekérése
+  html=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/") || return 1
+  
+  # A legfrissebb verziójú .deb fájl kiválasztása
+  latest_file=$(echo "$html" | grep -oP 'nvidia-driver-assistant_[\d\.-]+_all\.deb' | sort -V | tail -n1)
+  
+  if [[ -z "$latest_file" ]]; then
+    return 1
   fi
 
-  echo "DEBUG: Packages index gave no usable result; falling back to HTML listing"
-  meta="$(
-    _fetch_directory_listing | grep -oE 'nvidia-driver-assistant_[0-9][^"]*_all\.deb' | sort -V | tail -n1
-  )"
-
-  if [[ -n "${meta}" ]]; then
-    echo "DEBUG: directory listing resolved -> ${meta}"
-    printf 'unknown|%s' "${meta}"
-    return 0
-  fi
-
-  echo "ERROR: could not resolve latest nvidia-driver-assistant DEB" >&2
-  return 1
+  # Verzió kinyerése a fájlnévből (pl. 0.51.71.05-1)
+  ver=$(echo "$latest_file" | sed -E 's/nvidia-driver-assistant_(.*)_all\.deb/\1/')
+  
+  echo "${ver}|${latest_file}"
 }
 
 pkgver() {
@@ -95,110 +41,76 @@ pkgver() {
   meta="$(_latest_deb_info)" || return 1
 
   deb_ver="${meta%%|*}"
+  # Arch-kompatibilis verziószám (kötőjel helyett alulvonás)
+  deb_ver="${deb_ver//-/_}"
   git_hash="$(git rev-parse --short=10 HEAD)"
 
-  if [[ "${deb_ver}" == "unknown" ]]; then
-    printf '0.g%s\n' "${git_hash}"
-    return 0
-  fi
-
-  printf '%s.g%s\n' "${deb_ver//-/_}" "${git_hash}"
+  printf '%s.g%s' "${deb_ver}" "${git_hash}"
 }
 
 prepare() {
   cd "${srcdir}" || return 1
 
-  local meta deb_file deb_url tmpdir extract_dir data_tar
-
-  _debug "prepare:start"
-
+  local meta deb_file deb_url extract_dir data_tar
+  extract_dir="${srcdir}/debroot"
+  
   meta="$(_latest_deb_info)" || {
-    echo "ERROR: unable to determine latest upstream DEB"
+    echo "ERROR: Unable to determine latest upstream DEB"
     return 1
   }
 
   deb_file="${meta#*|}"
   deb_url="${_nvidia_repo_base}/${deb_file}"
-  tmpdir="${TMPDIR:-/tmp}/nvidia-driver-assistant-${UID:-0}-$$"
-  extract_dir="${srcdir}/debroot"
 
-  echo "DEBUG: selected DEB file: ${deb_file}"
-  echo "DEBUG: selected DEB URL : ${deb_url}"
-  echo "DEBUG: tmpdir          : ${tmpdir}"
-  echo "DEBUG: extract_dir     : ${extract_dir}"
+  echo "DEBUG: Downloading: ${deb_file}"
+  rm -rf "download_tmp" "${extract_dir}"
+  mkdir -p "download_tmp" "${extract_dir}"
 
-  rm -rf "${tmpdir}" "${extract_dir}"
-  mkdir -p "${tmpdir}" "${extract_dir}"
+  curl -fL --retry 5 -o "download_tmp/${deb_file}" "${deb_url}" || return 1
 
-  echo "DEBUG: downloading DEB..."
-  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 --max-time 120 \
-    -o "${tmpdir}/${deb_file}" "${deb_url}" || {
-      echo "ERROR: failed to download ${deb_url}"
-      return 1
-    }
+  echo "DEBUG: Unpacking DEB..."
+  bsdtar -xf "download_tmp/${deb_file}" -C "${extract_dir}" || return 1
 
-  echo "DEBUG: unpacking DEB archive..."
-  bsdtar -xf "${tmpdir}/${deb_file}" -C "${extract_dir}" || {
-    echo "ERROR: failed to unpack DEB archive"
-    return 1
-  }
-
-  data_tar="$(find "${extract_dir}" -maxdepth 1 -type f \
-    \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar.bz2' -o -name 'data.tar' \) \
-    | head -n 1)"
+  data_tar=$(find "${extract_dir}" -maxdepth 1 -type f \
+    \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar' \) \
+    | head -n 1)
 
   if [[ -z "${data_tar}" ]]; then
-    echo "ERROR: no data.tar.* found in DEB" >&2
-    find "${extract_dir}" -maxdepth 1 -type f -printf '%f\n'
+    echo "ERROR: data.tar not found"
     return 1
   fi
 
-  echo "DEBUG: unpacking payload: ${data_tar}"
-  bsdtar -xf "${data_tar}" -C "${extract_dir}" || {
-    echo "ERROR: failed to unpack data.tar.*"
-    return 1
-  }
+  bsdtar -xf "${data_tar}" -C "${extract_dir}" || return 1
 
-  rm -f "${extract_dir}"/debian-binary
-  rm -f "${extract_dir}"/control.tar.*
-  rm -f "${extract_dir}"/data.tar.*
-
-  if [[ ! -f "${srcdir}/${pkgname}/nvidia-driver-assistant" ]]; then
-    echo "ERROR: refactor branch script not found: ${srcdir}/${pkgname}/nvidia-driver-assistant"
-    return 1
+  # Script beillesztése a forrásból
+  if [[ -f "${srcdir}/${pkgname}/nvidia-driver-assistant" ]]; then
+    install -Dm755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
+      "${extract_dir}/usr/bin/nvidia-driver-assistant"
   fi
-
-  install -Dm755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
-    "${extract_dir}/usr/bin/nvidia-driver-assistant"
-
-  _debug "prepare:end"
 }
 
 package() {
   cd "${srcdir}/debroot" || return 1
 
-  _debug "package:start"
+  # Binárisok
+  if [[ -f usr/bin/nvidia-driver-assistant ]]; then
+    install -Dm755 usr/bin/nvidia-bin/nvidia-driver-assistant \
+      "${pkgdir}/usr/bin/nvidia-driver-assistant"
+  fi
 
-  install -Dm755 usr/bin/nvidia-driver-assistant \
-    "${pkgdir}/usr/bin/nvidia-driver-assistant"
+  # Ha van show-driver a git repóban
+  if [[ -f "${srcdir}/${pkgname}/show-driver" ]]; then
+    install -Dm755 "${srcdir}/${pkgname}/show-driver" \
+      "${pkgdir}/usr/bin/nvidia-recommended-driver"
+  fi
 
+  # Adatfájlok másolása (ha léteznek)
   if [[ -d usr/share/${pkgname} ]]; then
     mkdir -p "${pkgdir}/usr/share"
     cp -a usr/share/${pkgname} "${pkgdir}/usr/share/"
   fi
 
-  if [[ -d usr/share/doc/${pkgname} ]]; then
-    mkdir -p "${pkgdir}/usr/share/doc/${pkgname}"
-    shopt -s nullglob dotglob
-    for item in usr/share/doc/${pkgname}/*; do
-      [[ -f "${item}" ]] || continue
-      [[ "$(basename "${item}")" == "copyright" ]] && continue
-      install -Dm644 "${item}" \
-        "${pkgdir}/usr/share/doc/${pkgname}/$(basename "${item}")"
-    done
-    shopt -u nullglob dotglob
-  fi
-
+  # Licenc és EULA
   if [[ -f usr/share/doc/${pkgname}/copyright ]]; then
     install -Dm644 usr/share/doc/${pkgname}/copyright \
       "${pkgdir}/usr/share/licenses/${pkgname}/copyright"
@@ -208,11 +120,4 @@ package() {
     install -Dm644 usr/share/${pkgname}/driver_eula/LICENSE \
       "${pkgdir}/usr/share/licenses/${pkgname}/NVIDIA-EULA"
   fi
-
-  if [[ -f "${srcdir}/${pkgname}/show-driver" ]]; then
-    install -Dm755 "${srcdir}/${pkgname}/show-driver" \
-      "${pkgdir}/usr/bin/nvidia-recommended-driver"
-  fi
-
-  _debug "package:end"
 }
