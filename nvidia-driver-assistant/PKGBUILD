@@ -15,16 +15,27 @@ sha256sums=('SKIP')
 
 _nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64'
 
-_fetch_packages_index() {
-  local text=""
+_debug() {
+  echo "===== DEBUG: $1 ====="
+  echo "Time: $(date -u)"
+  echo "PWD:  $(pwd)"
+  echo "SRC:  ${srcdir:-unset}"
+  echo "PKG:  ${pkgdir:-unset}"
+  echo "TMP:  ${TMPDIR:-/tmp}"
+}
 
-  if text="$(curl -fsSL "${_nvidia_repo_base}/Packages" 2>/dev/null)"; then
-    printf '%s' "${text}"
+_fetch_packages_index() {
+  local out=""
+
+  echo "DEBUG: trying ${_nvidia_repo_base}/Packages"
+  if out="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/Packages" 2>/dev/null)"; then
+    printf '%s' "${out}"
     return 0
   fi
 
-  if text="$(curl -fsSL "${_nvidia_repo_base}/Packages.gz" 2>/dev/null | gzip -dc 2>/dev/null)"; then
-    printf '%s' "${text}"
+  echo "DEBUG: trying ${_nvidia_repo_base}/Packages.gz"
+  if out="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/Packages.gz" 2>/dev/null | gzip -dc 2>/dev/null)"; then
+    printf '%s' "${out}"
     return 0
   fi
 
@@ -32,14 +43,15 @@ _fetch_packages_index() {
 }
 
 _fetch_directory_listing() {
-  curl -fsSL "${_nvidia_repo_base}/" 2>/dev/null
+  echo "DEBUG: trying directory listing ${_nvidia_repo_base}/"
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/" 2>/dev/null
 }
 
 _latest_deb_info() {
-  local meta
+  local meta=""
 
   meta="$(
-    _fetch_packages_index 2>/dev/null | awk '
+    _fetch_packages_index | awk '
       BEGIN { RS=""; FS="\n" }
       /^Package: nvidia-driver-assistant$/ {
         ver=""
@@ -56,22 +68,23 @@ _latest_deb_info() {
   )"
 
   if [[ -n "${meta}" ]]; then
+    echo "DEBUG: Packages index resolved -> ${meta}"
     printf '%s' "${meta}"
     return 0
   fi
 
+  echo "DEBUG: Packages index gave no usable result; falling back to HTML listing"
   meta="$(
-    _fetch_directory_listing 2>/dev/null |
-      grep -oE 'nvidia-driver-assistant_[0-9][^"]*_all\.deb' |
-      sort -V |
-      tail -n1
+    _fetch_directory_listing | grep -oE 'nvidia-driver-assistant_[0-9][^"]*_all\.deb' | sort -V | tail -n1
   )"
 
   if [[ -n "${meta}" ]]; then
+    echo "DEBUG: directory listing resolved -> ${meta}"
     printf 'unknown|%s' "${meta}"
     return 0
   fi
 
+  echo "ERROR: could not resolve latest nvidia-driver-assistant DEB" >&2
   return 1
 }
 
@@ -97,8 +110,10 @@ prepare() {
 
   local meta deb_file deb_url tmpdir extract_dir data_tar
 
+  _debug "prepare:start"
+
   meta="$(_latest_deb_info)" || {
-    echo "ERROR: Nem sikerült meghatározni a legújabb NVIDIA nvidia-driver-assistant DEB-et."
+    echo "ERROR: unable to determine latest upstream DEB"
     return 1
   }
 
@@ -107,30 +122,40 @@ prepare() {
   tmpdir="${TMPDIR:-/tmp}/nvidia-driver-assistant-${UID:-0}-$$"
   extract_dir="${srcdir}/debroot"
 
-  echo "Selected DEB: ${deb_file}"
-  echo "DEB URL: ${deb_url}"
+  echo "DEBUG: selected DEB file: ${deb_file}"
+  echo "DEBUG: selected DEB URL : ${deb_url}"
+  echo "DEBUG: tmpdir          : ${tmpdir}"
+  echo "DEBUG: extract_dir     : ${extract_dir}"
 
   rm -rf "${tmpdir}" "${extract_dir}"
   mkdir -p "${tmpdir}" "${extract_dir}"
 
-  curl -fL --retry 5 --retry-delay 2 -o "${tmpdir}/${deb_file}" "${deb_url}" || {
-    echo "ERROR: A DEB letöltése nem sikerült."
-    return 1
-  }
+  echo "DEBUG: downloading DEB..."
+  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    -o "${tmpdir}/${deb_file}" "${deb_url}" || {
+      echo "ERROR: failed to download ${deb_url}"
+      return 1
+    }
 
+  echo "DEBUG: unpacking DEB archive..."
   bsdtar -xf "${tmpdir}/${deb_file}" -C "${extract_dir}" || {
-    echo "ERROR: A DEB kicsomagolása nem sikerült."
+    echo "ERROR: failed to unpack DEB archive"
     return 1
   }
 
-  data_tar="$(find "${extract_dir}" -maxdepth 1 -type f \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar.bz2' -o -name 'data.tar' \) | head -n 1)"
-  [[ -n "${data_tar}" ]] || {
-    echo "ERROR: Nem található data.tar.* a DEB-ben."
-    return 1
-  }
+  data_tar="$(find "${extract_dir}" -maxdepth 1 -type f \
+    \( -name 'data.tar.xz' -o -name 'data.tar.gz' -o -name 'data.tar.zst' -o -name 'data.tar.bz2' -o -name 'data.tar' \) \
+    | head -n 1)"
 
+  if [[ -z "${data_tar}" ]]; then
+    echo "ERROR: no data.tar.* found in DEB" >&2
+    find "${extract_dir}" -maxdepth 1 -type f -printf '%f\n'
+    return 1
+  fi
+
+  echo "DEBUG: unpacking payload: ${data_tar}"
   bsdtar -xf "${data_tar}" -C "${extract_dir}" || {
-    echo "ERROR: A data.tar.* kicsomagolása nem sikerült."
+    echo "ERROR: failed to unpack data.tar.*"
     return 1
   }
 
@@ -138,12 +163,21 @@ prepare() {
   rm -f "${extract_dir}"/control.tar.*
   rm -f "${extract_dir}"/data.tar.*
 
+  if [[ ! -f "${srcdir}/${pkgname}/nvidia-driver-assistant" ]]; then
+    echo "ERROR: refactor branch script not found: ${srcdir}/${pkgname}/nvidia-driver-assistant"
+    return 1
+  fi
+
   install -Dm755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
     "${extract_dir}/usr/bin/nvidia-driver-assistant"
+
+  _debug "prepare:end"
 }
 
 package() {
   cd "${srcdir}/debroot" || return 1
+
+  _debug "package:start"
 
   install -Dm755 usr/bin/nvidia-driver-assistant \
     "${pkgdir}/usr/bin/nvidia-driver-assistant"
@@ -179,4 +213,6 @@ package() {
     install -Dm755 "${srcdir}/${pkgname}/show-driver" \
       "${pkgdir}/usr/bin/nvidia-recommended-driver"
   fi
+
+  _debug "package:end"
 }
