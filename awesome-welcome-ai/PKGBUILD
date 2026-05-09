@@ -1,7 +1,8 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=awesome-welcome-ai
 _appname=awesome-welcome
-pkgver=r43.79ca0af
+_pkgmod=awesome_welcome
+pkgver=r2.c2f8b02
 pkgrel=1
 pkgdesc="Welcome screen & AI Services Manager for Manjaro Awesome Respin AI-ML"
 arch=('any')
@@ -9,7 +10,7 @@ url="https://github.com/megvadulthangya/awesome-welcome"
 license=('MIT')
 depends=('python' 'gtk3' 'python-gobject')
 optdepends=('python-textual: TUI mode support')
-makedepends=('git')
+makedepends=('git' 'python')
 conflicts=('awesome-welcome')
 source=("git+https://github.com/megvadulthangya/awesome-welcome.git#branch=AI-ML")
 sha256sums=('SKIP')
@@ -22,15 +23,26 @@ pkgver() {
 prepare() {
   cd "${srcdir}/${_appname}"
 
-  # Fix repository URL in Python script
-  sed -i "s|https://github.com/megvadulthangya/iso-profiles|https://github.com/megvadulthangya/awesome-welcome|" ${_appname}
+  # Fix repository URL in Python package config (was pointing at iso-profiles)
+  sed -i "s|https://github.com/megvadulthangya/iso-profiles|https://github.com/megvadulthangya/awesome-welcome|" ${_pkgmod}/config.py
 }
 
 package() {
   cd "${srcdir}/${_appname}"
 
-  # Install Python executable
+  # Resolve Python site-packages path on the build host
+  local _site_packages
+  _site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
+
+  # Install thin launcher to /usr/bin
   install -Dm755 ${_appname} "${pkgdir}/usr/bin/${_appname}"
+
+  # Install awesome_welcome/ Python package to site-packages
+  install -d "${pkgdir}${_site_packages}/${_pkgmod}"
+  cp -r ${_pkgmod}/. "${pkgdir}${_site_packages}/${_pkgmod}/"
+  # Normalise permissions (cp may inherit odd modes)
+  find "${pkgdir}${_site_packages}/${_pkgmod}" -type d -exec chmod 755 {} \;
+  find "${pkgdir}${_site_packages}/${_pkgmod}" -type f -exec chmod 644 {} \;
 
   # Install desktop file to applications directory
   install -Dm644 ${_appname}.desktop "${pkgdir}/usr/share/applications/${_appname}.desktop"
