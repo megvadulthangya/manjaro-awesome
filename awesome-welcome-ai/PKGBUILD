@@ -2,7 +2,7 @@
 pkgname=awesome-welcome-ai
 _appname=awesome-welcome
 _pkgmod=awesome_welcome
-pkgver=r2.c2f8b02
+pkgver=r44.b9c4200
 pkgrel=1
 pkgdesc="Welcome screen & AI Services Manager for Manjaro Awesome Respin AI-ML"
 arch=('any')
