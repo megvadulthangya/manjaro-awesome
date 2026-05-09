@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=awesome-welcome-ai
 _appname=awesome-welcome
-pkgver=r2.c2f8b02
+pkgver=r43.79ca0af
 pkgrel=1
 pkgdesc="Welcome screen & AI Services Manager for Manjaro Awesome Respin AI-ML"
 arch=('any')
