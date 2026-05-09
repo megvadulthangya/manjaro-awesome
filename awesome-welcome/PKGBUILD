@@ -6,8 +6,9 @@ pkgdesc="Welcome screen for Manjaro Awesome Respin"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-welcome"
 license=('MIT')
-depends=('python' 'gtk3' 'python-gobject' 'curl')
+depends=('python' 'gtk3' 'python-gobject')
 makedepends=('git')
+conflicts=('awesome-welcome-ai')
 source=("git+https://github.com/megvadulthangya/awesome-welcome.git")
 sha256sums=('SKIP')
 
@@ -19,17 +20,11 @@ pkgver() {
 prepare() {
   cd "${srcdir}/${pkgname}"
   
-  # Fix wrapper path in Python script
-  sed -i "s|/usr/local/bin/xl-wrapper.sh|/usr/lib/awesome-welcome/xl-wrapper.sh|" awesome-welcome
-  
   # Fix repository URL in Python script
   sed -i "s|https://github.com/megvadulthangya/manjaro-awesome-iso|https://github.com/megvadulthangya/awesome-welcome|" awesome-welcome
   
   # Fix Exec path in desktop file
   sed -i "s|Exec=/usr/local/bin/awesome-welcome|Exec=/usr/bin/awesome-welcome|" awesome-welcome.desktop
-  
-  # Fix typo in APP_TITLE
-  sed -i 's/APP_TITLE = "Manjaro Awsome Respin Welcome"/APP_TITLE = "Manjaro Awesome Respin Welcome"/' awesome-welcome
 }
 
 package() {
@@ -37,9 +32,6 @@ package() {
   
   # Install Python executable
   install -Dm755 awesome-welcome "${pkgdir}/usr/bin/awesome-welcome"
-  
-  # Install wrapper script
-  install -Dm755 xl-wrapper.sh "${pkgdir}/usr/lib/awesome-welcome/xl-wrapper.sh"
   
   # Install desktop file to applications directory
   install -Dm644 awesome-welcome.desktop "${pkgdir}/usr/share/applications/awesome-welcome.desktop"
