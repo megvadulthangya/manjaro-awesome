@@ -35,6 +35,7 @@ LOCAL_PACKAGES = [
     "awesome-git",
     "awesome54-git",
     "awesome-welcome",
+    "awesome-welcome-ai",
     "tilix-git",
     "nordic-backgrounds",
     "awesome-copycats-manjaro",
