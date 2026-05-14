@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0.51.71.05_1.g604869d409
+pkgver=0.51.71.05_1.gcf643c078b
 pkgrel=1
 pkgdesc="Detect and install the best NVIDIA driver packages for the system"
 arch=('any')
