@@ -1,0 +1,441 @@
+###############################################################################
+#  PICOM KONFIG – GYENGE INTEL / RÉGI HARDVER (LEGACY)                      #
+#  PICOM CONFIG – WEAK INTEL / OLD HARDWARE (LEGACY)                        #
+#                                                                            #
+#  Ez a profil kifejezetten régi, gyenge GPU-khoz (pl. Intel Mobile 4       #
+#  Series, OpenGL 2.1) készült, ahol csak az xrender backend működik.        #
+#  Minden teljesítményigényes effekt (blur, nagy árnyék, sarok, geometry    #
+#  animáció) ki van kapcsolva, hogy a rendszer simán fusson.                 #
+#  This profile is tailored for old, weak GPUs (e.g. Intel Mobile 4         #
+#  Series, OpenGL 2.1) where only the xrender backend works. All expensive  #
+#  effects (blur, large shadow, rounded corners, geometry animation) are     #
+#  turned off to keep the system smooth.                                     #
+###############################################################################
+
+#################################
+#         ÁLTALÁNOS / GENERAL    #
+#################################
+
+# --- BACKEND VÁLASZTÁS / BACKEND SELECTION ---
+# Ezen a régi GPU-n kizárólag az xrender backend használható (CPU-alapú).
+# On this old GPU only the xrender backend (CPU-based) can be used.
+backend = "xrender";
+
+# Függőleges szinkronizáció a képszakadás elkerülésére.
+# Vertical synchronisation to prevent tearing.
+vsync = true;
+
+# X Sync fence – Intel-en felesleges, csak extra terhelés. Kikapcsolva.
+# X Sync fence – pointless on Intel, just adds overhead. Disabled.
+xrender-sync-fence = false;
+
+# Teljes képernyős ablakok közvetlen megjelenítése (videó, játék).
+# Unredirect fullscreen windows for direct rendering (video, games).
+unredir-if-possible = true;
+unredir-if-possible-delay = 500;   # késleltetés a villogás elkerülésére / delay to prevent flicker
+
+# Csak a megváltozott területek újrarajzolása.
+# Redraw only damaged (changed) areas.
+use-damage = true;
+
+# Ablak átlátszóság és csoportosítás érzékelése.
+# Detect window opacity and grouping hints.
+detect-client-opacity = true;
+detect-transient = true;
+detect-client-leader = true;
+detect-rounded-corners = true;
+
+# Vékony belső keret (pijulius effekt) – CPU-n drága, kikapcsolva.
+# Thin inner border (pijulius effect) – expensive on CPU, disabled.
+inner-border-width = 0;
+
+# Naplózási szint (trace, debug, info, warn, error).
+log-level = "warn";
+
+# Dithering – csak OpenGL backendekkel működik, xrender alatt nincs hatása.
+# Dithering – only works with OpenGL backends, no effect under xrender.
+dithered-present = false;
+
+
+#################################
+#     ÁRNYÉKOK / SHADOWS         #
+#################################
+
+shadow = true;
+
+# Árnyék sugara – kisebb érték a CPU teher csökkentésére.
+# Shadow radius – smaller value to reduce CPU load.
+shadow-radius = 15;
+
+# Árnyék átlátszósága (0.0 - 1.0).
+shadow-opacity = 0.35;
+
+# Vízszintes eltolás (negatív = balra).
+shadow-offset-x = -14;
+
+# Függőleges eltolás (negatív = felfelé).
+shadow-offset-y = -14;
+
+# Árnyék színe hex RGB formátumban.
+shadow-color = "#00020b";
+
+
+#################################
+#        HALVÁNYÍTÁS / FADING    #
+#################################
+
+fading = false;   # animációk használata miatt klasszikus fade kikapcsolva
+                  # classic fade disabled because animations are used
+
+
+#################################
+#   ÁTLÁTSZÓSÁG / OPACITY       #
+#################################
+
+frame-opacity = 1.0;                      # teljesen átlátszatlan keret
+frame-opacity-for-same-colors = true;     # csak akkor módosít, ha szín egyezik
+# inactive-opacity = 0.95;                # inaktív ablakok halványítása (ki van kommentezve)
+# active-opacity = 1.0;
+
+
+#################################
+#       SARKOK / CORNERS         #
+#################################
+
+# Lekerekítés – kikapcsolva, mert a shaped mask számítás drága CPU-n.
+# Rounded corners – disabled because shaped mask calculation is heavy on CPU.
+corner-radius = 0;
+
+
+#################################
+# HÁTTÉR-HOMÁLYOSÍTÁS / BLUR    #
+#################################
+
+# A blur (háttér elmosása) a legnagyobb teljesítmény-igényű effekt,
+# ezért ezen a gyenge gépen teljesen ki van kapcsolva.
+# Blur is the most performance‑heavy effect, so it's completely disabled
+# on this weak machine.
+
+blur-background = false;
+blur-background-frame = false;
+blur-method = "box";             # xrender-kompatibilis, de nem használt (mert blur = false)
+# blur-size = 10;                # kernel méret (ha bekapcsolnád, 3 a legkisebb)
+# blur-deviation = 5.0;          # szórás (csak gaussian esetén)
+# blur-strength = 5;             # erősség (csak dual_kawase esetén)
+
+
+#################################
+#  ABLAKSZABÁLYOK / WINDOW RULES #
+#################################
+
+rules = ({
+    # Geany 94%-os átlátszósággal
+    match = "class_g = 'Geany'";
+    opacity = 0.94;
+
+}, {
+    # Értesítések / Notifications – nincs árnyék
+    match = "name = 'Notification' || class_g ?= 'Notify-osd'";
+    shadow = false;
+
+}, {
+    # GTK keret ablakok – nincs árnyék, nincs blur
+    match = "_GTK_FRAME_EXTENTS@";
+    shadow = false;
+    blur-background = false;
+
+}, {
+    # Dokk és asztal ablakok – nincs blur, nincs lekerekítés
+    match = "window_type = 'dock' || window_type = 'desktop'";
+    blur-background = false;
+    corner-radius = 0;
+
+}, {
+    # Eszköztippek – enyhe átlátszóság, árnyék, de nincs blur
+    match = "window_type = 'tooltip'";
+    opacity = 0.95;
+    shadow = true;
+    blur-background = false;
+
+}, {
+    # Drag-and-drop ablakok – nincs árnyék
+    match = "window_type = 'dnd'";
+    shadow = false;
+
+}, {
+    # Dialógusok – animált megjelenés/eltűnés (kicsit gyorsítva)
+    match = "WM_TRANSIENT_FOR@";
+    animations = ({
+        triggers = ["open", "show"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        blur-opacity = {
+            curve = "linear";
+            duration = 0.08;
+            delay = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        shadow-opacity = "opacity";
+        scale-y = {
+            curve = "cubic-bezier(0.24, 0.64, 0.79, 0.98)";
+            duration = 0.12;
+            start = 0.8;
+            end = 1;
+        };
+        offset-y = "(-window-height/2) + (window-height/2) * scale-y";
+        shadow-scale-y = "scale-y";
+        shadow-offset-y = "offset-y";
+    },{
+        triggers = ["close", "hide"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "0";
+        };
+        blur-opacity = 0;
+        shadow-opacity = "opacity";
+        scale-y = {
+            curve = "cubic-bezier(0.21, 0.02, 0.76, 0.36)";
+            duration = 0.12;
+            start = 1;
+            end = 0.7;
+        };
+        offset-y = "(-window-height/2) + (window-height/2) * scale-y";
+        shadow-scale-y = "scale-y";
+        shadow-offset-y = "offset-y";
+    });
+
+}, {
+    # Menük – enyhe átlátszóság és animációk
+    match = "window_type = 'dropdown_menu' || window_type = 'popup_menu' || window_type = 'menu'";
+    opacity = 0.95;
+    animations = ({
+        triggers = ["open", "show"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        blur-opacity = {
+            curve = "linear";
+            duration = 0.08;
+            delay = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        shadow-opacity = "opacity";
+        scale-y = {
+            curve = "cubic-bezier(0.24, 0.64, 0.79, 0.98)";
+            duration = 0.12;
+            start = 0.8;
+            end = 1;
+        };
+        shadow-scale-y = "scale-y";
+    },{
+        triggers = ["close", "hide"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "0";
+        };
+        blur-opacity = 0;
+        shadow-opacity = "opacity";
+        scale-y = {
+            curve = "cubic-bezier(0.21, 0.02, 0.76, 0.36)";
+            duration = 0.12;
+            start = 1;
+            end = 0.7;
+        };
+        shadow-scale-y = "scale-y";
+    });
+
+}, {
+    # Teljes képernyős ablakok / i3lock – nincs árnyék, nincs kerekítés
+    match = "class_g *= 'i3lock' || _NET_WM_STATE@[1] = '_NET_WM_STATE_FULLSCREEN' || _NET_WM_STATE@[2] = '_NET_WM_STATE_FULLSCREEN' || _NET_WM_STATE@[3] = '_NET_WM_STATE_FULLSCREEN' || _NET_WM_STATE@[4] = '_NET_WM_STATE_FULLSCREEN'";
+    shadow = false;
+    corner-radius = 0;
+    animations = ({
+        triggers = ["open", "show"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        blur-opacity = {
+            curve = "linear";
+            duration = 0.08;
+            delay = 0.12;
+            start = "window-raw-opacity-before";
+            end = "window-raw-opacity";
+        };
+        shadow-opacity = "opacity";
+    },{
+        triggers = ["close", "hide"];
+        opacity = {
+            curve = "linear";
+            duration = 0.12;
+            start = "window-raw-opacity-before";
+            end = "0";
+        };
+        blur-opacity = 0;
+        shadow-opacity = "opacity";
+    });
+
+});
+
+
+#################################
+#   GLOBÁLIS ANIMÁCIÓK / GLOBAL  #
+#################################
+
+# A geometry animáció (átméretezés/mozgatás) ki van hagyva,
+# mert a régi CPU-n túl lassú lenne.
+# The geometry animation (resize/move) is omitted because it would
+# be too slow on the old CPU.
+
+animations = ({
+    # Bezárás / elrejtés animáció
+    triggers = ["close", "hide"];
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "window-raw-opacity-before";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = "0";
+    shadow-opacity = "opacity";
+    offset-x = "(1 - scale-x) / 2 * window-width";
+    offset-y = "(1 - scale-y) / 2 * window-height * 5";
+    scale-x = {
+        curve = "cubic-bezier(0.21, 0.02, 0.76, 0.36)";
+        duration = 0.12;
+        start = 1;
+        end = 0.9;
+    };
+    scale-y = "scale-x";
+    shadow-scale-x = "scale-x";
+    shadow-scale-y = "scale-y";
+    shadow-offset-x = "offset-x";
+    shadow-offset-y = "offset-y";
+}, {
+    # Megnyitás / megjelenítés animáció
+    triggers = ["open", "show"];
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "window-raw-opacity-before";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = {
+        curve = "linear";
+        duration = 0.08;
+        delay = 0.12;
+        start = "window-raw-opacity-before";
+        end = "window-raw-opacity";
+    };
+    shadow-opacity = "opacity";
+    offset-x = "(1 - scale-x) / 2 * window-width";
+    offset-y = "(1 - scale-y) / 2 * window-height * 5";
+    scale-x = {
+        curve = "cubic-bezier(0.24, 0.64, 0.79, 0.98)";
+        duration = 0.12;
+        start = 0.95;
+        end = 1;
+    };
+    scale-y = "scale-x";
+    shadow-scale-x = "scale-x";
+    shadow-scale-y = "scale-y";
+    shadow-offset-x = "offset-x";
+    shadow-offset-y = "offset-y";
+}, {
+    # Munkaterület váltás – kilépő ablakok (lefelé csúszás)
+    triggers = ["workspace-out"];
+    offset-y = {
+        curve = "cubic-bezier(0.21, 0.02, 0.76, 0.36)";
+        duration = 0.12;
+        start = "0";
+        end = "- window-height / 2";
+    };
+    shadow-offset-y = "offset-y";
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "window-raw-opacity-before";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = "0";
+    shadow-opacity = "opacity";
+}, {
+    triggers = ["workspace-out-inverse"];
+    offset-y = {
+        curve = "cubic-bezier(0.21, 0.02, 0.76, 0.36)";
+        duration = 0.12;
+        start = "0";
+        end = "window-height / 2";
+    };
+    shadow-offset-y = "offset-y";
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "window-raw-opacity-before";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = "0";
+    shadow-opacity = "opacity";
+}, {
+    # Munkaterület váltás – bejövő ablakok (fentről csúszás)
+    triggers = ["workspace-in"];
+    offset-y = {
+        curve = "cubic-bezier(0.24, 0.64, 0.79, 0.98)";
+        duration = 0.12;
+        start = "window-height / 2";
+        end = "0";
+    };
+    shadow-offset-y = "offset-y";
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "0";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = {
+        curve = "linear";
+        duration = 0.08;
+        delay = 0.12;
+        start = "0";
+        end = "window-raw-opacity";
+    };
+    shadow-opacity = "opacity";
+}, {
+    triggers = ["workspace-in-inverse"];
+    offset-y = {
+        curve = "cubic-bezier(0.24, 0.64, 0.79, 0.98)";
+        duration = 0.12;
+        start = "- window-height / 2";
+        end = "0";
+    };
+    shadow-offset-y = "offset-y";
+    opacity = {
+        curve = "linear";
+        duration = 0.12;
+        start = "0";
+        end = "window-raw-opacity";
+    };
+    blur-opacity = {
+        curve = "linear";
+        duration = 0.08;
+        delay = 0.12;
+        start = "0";
+        end = "window-raw-opacity";
+    };
+    shadow-opacity = "opacity";
+});
