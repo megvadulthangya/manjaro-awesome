@@ -1,12 +1,9 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 # Contributor: Sam Burgos <santiago.burgos1089 at gmail dot com>
 # Contributor: carstene1ns <arch carsten-teibes de>
-# Contributor: Jan Böhringer <janboe@gmail.com>
-# Contributor: Frédérik Paradis <fredy_14@live.fr>
-# Contributor: GI_Jack <GI_Jack@hushmail.com>
 
 pkgname=gtkhash-thunar-git
-pkgver=r188.6f2c80a  # placeholder, replaced by pkgver()
+pkgver=r188.6f2c80a   # placeholder, felülírja a pkgver()
 pkgrel=1
 pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version from nettle4 branch)"
 arch=('x86_64')
@@ -35,13 +32,13 @@ md5sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/gtkhash"
-  # headcheck: version from commit count and short hash ensures rebuild on every push
+  # headcheck: verzió a commitok számából és a rövid hash-ből
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
   cd "$srcdir/gtkhash"
-  # Ensure we are on the latest nettle4 branch
+  # Mindig a legfrissebb nettle4 branch állapotra állunk
   git fetch origin nettle4
   git checkout nettle4
   git reset --hard origin/nettle4
@@ -67,6 +64,5 @@ check() {
 
 package() {
   meson install -C build --destdir "$pkgdir"
-  install -Dm644 "$srcdir/gtkhash/data/appdata/org.gtkhash.thunar.metainfo.xml" -t \
-    "$pkgdir/usr/share/metainfo/"
+  # A meson install már telepíti a metainfo fájlokat, nincs szükség külön másolásra
 }
