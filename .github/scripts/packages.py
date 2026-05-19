@@ -9,6 +9,7 @@ LOCAL_PACKAGES = [
 #    "lua54",
 #    "lgi",
     "gghelper",
+    "gtkhash-thunar-git",
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
@@ -70,7 +71,7 @@ AUR_PACKAGES = [
     "xorg-font-utils",
     "xnviewmp",
     "simplescreenrecorder",
-    "gtkhash-thunar",
+#    "gtkhash-thunar",
     "a4tech-bloody-driver-git"
 ]
 
