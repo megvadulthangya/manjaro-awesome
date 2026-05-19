@@ -1,44 +1,72 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Sam Burgos <santiago.burgos1089 at gmail dot com>
+# Contributor: carstene1ns <arch carsten-teibes de>
+# Contributor: Jan Böhringer <janboe@gmail.com>
+# Contributor: Frédérik Paradis <fredy_14@live.fr>
+# Contributor: GI_Jack <GI_Jack@hushmail.com>
 
 pkgname=gtkhash-thunar-git
-pkgver=r188.6f2c80a   # példa érték, a pkgver() felülírja
+pkgver=r188.6f2c80a  # placeholder, replaced by pkgver()
 pkgrel=1
-pkgdesc='A Thunar filemanager plugin for computing message digests or checksums (development version, nettle4 branch).'
-arch=('i686' 'x86_64')
-url='https://github.com/megvadulthangya/gtkhash'
-license=('GPL2')
-makedepends=('git')
-depends=('gtkhash-git' 'thunar')
-conflicts=("${pkgname%-git}")
-provides=("${pkgname%-git}")
+pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version from nettle4 branch)"
+arch=('x86_64')
+url="https://github.com/megvadulthangya/gtkhash"
+license=('GPL')
+depends=(
+    'dconf'
+    'gtk3'
+    'libb2'
+    'libgcrypt'
+    'nettle'
+    'thunar'
+)
+makedepends=(
+    'appstream-glib'
+    'git'
+    'intltool'
+    'librsvg'
+    'meson'
+    'xdg-utils'
+)
+provides=("${pkgname%-git}" 'gtkhash')
+conflicts=("${pkgname%-git}" 'gtkhash' 'gtkhash-caja' 'gtkhash-nautilus' 'gtkhash-nemo')
 source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=nettle4")
 md5sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/gtkhash"
-  # "headcheck": a verziót a commit számából és a rövid hash-ből képezzük,
-  # így minden új push megváltoztatja, és biztosítja a legfrissebb commit beépítését.
+  # headcheck: version from commit count and short hash ensures rebuild on every push
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
   cd "$srcdir/gtkhash"
-  # Biztonsági frissítés a nettle4 branch legfrissebb állapotára
+  # Ensure we are on the latest nettle4 branch
   git fetch origin nettle4
   git checkout nettle4
   git reset --hard origin/nettle4
-  echo "HEAD ellenőrzés: $(git log -1 --oneline)"
 }
 
 build() {
-  cd "$srcdir/gtkhash"
-  ./autogen.sh
-  ./configure --prefix=/usr --disable-schemas-compile --disable-gtkhash \
-              --enable-linux-crypto --enable-nettle --enable-thunar
-  make
+  arch-meson "$srcdir/gtkhash" build \
+    -Dglib-checksums='true' \
+    -Dlinux-crypto='true' \
+    -Dnettle='true' \
+    -Dbuild-caja='false' \
+    -Dbuild-nautilus='false' \
+    -Dbuild-nemo='false' \
+    -Dbuild-thunar='true'
+  meson compile -C build
+}
+
+check() {
+  desktop-file-validate build/data/*.desktop
+  appstream-util validate-relax --nonet build/data/appdata/*.appdata.xml
+  appstream-util validate-relax --nonet build/data/appdata/*.metainfo.xml
 }
 
 package() {
-  # A thunar plugin telepítése (korábban hibásan a nautilus könyvtár volt)
-  make -C "$srcdir/gtkhash/src/thunar" DESTDIR="$pkgdir/" install
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$srcdir/gtkhash/data/appdata/org.gtkhash.thunar.metainfo.xml" -t \
+    "$pkgdir/usr/share/metainfo/"
 }
