@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0.51.71.05_1.gb22e070144
+pkgver=0.51.71.05_1.gcf643c078b
 pkgrel=1
 pkgdesc="Detect and install the best NVIDIA driver packages for the system"
 arch=('any')
@@ -113,6 +113,8 @@ package() {
   # 6. Documentation from git
   install -m644 "${srcdir}/${pkgname}/README.md" \
     "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -m644 "${srcdir}/${pkgname}/docs/Configuration.md" \
+    "${pkgdir}/usr/share/doc/${pkgname}/Configuration.md"
   install -m644 "${srcdir}/${pkgname}/COPYING" \
     "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
 
