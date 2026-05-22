@@ -1,4 +1,4 @@
-name: Stable Manjaro Package Builder
+name: Stable Manjaro Package Builder(develop)
 
 on:
   workflow_dispatch:
