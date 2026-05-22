@@ -1048,8 +1048,8 @@ jobs:
           path: |
             /mnt/build_artifacts
             build_aur
-          #key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
-          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD', '!packages_bckp/**', '!pkgbuilder_bckp/**') }}-${{ github.run_id }}
+          key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
+          #key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD', '!packages_bckp/**', '!pkgbuilder_bckp/**') }}-${{ github.run_id }}
 
       - name: Upload Build Artifacts
         if: always()
