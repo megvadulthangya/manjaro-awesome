@@ -2,14 +2,14 @@ name: Stable Manjaro Package Builder
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 3 * * *'  # Daily at 4 AM UTC
-  push:
-    paths:
-      - 'packages.py'
-      - 'config.py'
-      - '.github/workflows/**'
-      - '**/PKGBUILD'
+#  schedule:
+#    - cron: '0 3 * * *'  # Daily at 4 AM UTC
+#  push:
+#    paths:
+#      - 'packages.py'
+#      - 'config.py'
+#      - '.github/workflows/**'
+#      - '**/PKGBUILD'
 
 jobs:
   cleanup:
@@ -1022,28 +1022,32 @@ jobs:
       # Save caches after successful build (or even on failure for debugging)
       - name: Save Pacman Package Cache
         uses: actions/cache/save@v4
-        if: always()
+        # if: always()
+        if: success()
         with:
           path: /mnt/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save Yay AUR Cache
         uses: actions/cache/save@v4
-        if: always()
+        # if: always()
+        if: success()
         with:
           path: /mnt/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save VPS Repository Mirror Cache
         uses: actions/cache/save@v4
-        if: always()
+        # if: always()
+        if: success()
         with:
           path: /mnt/vps_cache
           key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}
 
       - name: Save Built Packages Cache
         uses: actions/cache/save@v4
-        if: always()
+        # if: always()
+        if: success()
         with:
           path: |
             /mnt/build_artifacts
