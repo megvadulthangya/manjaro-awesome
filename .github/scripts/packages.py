@@ -10,7 +10,7 @@ LOCAL_PACKAGES = [
 #    "lgi",
     "gghelper",
     "gtkhash-thunar-git",
-#    "gtkhash-nautilus-gtk4-git",
+    "gtkhash-nautilus-gtk4-git",
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
