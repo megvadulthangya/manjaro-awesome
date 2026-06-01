@@ -5,16 +5,17 @@
 pkgname=gtkhash-thunar-git
 pkgver=r897.a60d930
 pkgrel=1
-pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version from nettle4 branch)"
+pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version from gtk4 branch)"
 arch=('x86_64')
 url="https://github.com/megvadulthangya/gtkhash"
 license=('GPL')
 depends=(
     'dconf'
-    'gtk3'
+    'gtk4'
     'libb2'
     'libgcrypt'
     'nettle'
+    'mbedtls'
     'thunar'
 )
 makedepends=(
@@ -24,35 +25,36 @@ makedepends=(
     'librsvg'
     'meson'
     'xdg-utils'
+    'mbedtls'
 )
 provides=("${pkgname%-git}" 'gtkhash')
 conflicts=("${pkgname%-git}" 'gtkhash' 'gtkhash-caja' 'gtkhash-nautilus' 'gtkhash-nemo')
-source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=nettle4")
+source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=gtk4")
 md5sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/gtkhash"
-  # headcheck: verzió a commitok számából és a rövid hash-ből
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
   cd "$srcdir/gtkhash"
-  # Mindig a legfrissebb nettle4 branch állapotra állunk
-  git fetch origin nettle4
-  git checkout nettle4
-  git reset --hard origin/nettle4
+  git fetch origin gtk4
+  git checkout gtk4
+  git reset --hard origin/gtk4
 }
 
 build() {
   arch-meson "$srcdir/gtkhash" build \
-    -Dglib-checksums='true' \
-    -Dlinux-crypto='true' \
-    -Dnettle='true' \
-    -Dbuild-caja='false' \
-    -Dbuild-nautilus='false' \
-    -Dbuild-nemo='false' \
-    -Dbuild-thunar='true'
+    -Dglib-checksums=true \
+    -Dlinux-crypto=true \
+    -Dnettle=true \
+    -Dmbedtls=true \
+    -Dlibcrypto=true \
+    -Dbuild-caja=false \
+    -Dbuild-nautilus=false \
+    -Dbuild-nemo=false \
+    -Dbuild-thunar=true
   meson compile -C build
 }
 
@@ -64,5 +66,4 @@ check() {
 
 package() {
   meson install -C build --destdir "$pkgdir"
-  # A meson install már telepíti a metainfo fájlokat, nincs szükség külön másolásra
 }
