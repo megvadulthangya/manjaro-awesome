@@ -14,6 +14,7 @@ depends=(
     'libb2'
     'libgcrypt'
     'nettle'
+    'mbedtls'
 )
 makedepends=(
     'appstream-glib'
@@ -22,6 +23,7 @@ makedepends=(
     'librsvg'
     'meson'
     'xdg-utils'
+    'mbedtls'
 )
 provides=("gtkhash")
 conflicts=('gtkhash' 'gtkhash-thunar-git' 'gtkhash-caja' 'gtkhash-nemo')
@@ -48,6 +50,8 @@ build() {
     -Dglib-checksums='true' \
     -Dlinux-crypto='true' \
     -Dnettle='true' \
+    -Dmbedtls='true' \
+    -Dlibcrypto='true' \
     -Dbuild-caja='false' \
     -Dbuild-nautilus='true' \
     -Dbuild-nemo='false' \
