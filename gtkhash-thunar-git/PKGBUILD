@@ -11,7 +11,7 @@ url="https://github.com/megvadulthangya/gtkhash"
 license=('GPL')
 depends=(
     'dconf'
-    'gtk4'
+    'gtk3'
     'libb2'
     'libgcrypt'
     'nettle'
