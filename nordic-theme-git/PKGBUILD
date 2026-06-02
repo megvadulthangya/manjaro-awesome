@@ -9,7 +9,7 @@ pkgname=(
 	nordic-bluish-accent-theme-git
 	nordic-bluish-accent-standard-buttons-theme-git
 )
-pkgver=r418.695bd3d # Ezt a makepkg automatikusan frissíti a pkgver() alapján
+pkgver=r423.695bd3d
 pkgrel=1
 pkgdesc="Nord-derived themes for GTK and other platforms (Latest Git HEAD)"
 arch=('any')
