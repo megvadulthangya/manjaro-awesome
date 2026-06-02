@@ -17,10 +17,6 @@ url="https://github.com/EliverLara/Nordic"
 license=('GPL3')
 makedepends=('git')
 
-# Biztosítjuk, hogy ezek a csomagok helyettesítsék a release verziókat
-provides=("${pkgname[@]%-git}")
-conflicts=("${pkgname[@]%-git}")
-
 # Különálló források a különböző branchekből
 source=(
     "Nordic::git+$url.git#branch=master"
@@ -41,6 +37,10 @@ pkgver() {
 _package() {
     local _reponame="$1"
     local _targetdir="$pkgdir/usr/share/themes/$_reponame"
+
+    # Dinamikus hozzárendelés: az adott alcsomag csak a saját stabil párját helyettesíti és azzal ütközik
+    provides=("${pkgname%-git}")
+    conflicts=("${pkgname%-git}")
 
     cd "$srcdir/$_reponame"
     install -d "$_targetdir"
