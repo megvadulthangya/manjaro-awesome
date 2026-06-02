@@ -9,7 +9,7 @@ LOCAL_PACKAGES = [
 #    "lua54",
 #    "lgi",
     "gghelper",
-    "tutor",
+    "terminal-tutor",
     "gtkhash-thunar-git",
     "gtkhash-nautilus-gtk4-git",
     "stable-diffusion-webui-forge",
