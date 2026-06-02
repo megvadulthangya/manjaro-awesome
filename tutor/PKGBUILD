@@ -1,0 +1,27 @@
+pkgname=terminal-tutor
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Interactive terminal productivity tutorial for beginners"
+arch=('any')
+license=('custom')
+depends=('bash')
+optdepends=(
+    'glow: for beautiful markdown rendering'
+    'less: fallback pager'
+)
+# Itt mondjuk meg, hogy a PKGBUILD melletti fájlokat használja
+source=('tutor'
+        'tutorial_hu.md'
+        'tutorial_en.md')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
+
+package() {
+    # 1. Az indító parancs telepítése a /usr/bin alá (mindenki számára futtatható)
+    install -Dm755 "$srcdir/tutor" "$pkgdir/usr/bin/tutor"
+
+    # 2. A markdown fájlok telepítése a rendszerszintű megosztott mappába
+    install -Dm644 "$srcdir/tutorial_hu.md" "$pkgdir/usr/share/tutor/tutorial_hu.md"
+    install -Dm644 "$srcdir/tutorial_en.md" "$pkgdir/usr/share/tutor/tutorial_en.md"
+}

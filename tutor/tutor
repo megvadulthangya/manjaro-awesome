@@ -1,0 +1,20 @@
+#!/bin/bash
+# Teljes terminál útmutató, nyelvtől függően, glow segítségével
+
+LANG_FILE=""
+if [[ "$LANG" =~ ^hu_ ]]; then
+    LANG_FILE="/usr/share/tutor/tutorial_hu.md"
+else
+    LANG_FILE="/usr/share/tutor/tutorial_en.md"
+fi
+
+if command -v glow &> /dev/null; then
+    # Ha létezik a saját nord téma, használjuk azt, különben a beépített sötétet
+    if [ -f "$HOME/.config/glow/nord.json" ]; then
+        glow -p --style "$HOME/.config/glow/nord.json" "$LANG_FILE"
+    else
+        glow -p --style dark "$LANG_FILE"
+    fi
+else
+    less -R "$LANG_FILE"
+fi
