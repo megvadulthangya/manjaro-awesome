@@ -1,0 +1,84 @@
+# Maintainer: Saját Név <sajat.email@cim.com>
+
+pkgbase=nordic-theme-git
+pkgname=(
+	nordic-theme-git
+	nordic-standard-buttons-theme-git
+	nordic-darker-theme-git
+	nordic-darker-standard-buttons-theme-git
+	nordic-bluish-accent-theme-git
+	nordic-bluish-accent-standard-buttons-theme-git
+)
+pkgver=r418.695bd3d # Ezt a makepkg automatikusan frissíti a pkgver() alapján
+pkgrel=1
+pkgdesc="Nord-derived themes for GTK and other platforms (Latest Git HEAD)"
+arch=('any')
+url="https://github.com/EliverLara/Nordic"
+license=('GPL3')
+makedepends=('git')
+
+# Biztosítjuk, hogy ezek a csomagok helyettesítsék a release verziókat
+provides=("${pkgname[@]%-git}")
+conflicts=("${pkgname[@]%-git}")
+
+# Különálló források a különböző branchekből
+source=(
+	"Nordic::git+$url.git#branch=master"
+	"Nordic-standard-buttons::git+$url.git#branch=standard-buttons"
+	"Nordic-darker::git+$url.git#branch=darker"
+	"Nordic-darker-standard-buttons::git+$url.git#branch=darker-standard-buttons"
+	"Nordic-bluish-accent::git+$url.git#branch=bluish-accent"
+	"Nordic-bluish-accent-standard-buttons::git+$url.git#branch=bluish-accent-standard-buttons"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+# Dinamikus verziószám generálás a master branch alapján
+pkgver() {
+	cd "$srcdir/Nordic"
+	printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+_package() {
+	local _reponame="$1"
+	local _targetdir="$pkgdir/usr/share/themes/$_reponame"
+
+	cd "$srcdir/$_reponame"
+	install -d "$_targetdir"
+	
+	# Minden másolása a célkönyvtárba
+	cp -a --no-preserve=ownership . "$_targetdir/"
+
+	# Git fájlok és felesleges dokumentációk takarítása a telepítésből
+	rm -rf "$_targetdir/.git" \
+	       "$_targetdir/.gitignore" \
+	       "$_targetdir/FUNDING.yml" \
+	       "$_targetdir/LICENSE" \
+	       "$_targetdir/README.md" \
+	       "$_targetdir/Gulpfile.js" \
+	       "$_targetdir/package.json" \
+	       "$_targetdir/package-lock.json"
+}
+
+package_nordic-theme-git() {
+	_package "Nordic"
+}
+
+package_nordic-standard-buttons-theme-git() {
+	_package "Nordic-standard-buttons"
+}
+
+package_nordic-darker-theme-git() {
+	_package "Nordic-darker"
+}
+
+package_nordic-darker-standard-buttons-theme-git() {
+	_package "Nordic-darker-standard-buttons"
+}
+
+package_nordic-bluish-accent-theme-git() {
+	_package "Nordic-bluish-accent"
+}
+
+package_nordic-bluish-accent-standard-buttons-theme-git() {
+	_package "Nordic-bluish-accent-standard-buttons"
+}
