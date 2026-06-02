@@ -1,13 +1,13 @@
-# Maintainer: Saját Név <sajat.email@cim.com>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgbase=nordic-theme-git
 pkgname=(
-	nordic-theme-git
-	nordic-standard-buttons-theme-git
-	nordic-darker-theme-git
-	nordic-darker-standard-buttons-theme-git
-	nordic-bluish-accent-theme-git
-	nordic-bluish-accent-standard-buttons-theme-git
+    nordic-theme-git
+    nordic-standard-buttons-theme-git
+    nordic-darker-theme-git
+    nordic-darker-standard-buttons-theme-git
+    nordic-bluish-accent-theme-git
+    nordic-bluish-accent-standard-buttons-theme-git
 )
 pkgver=r423.695bd3d
 pkgrel=1
@@ -23,62 +23,62 @@ conflicts=("${pkgname[@]%-git}")
 
 # Különálló források a különböző branchekből
 source=(
-	"Nordic::git+$url.git#branch=master"
-	"Nordic-standard-buttons::git+$url.git#branch=standard-buttons"
-	"Nordic-darker::git+$url.git#branch=darker"
-	"Nordic-darker-standard-buttons::git+$url.git#branch=darker-standard-buttons"
-	"Nordic-bluish-accent::git+$url.git#branch=bluish-accent"
-	"Nordic-bluish-accent-standard-buttons::git+$url.git#branch=bluish-accent-standard-buttons"
+    "Nordic::git+$url.git#branch=master"
+    "Nordic-standard-buttons::git+$url.git#branch=standard-buttons"
+    "Nordic-darker::git+$url.git#branch=darker"
+    "Nordic-darker-standard-buttons::git+$url.git#branch=darker-standard-buttons"
+    "Nordic-bluish-accent::git+$url.git#branch=bluish-accent"
+    "Nordic-bluish-accent-standard-buttons::git+$url.git#branch=bluish-accent-standard-buttons"
 )
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 # Dinamikus verziószám generálás a master branch alapján
 pkgver() {
-	cd "$srcdir/Nordic"
-	printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    cd "$srcdir/Nordic"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 _package() {
-	local _reponame="$1"
-	local _targetdir="$pkgdir/usr/share/themes/$_reponame"
+    local _reponame="$1"
+    local _targetdir="$pkgdir/usr/share/themes/$_reponame"
 
-	cd "$srcdir/$_reponame"
-	install -d "$_targetdir"
-	
-	# Minden másolása a célkönyvtárba
-	cp -a --no-preserve=ownership . "$_targetdir/"
+    cd "$srcdir/$_reponame"
+    install -d "$_targetdir"
+    
+    # Minden másolása a célkönyvtárba
+    cp -a --no-preserve=ownership . "$_targetdir/"
 
-	# Git fájlok és felesleges dokumentációk takarítása a telepítésből
-	rm -rf "$_targetdir/.git" \
-	       "$_targetdir/.gitignore" \
-	       "$_targetdir/FUNDING.yml" \
-	       "$_targetdir/LICENSE" \
-	       "$_targetdir/README.md" \
-	       "$_targetdir/Gulpfile.js" \
-	       "$_targetdir/package.json" \
-	       "$_targetdir/package-lock.json"
+    # Git fájlok és felesleges dokumentációk takarítása a telepítésből
+    rm -rf "$_targetdir/.git" \
+           "$_targetdir/.gitignore" \
+           "$_targetdir/FUNDING.yml" \
+           "$_targetdir/LICENSE" \
+           "$_targetdir/README.md" \
+           "$_targetdir/Gulpfile.js" \
+           "$_targetdir/package.json" \
+           "$_targetdir/package-lock.json"
 }
 
 package_nordic-theme-git() {
-	_package "Nordic"
+    _package "Nordic"
 }
 
 package_nordic-standard-buttons-theme-git() {
-	_package "Nordic-standard-buttons"
+    _package "Nordic-standard-buttons"
 }
 
 package_nordic-darker-theme-git() {
-	_package "Nordic-darker"
+    _package "Nordic-darker"
 }
 
 package_nordic-darker-standard-buttons-theme-git() {
-	_package "Nordic-darker-standard-buttons"
+    _package "Nordic-darker-standard-buttons"
 }
 
 package_nordic-bluish-accent-theme-git() {
-	_package "Nordic-bluish-accent"
+    _package "Nordic-bluish-accent"
 }
 
 package_nordic-bluish-accent-standard-buttons-theme-git() {
-	_package "Nordic-bluish-accent-standard-buttons"
+    _package "Nordic-bluish-accent-standard-buttons"
 }
