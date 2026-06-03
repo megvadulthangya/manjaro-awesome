@@ -59,47 +59,6 @@ _package() {
         sassc -M -t expanded gnome-shell/gnome-shell.scss gnome-shell/gnome-shell.css
     fi
 
-    # === Patch a menüsáv és eszköztár Nord színeinek pótlására ===
-    _apply_patch() {
-        local cssfile="$1"
-        if [[ -f "$cssfile" ]]; then
-            cat >> "$cssfile" << 'EOF'
-
-/* Nordic classic menubar & toolbar fix */
-menubar,
-.menubar {
-    background-color: #3b4252;
-    color: #d8dee9;
-}
-menubar > menuitem,
-.menubar > menuitem {
-    background-color: transparent;
-    color: #d8dee9;
-}
-menubar > menuitem:hover,
-.menubar > menuitem:hover {
-    background-color: #4c566a;
-}
-toolbar,
-.toolbar {
-    background-color: #434c5e;
-    color: #d8dee9;
-    border-bottom: 1px solid #2e3440;
-}
-headerbar,
-.titlebar {
-    background-color: #434c5e;
-    color: #d8dee9;
-}
-EOF
-        fi
-    }
-
-    _apply_patch gtk-3.0/gtk-dark.css
-    _apply_patch gtk-3.0/gtk.css
-    _apply_patch gtk-4.0/gtk-dark.css
-    _apply_patch gtk-4.0/gtk.css
-
     # Téma fájlok másolása
     install -d "$_targetdir"
     cp -a --no-preserve=ownership . "$_targetdir/"
