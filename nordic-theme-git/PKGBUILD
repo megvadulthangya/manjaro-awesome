@@ -15,7 +15,7 @@ pkgdesc="Nord-derived themes for GTK and other platforms (Latest Git HEAD)"
 arch=('any')
 url="https://github.com/EliverLara/Nordic"
 license=('GPL3')
-makedepends=('git')
+makedepends=('git' 'sassc')
 
 # Különálló források a különböző branchekből
 source=(
@@ -43,9 +43,26 @@ _package() {
     conflicts=("${pkgname%-git}")
 
     cd "$srcdir/$_reponame"
+
+    # SCSS fordítás (Nordic paletta érvényesítése)
+    if [[ -f gtk-3.0/gtk.scss ]]; then
+        sassc -M -t expanded gtk-3.0/gtk.scss gtk-3.0/gtk.css
+        sassc -M -t expanded gtk-3.0/gtk-dark.scss gtk-3.0/gtk-dark.css
+    fi
+    if [[ -f gtk-4.0/gtk.scss ]]; then
+        sassc -M -t expanded gtk-4.0/gtk.scss gtk-4.0/gtk.css
+        sassc -M -t expanded gtk-4.0/gtk-dark.scss gtk-4.0/gtk-dark.css
+    fi
+    if [[ -f cinnamon/cinnamon.scss ]]; then
+        sassc -M -t expanded cinnamon/cinnamon.scss cinnamon/cinnamon.css
+        sassc -M -t expanded cinnamon/cinnamon-dark.scss cinnamon/cinnamon-dark.css
+    fi
+    if [[ -f gnome-shell/gnome-shell.scss ]]; then
+        sassc -M -t expanded gnome-shell/gnome-shell.scss gnome-shell/gnome-shell.css
+    fi
+
+    # Telepítés
     install -d "$_targetdir"
-    
-    # Minden másolása a célkönyvtárba
     cp -a --no-preserve=ownership . "$_targetdir/"
 
     # Git fájlok és felesleges dokumentációk takarítása a telepítésből
@@ -57,6 +74,9 @@ _package() {
            "$_targetdir/Gulpfile.js" \
            "$_targetdir/package.json" \
            "$_targetdir/package-lock.json"
+
+    # Opcionális: korábbi manuális telepítésekből származó .old fájlok törlése
+    find "$_targetdir" -type f -name '*.old' -delete
 }
 
 package_nordic-theme-git() {
