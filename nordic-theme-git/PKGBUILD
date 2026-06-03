@@ -17,6 +17,7 @@ url="https://github.com/EliverLara/Nordic"
 license=('GPL3')
 makedepends=('git' 'sassc')
 
+# Források: minden téma a saját branch-éből
 source=(
     "Nordic::git+$url.git#branch=master"
     "Nordic-standard-buttons::git+$url.git#branch=standard-buttons"
@@ -27,19 +28,21 @@ source=(
 )
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
+# Dinamikus verziószám a master branch commitjai alapján
 pkgver() {
     cd "$srcdir/Nordic"
     printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+# Közös telepítési logika minden alcsomaghoz
 _package() {
-    local _reponame="$1"
-    local _pkgname="$2"
+    local _reponame="$1"   # pl. "Nordic-standard-buttons"
+    local _pkgname="$2"    # pl. "nordic-standard-buttons-theme-git"
     local _targetdir="$pkgdir/usr/share/themes/$_reponame"
 
     cd "$srcdir/$_reponame"
 
-    # SCSS -> CSS fordítás
+    # SCSS -> CSS fordítás, hogy a Nord paletta érvényesüljön
     if [[ -f gtk-3.0/gtk.scss ]]; then
         sassc -M -t expanded gtk-3.0/gtk.scss gtk-3.0/gtk.css
         sassc -M -t expanded gtk-3.0/gtk-dark.scss gtk-3.0/gtk-dark.css
@@ -56,7 +59,7 @@ _package() {
         sassc -M -t expanded gnome-shell/gnome-shell.scss gnome-shell/gnome-shell.css
     fi
 
-    # === Nordic menubar/toolbar patch (GTK3 és GTK4) ===
+    # === Patch a menüsáv és eszköztár Nord színeinek pótlására ===
     _apply_patch() {
         local cssfile="$1"
         if [[ -f "$cssfile" ]]; then
@@ -97,11 +100,11 @@ EOF
     _apply_patch gtk-4.0/gtk-dark.css
     _apply_patch gtk-4.0/gtk.css
 
-    # Telepítés
+    # Téma fájlok másolása
     install -d "$_targetdir"
     cp -a --no-preserve=ownership . "$_targetdir/"
 
-    # Fejlesztői fájlok takarítása
+    # Fejlesztői és nem kívánt fájlok eltávolítása a téma könyvtárából
     rm -rf "$_targetdir/.git" \
            "$_targetdir/.gitignore" \
            "$_targetdir/FUNDING.yml" \
@@ -111,12 +114,17 @@ EOF
            "$_targetdir/package.json" \
            "$_targetdir/package-lock.json"
 
+    # Esetleges régi .old fájlok törlése
     find "$_targetdir" -type f -name '*.old' -delete
 
-    # Licenc és dokumentáció a szabványos helyre
-    install -Dm644 "$srcdir/$_reponame/LICENSE" "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+    # Licenc telepítése a szabványos helyre
+    install -Dm644 "$srcdir/$_reponame/LICENSE" \
+        "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+
+    # Opcionális: dokumentáció (README) a szabványos helyre
     if [[ -f "$srcdir/$_reponame/README.md" ]]; then
-        install -Dm644 "$srcdir/$_reponame/README.md" "$pkgdir/usr/share/doc/$_pkgname/README.md"
+        install -Dm644 "$srcdir/$_reponame/README.md" \
+            "$pkgdir/usr/share/doc/$_pkgname/README.md"
     fi
 }
 
@@ -125,4 +133,33 @@ package_nordic-theme-git() {
     conflicts=("nordic-theme")
     _package "Nordic" "nordic-theme-git"
 }
-# ... a többi package_* függvény ugyanígy
+
+package_nordic-standard-buttons-theme-git() {
+    provides=("nordic-standard-buttons-theme")
+    conflicts=("nordic-standard-buttons-theme")
+    _package "Nordic-standard-buttons" "nordic-standard-buttons-theme-git"
+}
+
+package_nordic-darker-theme-git() {
+    provides=("nordic-darker-theme")
+    conflicts=("nordic-darker-theme")
+    _package "Nordic-darker" "nordic-darker-theme-git"
+}
+
+package_nordic-darker-standard-buttons-theme-git() {
+    provides=("nordic-darker-standard-buttons-theme")
+    conflicts=("nordic-darker-standard-buttons-theme")
+    _package "Nordic-darker-standard-buttons" "nordic-darker-standard-buttons-theme-git"
+}
+
+package_nordic-bluish-accent-theme-git() {
+    provides=("nordic-bluish-accent-theme")
+    conflicts=("nordic-bluish-accent-theme")
+    _package "Nordic-bluish-accent" "nordic-bluish-accent-theme-git"
+}
+
+package_nordic-bluish-accent-standard-buttons-theme-git() {
+    provides=("nordic-bluish-accent-standard-buttons-theme")
+    conflicts=("nordic-bluish-accent-standard-buttons-theme")
+    _package "Nordic-bluish-accent-standard-buttons" "nordic-bluish-accent-standard-buttons-theme-git"
+}
