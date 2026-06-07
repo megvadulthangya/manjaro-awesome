@@ -5,7 +5,7 @@
 pkgname=gtkhash-thunar-git
 pkgver=r1041.002be78
 pkgrel=1
-pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version from gtk4 branch)"
+pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version hybrid GTK3-GTK4 Code)"
 arch=('x86_64')
 url="https://github.com/megvadulthangya/gtkhash"
 license=('GPL')
@@ -29,7 +29,7 @@ makedepends=(
 )
 provides=("${pkgname%-git}" 'gtkhash')
 conflicts=("${pkgname%-git}" 'gtkhash' 'gtkhash-caja' 'gtkhash-nautilus' 'gtkhash-nemo')
-source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=gtk4")
+source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=extensions")
 md5sums=('SKIP')
 
 pkgver() {
@@ -39,9 +39,9 @@ pkgver() {
 
 prepare() {
   cd "$srcdir/gtkhash"
-  git fetch origin gtk4
-  git checkout gtk4
-  git reset --hard origin/gtk4
+  git fetch origin extensions
+  git checkout extensions
+  git reset --hard origin/extensions
 }
 
 build() {
