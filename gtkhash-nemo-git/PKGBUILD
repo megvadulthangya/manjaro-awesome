@@ -59,7 +59,7 @@ build() {
     -Dlibcrypto=true \
     -Dbuild-caja=false \
     -Dbuild-nautilus=false \
-    -Dbuild-nemo=true          # ← csak a Nemo bővítményt kapcsoljuk be
+    -Dbuild-nemo=true \
     -Dbuild-thunar=false
   meson compile -C build
 }
