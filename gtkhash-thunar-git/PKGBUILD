@@ -1,11 +1,9 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-# Contributor: Sam Burgos <santiago.burgos1089 at gmail dot com>
-# Contributor: carstene1ns <arch carsten-teibes de>
 
-pkgname=gtkhash-thunar-git
+pkgname=gtkhash-nemo-git
 pkgver=r1046.c5fe9e2
 pkgrel=1
-pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version hybrid GTK3-GTK4 Code)"
+pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Nemo plugin, git version)"
 arch=('x86_64')
 url="https://github.com/megvadulthangya/gtkhash"
 license=('GPL')
@@ -16,7 +14,7 @@ depends=(
     'libgcrypt'
     'nettle'
     'mbedtls'
-    'thunar'
+    'nemo'                     # Nemo fájlkezelő (extension header is part of nemo)
 )
 makedepends=(
     'appstream-glib'
@@ -26,9 +24,17 @@ makedepends=(
     'meson'
     'xdg-utils'
     'mbedtls'
+    'nemo'                     # build-időben is szükséges a fejlécek miatt
 )
 provides=("${pkgname%-git}" 'gtkhash')
-conflicts=("${pkgname%-git}" 'gtkhash' 'gtkhash-caja' 'gtkhash-nautilus' 'gtkhash-nemo')
+conflicts=(
+    "${pkgname%-git}"
+    'gtkhash'
+    'gtkhash-caja'
+    'gtkhash-nautilus'
+    'gtkhash-thunar-git'
+    'gtkhash-nemo'
+)
 source=("gtkhash::git+https://github.com/megvadulthangya/gtkhash.git#branch=extensions")
 md5sums=('SKIP')
 
@@ -53,8 +59,9 @@ build() {
     -Dlibcrypto=true \
     -Dbuild-caja=false \
     -Dbuild-nautilus=false \
-    -Dbuild-nemo=false \
-    -Dbuild-thunar=true
+    -Dbuild-nemo=true \
+    -Dbuild-thunar=false
+
   meson compile -C build
 }
 
