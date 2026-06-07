@@ -12,6 +12,7 @@ LOCAL_PACKAGES = [
     "terminal-tutor",
     "gtkhash-thunar-git",
     "gtkhash-nautilus-gtk4-git",
+    "gtkhash-nemo-git",
     "stable-diffusion-webui-forge",
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
