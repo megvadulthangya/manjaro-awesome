@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=gtkhash-caja-git
-pkgver=r1048.016ae7c
+pkgver=r1050.4bbc464
 pkgrel=1
 pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Caja plugin, git version)"
 arch=('x86_64')
