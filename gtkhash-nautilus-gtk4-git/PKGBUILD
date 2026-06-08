@@ -47,6 +47,7 @@ build() {
   # Itt adjuk át a GTK4 build opciót, és a Nautilus plugint kapcsoljuk be
   arch-meson "$srcdir/gtkhash" build \
     -Dgtk_version=4 \
+    -Dwerror='false' \
     -Dglib-checksums='true' \
     -Dlinux-crypto='true' \
     -Dnettle='true' \
