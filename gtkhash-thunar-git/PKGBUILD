@@ -3,7 +3,7 @@
 # Contributor: carstene1ns <arch carsten-teibes de>
 
 pkgname=gtkhash-thunar-git
-pkgver=r1050.4bbc464
+pkgver=r1054.729d4d0
 pkgrel=1
 pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar plugin, git version hybrid GTK3-GTK4 Code)"
 arch=('x86_64')
