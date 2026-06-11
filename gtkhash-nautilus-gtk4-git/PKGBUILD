@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=gtkhash-nautilus-gtk4-git
-pkgver=r1055.cbc63f6
+pkgver=r1074.f33082f
 pkgrel=1
 pkgdesc="A GTK4 utility for computing message digests or checksums (Gtkhash with Nautilus GTK4 plugin, git version)"
 arch=('x86_64')
