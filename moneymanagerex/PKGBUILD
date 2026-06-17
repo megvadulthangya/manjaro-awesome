@@ -1,0 +1,81 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Based on the upstream MMEX build instructions and release tags.
+
+pkgname=moneymanagerex
+_pkgname=MoneyManagerEx
+pkgver=0
+pkgrel=1
+pkgdesc="Easy-to-use personal finance application"
+arch=('x86_64')
+url="https://github.com/moneymanagerex/moneymanagerex"
+license=('GPL2')
+
+depends=(
+  'curl'
+  'gettext'
+  'hicolor-icon-theme'
+  'lua'
+  'sqlite'
+  'wxsqlite3'
+  'wxwidgets-gtk3'
+)
+makedepends=(
+  'cmake'
+  'git'
+)
+optdepends=(
+  'desktop-file-utils: desktop integration helpers'
+  'shared-mime-info: MIME database updates'
+)
+
+source=(
+  "$pkgname::git+https://github.com/moneymanagerex/moneymanagerex.git"
+)
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+
+  git fetch --tags --force origin
+
+  local _latest_tag
+  _latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+
+  if [[ -z "${_latest_tag:-}" ]]; then
+    echo "error: no release tag matching vX.Y.Z found" >&2
+    return 1
+  fi
+
+  git checkout --force "$_latest_tag"
+}
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+
+  local _tag
+  _tag="$(git describe --tags --exact-match 2>/dev/null || true)"
+
+  if [[ -z "${_tag:-}" ]]; then
+    _tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+  fi
+
+  if [[ -z "${_tag:-}" ]]; then
+    echo "error: unable to determine version from git tags" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${_tag#v}"
+}
+
+build() {
+  cmake -S "$srcdir/$pkgname" -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_CXX_STANDARD=17
+
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

@@ -18,6 +18,7 @@ LOCAL_PACKAGES = [
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
     "picom-pijulius-next-git",
+    "moneymanagerex",
     "nordic-theme-git",
     "kohya_ss",
     "kohya_ss-cu124",
