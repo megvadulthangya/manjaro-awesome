@@ -4,7 +4,7 @@
 pkgname=moneymanagerex
 _pkgname=MoneyManagerEx
 pkgver=1.9.2
-pkgrel=1
+pkgrel=2
 pkgdesc="Easy-to-use personal finance application"
 arch=('x86_64')
 url="https://github.com/moneymanagerex/moneymanagerex"
@@ -108,6 +108,21 @@ package() {
 
   DESTDIR="$pkgdir" cmake --install "$builddir"
 
+  # Upstream bundles fmt and installs its development files.
+  # Remove them here so the package does not conflict with Arch's fmt package.
+  rm -rf \
+    "$pkgdir/usr/include/fmt" \
+    "$pkgdir/usr/lib/cmake/fmt" \
+    "$pkgdir/usr/lib/pkgconfig/fmt.pc" \
+    "$pkgdir/usr/lib/libfmt.a"
+
   # Install license
   install -Dm644 "$srcdir/$pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # Optional docs
+  if [[ -f README.md ]]; then
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  elif [[ -f README.TXT ]]; then
+    install -Dm644 README.TXT "$pkgdir/usr/share/doc/$pkgname/README.TXT"
+  fi
 }
