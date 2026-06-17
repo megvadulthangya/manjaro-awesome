@@ -107,4 +107,7 @@ package() {
   fi
 
   DESTDIR="$pkgdir" cmake --install "$builddir"
+
+  # Install license
+  install -Dm644 "$srcdir/$pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
