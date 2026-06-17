@@ -47,6 +47,7 @@ prepare() {
   fi
 
   git checkout --force "$_latest_tag"
+  git submodule update --init --recursive
 }
 
 pkgver() {
