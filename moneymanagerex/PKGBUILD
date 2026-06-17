@@ -3,8 +3,8 @@
 
 pkgname=moneymanagerex
 _pkgname=MoneyManagerEx
-pkgver=0
-pkgrel=2
+pkgver=1.9.2
+pkgrel=1
 pkgdesc="Easy-to-use personal finance application"
 arch=('x86_64')
 url="https://github.com/moneymanagerex/moneymanagerex"
