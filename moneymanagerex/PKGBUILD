@@ -16,6 +16,7 @@ depends=(
   'hicolor-icon-theme'
   'lua'
   'sqlite'
+  'webkit2gtk-4.1'
   'wxsqlite3'
   'wxwidgets-gtk3'
 )
