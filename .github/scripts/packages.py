@@ -10,6 +10,7 @@ LOCAL_PACKAGES = [
 #    "lgi",
     "gghelper",
     "terminal-tutor",
+    "gtkhash-thunar",
     "gtkhash-thunar-git",
     "gtkhash-nautilus-gtk4-git",
     "gtkhash-nemo-git",
