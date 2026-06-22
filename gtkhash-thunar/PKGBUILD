@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=gtkhash-thunar
-pkgver=1.5        # Csak placeholder, a pkgver() úgyis felülírja
+pkgver=1.5          # Csak placeholder, a pkgver() felülírja
 pkgrel=1
 pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar filemanager plugin)"
 arch=('x86_64')
@@ -17,7 +17,7 @@ depends=(
 )
 makedepends=(
     'appstream-glib'
-    'git'               # a letöltéshez
+    'git'               # a repó klónozásához
     'intltool'
     'librsvg'
     'meson'
@@ -30,19 +30,18 @@ conflicts=(gtkhash gtkhash-caja gtkhash-nautilus gtkhash-nemo)
 source=("git+${url}.git")
 sha256sums=('SKIP')
 
-# Dinamikus verzió a legutolsó tag alapján
+# A legfrissebb tag verziószámának kinyerése (v nélkül)
 pkgver() {
-  cd "$srcdir/gtkhash" 2>/dev/null || return 1
-  git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'
+  cd "$srcdir/gtkhash" 2>/dev/null || exit 1
+  # Időben legfrissebb tag, levágva a 'v' előtagot
+  git tag --sort=-creatordate 2>/dev/null | head -1 | sed 's/^v//'
 }
 
 prepare() {
   cd "$srcdir/gtkhash"
-  # Ha van tag, checkout arra, egyébként marad a master
-  local tag=$(git describe --tags --abbrev=0 2>/dev/null)
-  if [[ -n "$tag" ]]; then
-    git checkout "$tag"
-  fi
+  # Checkout a megfelelő tag-re (a pkgver már frissült)
+  local tag="v${pkgver}"
+  git checkout "$tag"
   mkdir -p plugins
 }
 
