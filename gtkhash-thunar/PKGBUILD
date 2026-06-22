@@ -69,4 +69,3 @@ package() {
 #  install -Dm644 plugins/thunarx-3/libgtkhash-properties-thunar.so -t \
 #    "$pkgdir/usr/lib/thunarx-3/"
 }
-Copyright © 2004-2026 aurweb Development Team – AUR packages are user produced content. Any use of the provided files is at your own risk.
