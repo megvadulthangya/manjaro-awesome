@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=gtkhash-thunar
-pkgver=1.5          # Csak placeholder, a pkgver() felülírja
+pkgver=1.5.1          # Csak placeholder, a pkgver() felülírja
 pkgrel=1
 pkgdesc="A GTK+ utility for computing message digests or checksums (Gtkhash with Thunar filemanager plugin)"
 arch=('x86_64')
