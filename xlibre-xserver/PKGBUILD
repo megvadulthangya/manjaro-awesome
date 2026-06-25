@@ -10,9 +10,14 @@ pkgname=(
 )
 
 pkgver() {
-    git ls-remote --tags https://github.com/X11Libre/xserver.git | \
-        sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
-        sort -V | tail -n1
+    # Ha a git még nem érhető el (audit idején), placeholder verziót adunk
+    if command -v git >/dev/null 2>&1; then
+        git ls-remote --tags https://github.com/X11Libre/xserver.git | \
+            sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
+            sort -V | tail -n1
+    else
+        echo "0.0.0"
+    fi
 }
 
 pkgrel=1
