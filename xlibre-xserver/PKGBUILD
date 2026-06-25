@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=(
-    xlibre-xserver
+    xlibre-xserver-core
     xlibre-xserver-bootstrap
     xlibre-xserver-devel
     xlibre-xserver-xephyr
@@ -63,13 +63,13 @@ build() {
   meson compile -C build
 }
 
-package_xlibre-xserver() {
+package_xlibre-xserver-core() {
   pkgdesc="XLibre X server and common files"
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libbsd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh'
            'systemd-libs>=209')
-  provides=('X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0'
+  provides=('xlibre-xserver' 'X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0'
             'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' 'xlibre-server'
             'xorg-server-common' 'xlibre-server-common')
   conflicts=('xorg-server' 'xorg-server-common' 'xlibre-server' 'xlibre-server-common'
