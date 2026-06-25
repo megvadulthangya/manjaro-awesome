@@ -76,7 +76,6 @@ package_xlibre-xserver-core() {
              'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
   replaces=('xlibre-xserver-bootstrap' 'xlibre-xserver-common' 'glamor-egl' 'xf86-video-modesetting')
   options=('emptydirs')
-  install="${pkgname}.install"
 
   cd "${srcdir}/${_extracted_dir}"
   DESTDIR="${pkgdir}" meson install -C build
@@ -104,6 +103,7 @@ package_xlibre-xserver-bootstrap() {
   conflicts=('xorg-server' 'xlibre-server' 'nvidia-utils<=331.20' 'glamor-egl'
              'xf86-video-modesetting')
   options=('emptydirs')
+  install="${pkgname}.install"   # Csak a bootstrap csomag használ install fájlt
 
   cd "${srcdir}/${_extracted_dir}"
   DESTDIR="${pkgdir}" meson install -C build
