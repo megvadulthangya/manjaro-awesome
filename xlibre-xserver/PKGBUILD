@@ -9,10 +9,11 @@ pkgname=(
     xlibre-xserver-xvfb
 )
 
-# Mindig a legfrissebb stabil (páros alverziójú) kiadás
-pkgver=$(git ls-remote --tags https://github.com/X11Libre/xserver.git | \
-    sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
-    sort -V | tail -n1)
+pkgver() {
+    git ls-remote --tags https://github.com/X11Libre/xserver.git | \
+        sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
+        sort -V | tail -n1
+}
 
 pkgrel=1
 arch=('aarch64' 'x86_64')
@@ -87,21 +88,18 @@ package_xlibre-xserver() {
 
   install -vdm755 "${pkgdir}/etc/X11/xorg.conf.d"
 
-  # Minden közös fájlt itt tartunk (protocol.txt, Xserver.1 man, licencek)
   rm -rf "${pkgdir}/usr/include" \
          "${pkgdir}/usr/lib/pkgconfig" \
          "${pkgdir}/usr/share/aclocal"
 
-  # Töröljük a többi szerver binárisait
   find "${pkgdir}" -type f,l \( -name '*Xephyr*' -o -name '*Xnest*' -o -name '*Xvfb*' \) -delete
 
-  # Közös dokumentáció és licencek
   install -vDm644 "${srcdir}/${_extracted_dir}/COPYING" "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
   install -vDm644 "${srcdir}/${_extracted_dir}/Xext/xkeyboard/README.compiled" "${pkgdir}/var/lib/xkb/README.compiled"
 }
 
 package_xlibre-xserver-bootstrap() {
-  pkgdesc="XLibre X server (bootstrap – only for build-time)"
+  pkgdesc="XLibre X server (bootstrap)"
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libmd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh'
@@ -181,7 +179,6 @@ package_xlibre-xserver-xvfb() {
 
   find "${pkgdir}" -type f,l ! -name '*Xvfb*' -delete
 
-  # xvfb-run szkript és man oldal
   install -vDm755 "${srcdir}/xvfb-run"   "${pkgdir}/usr/bin/xvfb-run"
   install -vDm644 "${srcdir}/xvfb-run.1" "${pkgdir}/usr/share/man/man1/xvfb-run.1"
 }
