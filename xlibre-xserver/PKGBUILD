@@ -1,10 +1,13 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgbase="xlibre-xserver"
 pkgname=("${pkgbase}"{,-bootstrap,-common,-devel,-xephyr,-xnest,-xvfb})
-pkgver() {
-  curl -s https://api.github.com/repos/X11Libre/xserver/releases/latest | \
-    jq -r .tag_name | sed 's/^xlibre-xserver-//'
-}
+
+# Automatikusan a legfrissebb stabil (páros alverziójú) kiadást veszi
+# pl. 25.0.0.24, 25.2.0.1, de kihagyja a 25.1.x, 25.3.x fejlesztői ágakat
+pkgver=$(git ls-remote --tags https://github.com/X11Libre/xserver.git | \
+    sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
+    sort -V | tail -n1)
+
 pkgrel=1
 arch=('aarch64' 'x86_64')
 url="https://github.com/X11Libre/xserver"
@@ -12,7 +15,7 @@ license=('LicenseRef-Adobe-Display-PostScript' 'BSD-3-Clause' 'LicenseRef-DEC-3-
          'HPND' 'LicenseRef-HPND-sell-MIT-disclaimer-xserver' 'HPND-sell-variant'
          'ICU' 'ISC' 'MIT' 'MIT-open-group' 'NTP' 'SGI-B-2.0' 'SMLNJ' 'X11'
          'X11-distribute-modifications-variant')
-makedepends=('git' 'meson' 'ninja' 'curl' 'jq' 'libepoxy' 'libpciaccess' 'libunwind' 'libx11' 'libxaw'
+makedepends=('git' 'meson' 'ninja' 'libepoxy' 'libpciaccess' 'libunwind' 'libx11' 'libxaw'
              'libxcvt' 'libxfont2' 'libxi' 'libxkbfile' 'libxmu' 'libxrender' 'libxres'
              'libxshmfence>=1.1' 'libxtst' 'libxv' 'mesa' 'mesa-libgl'
              'pixman>=0.27.2' 'systemd>=209' 'xcb-util' 'xcb-util-image'
