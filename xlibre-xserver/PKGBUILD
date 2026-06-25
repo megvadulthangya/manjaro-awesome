@@ -1,9 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgbase="xlibre-xserver"
-pkgname=("${pkgbase}"{,-bootstrap,-common,-devel,-xephyr,-xnest,-xvfb})
+pkgname=("${pkgbase}"{,-bootstrap,-devel,-xephyr,-xnest,-xvfb})
 
-# Automatikusan a legfrissebb stabil (páros alverziójú) kiadást veszi
-# pl. 25.0.0.24, 25.2.0.1, de kihagyja a 25.1.x, 25.3.x fejlesztői ágakat
 pkgver=$(git ls-remote --tags https://github.com/X11Libre/xserver.git | \
     sed -n 's/.*refs\/tags\/xlibre-xserver-\(25\.[0-9]*[02468]\.[0-9.]*\)$/\1/p' | \
     sort -V | tail -n1)
@@ -23,8 +21,12 @@ makedepends=('git' 'meson' 'ninja' 'libepoxy' 'libpciaccess' 'libunwind' 'libx11
              'xorg-util-macros' 'xorg-xkbcomp' 'xorgproto>=7.0.31' 'xtrans>=1.3.5')
 options=('!emptydirs')
 
-source=("${pkgbase}-${pkgver}.tar.gz::https://github.com/X11Libre/xserver/archive/refs/tags/xlibre-xserver-${pkgver}.tar.gz")
-sha256sums=('SKIP')
+source=("${pkgbase}-${pkgver}.tar.gz::https://github.com/X11Libre/xserver/archive/refs/tags/xlibre-xserver-${pkgver}.tar.gz"
+        "xvfb-run"
+        "xvfb-run.1")
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
 
 _extracted_dir="xserver-xlibre-xserver-${pkgver}"
 
@@ -58,17 +60,17 @@ build() {
 }
 
 package_xlibre-xserver() {
-  pkgdesc="XLibre X server"
+  pkgdesc="XLibre X server and common files"
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libbsd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh'
-           'systemd-libs>=209' 'xlibre-xserver-common' 'xlibre-input-libinput'
-           "${pkgbase}-common=${pkgver}-${pkgrel}")
+           'systemd-libs>=209')
   provides=('X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0'
-            'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' 'xlibre-server')
-  conflicts=('xorg-server' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting'
-             'xlibre-server')
-  replaces=('xlibre-xserver-bootstrap' 'glamor-egl' 'xf86-video-modesetting')
+            'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' 'xlibre-server'
+            'xorg-server-common' 'xlibre-server-common')
+  conflicts=('xorg-server' 'xorg-server-common' 'xlibre-server' 'xlibre-server-common'
+             'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
+  replaces=('xlibre-xserver-bootstrap' 'xlibre-xserver-common' 'glamor-egl' 'xf86-video-modesetting')
   options=('emptydirs')
   install="${pkgname}.install"
 
@@ -77,13 +79,17 @@ package_xlibre-xserver() {
 
   install -vdm755 "${pkgdir}/etc/X11/xorg.conf.d"
 
+  # Maradjanak a közös fájlok (protocol.txt, Xserver.1 man) – ezeket most ez a csomag adja
   rm -rf "${pkgdir}/usr/include" \
          "${pkgdir}/usr/lib/pkgconfig" \
-         "${pkgdir}/usr/share/aclocal" \
-         "${pkgdir}/usr/lib/xorg/protocol.txt" \
-         "${pkgdir}/usr/share/man/man1/Xserver.1"
+         "${pkgdir}/usr/share/aclocal"
 
+  # Egyéb szerverek binárisainak törlése
   find "${pkgdir}" -type f,l \( -name '*Xephyr*' -o -name '*Xnest*' -o -name '*Xvfb*' \) -delete
+
+  # Common licence és readme
+  install -vDm644 "${srcdir}/${_extracted_dir}/COPYING" "${pkgdir}/usr/share/licenses/${pkgbase}/COPYING"
+  install -vDm644 "${srcdir}/${_extracted_dir}/Xext/xkeyboard/README.compiled" "${pkgdir}/var/lib/xkb/README.compiled"
 }
 
 package_xlibre-xserver-bootstrap() {
@@ -91,7 +97,7 @@ package_xlibre-xserver-bootstrap() {
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libmd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh'
-           'systemd-libs>=209' "${pkgbase}-common=${pkgver}-${pkgrel}")
+           'systemd-libs>=209')
   provides=("${pkgbase}" 'X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0'
             'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server')
   conflicts=('xorg-server' 'xlibre-server' 'nvidia-utils<=331.20' 'glamor-egl'
@@ -113,22 +119,6 @@ package_xlibre-xserver-bootstrap() {
   find ${pkgdir} -type f,l \( -name '*Xephyr*' -o -name '*Xnest*' -o -name '*Xvfb*' \) -delete
 }
 
-package_xlibre-xserver-common() {
-  pkgdesc="XLibre server common files"
-  arch=('any')
-  depends=('xkeyboard-config' 'xorg-setxkbmap' 'xorg-xkbcomp')
-  provides=('xorg-server-common' 'xlibre-server-common')
-  conflicts=('xorg-server-common' 'xlibre-server-common' "xorg-server<$pkgver")
-
-  cd "${srcdir}/${_extracted_dir}"
-  DESTDIR="${pkgdir}" meson install -C build
-
-  find "${pkgdir}" -type f,l ! \( -name 'protocol.txt' -o -name 'Xserver.1' \) -delete
-
-  install -vDm644 "${srcdir}/${_extracted_dir}/COPYING" "${pkgdir}/usr/share/licenses/${pkgbase}/COPYING"
-  install -vDm644 "${srcdir}/${_extracted_dir}/Xext/xkeyboard/README.compiled" "${pkgdir}/var/lib/xkb/README.compiled"
-}
-
 package_xlibre-xserver-devel() {
   pkgdesc="Development files for the XLibre X server"
   arch=('any')
@@ -147,7 +137,7 @@ package_xlibre-xserver-xephyr() {
   depends=('glibc' 'libepoxy' 'libgl' 'libtirpc' 'libunwind' 'libx11' 'libxau'
            'libxdmcp' 'libxfont2' 'libxshmfence' 'nettle' 'pixman>=0.27.2'
            'systemd-libs>=209' 'xcb-util' 'xcb-util-image' 'xcb-util-keysyms'
-           'xcb-util-renderutil' 'xcb-util-wm' "${pkgbase}-common=${pkgver}-${pkgrel}")
+           'xcb-util-renderutil' 'xcb-util-wm' "${pkgbase}=${pkgver}-${pkgrel}")
   provides=('xorg-server-xephyr' 'xlibre-server-xephyr')
   conflicts=('xorg-server-xephyr' 'xlibre-server-xephyr')
 
@@ -161,7 +151,7 @@ package_xlibre-xserver-xnest() {
   pkgdesc="A nested XLibre server that runs as an X application"
   depends=('glibc' 'libtirpc' 'libunwind' 'libx11' 'libxau' 'libxdmcp'
            'libxext' 'libxfont2' 'nettle' 'pixman>=0.27.2'
-           'systemd-libs>=209' "${pkgbase}-common=${pkgver}-${pkgrel}")
+           'systemd-libs>=209' "${pkgbase}=${pkgver}-${pkgrel}")
   provides=('xorg-server-xnest' 'xlibre-server-xnest')
   conflicts=('xorg-server-xnest' 'xlibre-server-xnest')
 
@@ -176,7 +166,7 @@ package_xlibre-xserver-xvfb() {
   license=('MIT' 'GPL-2.0-only')
   depends=('glibc' 'libgl' 'libtirpc' 'libunwind' 'libxau' 'libxdmcp'
            'libxfont2' 'nettle' 'pixman' 'sh' 'systemd-libs>=209'
-           "${pkgbase}-common=${pkgver}-${pkgrel}" 'xorg-xauth')
+           "${pkgbase}=${pkgver}-${pkgrel}" 'xorg-xauth')
   provides=('xorg-server-xvfb' 'xlibre-server-xvfb')
   conflicts=('xorg-server-xvfb' 'xlibre-server-xvfb')
 
@@ -185,7 +175,7 @@ package_xlibre-xserver-xvfb() {
 
   find "${pkgdir}" -type f,l ! -name '*Xvfb*' -delete
 
-  # xvfb-run script (ezeket a fájlokat tedd a PKGBUILD mellé)
+  # xvfb-run script és man oldal
   install -vDm755 "${srcdir}/xvfb-run"   "${pkgdir}/usr/bin/xvfb-run"
   install -vDm644 "${srcdir}/xvfb-run.1" "${pkgdir}/usr/share/man/man1/xvfb-run.1"
 }
