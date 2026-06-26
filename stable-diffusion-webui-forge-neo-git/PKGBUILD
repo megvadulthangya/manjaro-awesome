@@ -2,7 +2,7 @@
 
 _pkgname="stable-diffusion-webui-forge-neo"
 pkgname="${_pkgname}-git"
-pkgver=r9490.36c66f26
+pkgver=r9492.be63e9db
 pkgrel=1
 pkgdesc="Stable Diffusion WebUI Forge Neo (Experimental fork, PyTorch 2.6 / CUDA 12.6)"
 arch=('x86_64')
