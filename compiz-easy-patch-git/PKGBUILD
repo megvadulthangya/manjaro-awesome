@@ -1,9 +1,8 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-# Contributor: Az easy-patch git változat készítője
 
 _pkgname='compiz'
 pkgname="${_pkgname}-easy-patch-git"
-pkgver=0.9.14.2.r0.g0000000  # placeholder, a pkgver() felülírja
+pkgver=0.9.14.2.r25.gff7ff00  # placeholder, a pkgver() felülírja
 pkgrel=1
 pkgdesc="OpenGL compositing window manager. Includes friendly defaults, GWD theme selector and autostart for Xfce & MATE. Git version."
 url="https://launchpad.net/compiz"
@@ -40,6 +39,7 @@ optdepends=(
   'xfce-theme-greybird: A grey and blue Xfce theme'
 )
 
+replaces=('compiz-manjaro')
 provides=(
   "ccsm=${pkgver:0:6}"
   "compiz-bcop=${pkgver:0:6}"
@@ -68,6 +68,8 @@ conflicts=(
   'simple-ccsm'
 )
 
+install="${pkgname}.install"
+
 _pkgsrc="${_pkgname}"
 source=(
   "${_pkgsrc}::git+https://git.launchpad.net/compiz"
@@ -77,11 +79,11 @@ source=(
   "0003-gtk-extents.patch"
   "0004-screenshot-launch-fix.patch"
   "0005-no-compile-gschemas.patch"
-  "0006-Drop-toggle-shaded-since-it-s-no-longer-included-in-.patch"
-  "0007-64-bit-time-t-compat.patch"
+#  "0006-Drop-toggle-shaded-since-it-s-no-longer-included-in-.patch"
+#  "0007-64-bit-time-t-compat.patch"
   "0008-fix-negating-windows-by-default.patch"
-  "1001-fix-crash-in-vertexbuffer.patch"
-  "1002-fix-wrapmode.patch"
+#  "1001-fix-crash-in-vertexbuffer.patch"
+#  "1002-fix-wrapmode.patch"
   "9001-compiz-easy-defaults.patch"
   # Extra fájlok (7 db)
   "compiz-easy.gschema.override"
@@ -93,27 +95,26 @@ source=(
   "compiz-xfce-uninstall-helper.desktop"
 )
 
-# Ellenőrzőösszegek – ha a fájlok megvannak, a build sikerülni fog.
 sha256sums=(
   'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
+  '6ec9c04540ca1649c687d9ab2c8311caea7075831e2cffe719ec7958c9ebab7b'
+  'f4897590b0f677ba34767a29822f8f922a750daf66e8adf47be89f7c2550cf4b'
+  '16ddb6311ce42d958505e21ca28faae5deeddce02cb558d55e648380274ba4d9'
+  '89ee91a8ea6b1424ef76661ea9a2db43412366aacddc12d24a7adf5e04bfbc61'
+  '4ab3277da201314b3f65e30128bc30704ddee584fdbbfc8d0d83c7e0de91fa9a'
+  '4fb18253eb1b438cfd5e8e9acb740b368cf18eace07459cb094ce7a9198e6d89'
+  '4d28bc2cefbfae77b9157f39876f5296b5edb7fb00de2a391a262688d2f7590c'
+  '6ff912250fc2e68b67f0db10f6409d1378e668d2ce1e7709530576b24be95c30'
+  '28d14e5ec0694b4a451540f35210eac5699e9daf1b00020bf59d8b0296d7d9bf'
+  '0faaf9e9df28d2857108ccd0910d50ba631c34c2b1659b8860da8c2b552fc889'
+  '3e46a0b50a16d9fd6fd4f9d28f6082fc76f39dff8a82a79af312126a6bcf7cc2'
+  'd23b8633186bb3a2a841734ad0b917500f3536a67046f5d8fbb08818eab59160'
+  '5c471a34a1d79a45e8c4a924f0f58d71199328e45c80472fe32ecaac76c987ee'
+  '02eec20f75eb1f9571a2cf92013fc3c78d13c155a8ede0467cc10b83cdeba43c'
+#  'SKIP'
+#  'SKIP'
+#  'SKIP'
+#  'SKIP'
 )
 
 pkgver() {
@@ -125,7 +126,6 @@ pkgver() {
 prepare() {
   cd "${_pkgsrc}"
 
-  # Patch-ek alkalmazása
   local src
   for src in "${source[@]}"; do
     src="${src%%::*}"
@@ -137,7 +137,6 @@ prepare() {
     fi
   done
 
-  # Build fix: destroy_frame deklaráció javítása
   sed -E \
     -e 's&^(destroy_(bare|normal|switcher)_frame)\s?.*;$&\1 (decor_frame_t *frame);&' \
     -i "gtk/window-decorator/gtk-window-decorator.h"
