@@ -1,4 +1,5 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Az easy-patch git változat készítője
 
 _pkgname='compiz'
 pkgname="${_pkgname}-easy-patch-git"
@@ -67,10 +68,10 @@ conflicts=(
   'simple-ccsm'
 )
 
-_pkgsrc="${_pkgname}"   # "compiz"
+_pkgsrc="${_pkgname}"
 source=(
   "${_pkgsrc}::git+https://git.launchpad.net/compiz"
-  # Alap patch-ek (11 db)
+  # Patchek (11 db)
   "0001-reverse-unity-config.patch"
   "0002-focus-prevention-disable.patch"
   "0003-gtk-extents.patch"
@@ -92,27 +93,27 @@ source=(
   "compiz-xfce-uninstall-helper.desktop"
 )
 
-# Pontosan 19 elem, sorrendben a fenti forrásokhoz
+# Ellenőrzőösszegek – ha a fájlok megvannak, a build sikerülni fog.
 sha256sums=(
-  'SKIP'  # git repo
-  'SKIP'  # 0001
-  'SKIP'  # 0002
-  'SKIP'  # 0003
-  'SKIP'  # 0004
-  'SKIP'  # 0005
-  'SKIP'  # 0006
-  'SKIP'  # 0007
-  'SKIP'  # 0008
-  'SKIP'  # 1001
-  'SKIP'  # 1002
-  'SKIP'  # 9001
-  'SKIP'  # compiz-easy.gschema.override
-  'SKIP'  # compiz-gtk-decorator-theme-selector
-  'SKIP'  # compiz-gtk-decorator-theme-selector.desktop
-  'SKIP'  # compiz-xfce-autostart-setup
-  'SKIP'  # compiz-xfce-autostart-setup.desktop
-  'SKIP'  # compiz-xfce-uninstall-helper
-  'SKIP'  # compiz-xfce-uninstall-helper.desktop
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
 )
 
 pkgver() {
