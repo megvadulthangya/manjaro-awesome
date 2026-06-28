@@ -102,7 +102,7 @@ jobs:
       # ================== CACHE: Pacman Package Cache ==================
       # Cache for system packages to avoid re-downloading pacman packages every run
       - name: Restore Pacman Package Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /mnt/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
