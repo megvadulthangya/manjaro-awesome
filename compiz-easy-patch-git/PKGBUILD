@@ -23,7 +23,7 @@ depends=(
   'python-cairo'
   'python-dbus'
   'python-gobject'
-  'zenity'                         # téma választó scripthez
+  'zenity'
 )
 makedepends=(
   'git'
@@ -48,7 +48,7 @@ provides=(
   "compizconfig-python=${pkgver:0:6}"
   "libcompizconfig=${pkgver:0:6}"
   "${_pkgname}=${pkgver:0:6}"
-  "${_pkgname}-easy-patch"         # nem git verziót is kiváltja
+  "${_pkgname}-easy-patch"
 )
 conflicts=(
   'ccsm'
@@ -70,8 +70,7 @@ conflicts=(
 _pkgsrc="${_pkgname}"   # "compiz"
 source=(
   "${_pkgsrc}::git+https://git.launchpad.net/compiz"
-
-  # Alap patch-ek (compiz-git-ből és compiz-easy-patch-ből)
+  # Alap patch-ek (11 db)
   "0001-reverse-unity-config.patch"
   "0002-focus-prevention-disable.patch"
   "0003-gtk-extents.patch"
@@ -83,8 +82,7 @@ source=(
   "1001-fix-crash-in-vertexbuffer.patch"
   "1002-fix-wrapmode.patch"
   "9001-compiz-easy-defaults.patch"
-
-  # Extra fájlok a compiz-easy-patch-ből
+  # Extra fájlok (7 db)
   "compiz-easy.gschema.override"
   "compiz-gtk-decorator-theme-selector"
   "compiz-gtk-decorator-theme-selector.desktop"
@@ -94,25 +92,27 @@ source=(
   "compiz-xfce-uninstall-helper.desktop"
 )
 
+# Pontosan 19 elem, sorrendben a fenti forrásokhoz
 sha256sums=(
-  'SKIP'   # git repo
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
-  'SKIP'
+  'SKIP'  # git repo
+  'SKIP'  # 0001
+  'SKIP'  # 0002
+  'SKIP'  # 0003
+  'SKIP'  # 0004
+  'SKIP'  # 0005
+  'SKIP'  # 0006
+  'SKIP'  # 0007
+  'SKIP'  # 0008
+  'SKIP'  # 1001
+  'SKIP'  # 1002
+  'SKIP'  # 9001
+  'SKIP'  # compiz-easy.gschema.override
+  'SKIP'  # compiz-gtk-decorator-theme-selector
+  'SKIP'  # compiz-gtk-decorator-theme-selector.desktop
+  'SKIP'  # compiz-xfce-autostart-setup
+  'SKIP'  # compiz-xfce-autostart-setup.desktop
+  'SKIP'  # compiz-xfce-uninstall-helper
+  'SKIP'  # compiz-xfce-uninstall-helper.desktop
 )
 
 pkgver() {
@@ -165,7 +165,6 @@ build() {
 
   cmake "${_cmake_options[@]}"
 
-  # Párhuzamos fordítás korlátozása, hogy elkerüljük a race condition-t
   mjobs=4; [[ "$(nproc)" -lt 4 ]] && mjobs="$(nproc)"
   if [[ "$MAKEFLAGS" = "" ]]; then
     MAKEFLAGS="-j$mjobs"
@@ -185,11 +184,9 @@ build() {
 package() {
   DESTDIR="$pkgdir" cmake --install build
 
-  # FindCompiz.cmake telepítése
   CMAKE_DIR=$(cmake --system-information | grep '^CMAKE_ROOT' | awk -F\" '{print $2}')
   install -Dm644 "$_pkgsrc/cmake/FindCompiz.cmake" -t "${pkgdir}${CMAKE_DIR}/Modules/"
 
-  # GSettings schema fájlok (generáltak és a felülbíráló fájl)
   if ls build/generated/glib-2.0/schemas/ | grep -qm1 .gschema.xml; then
     install -Dm644 build/generated/glib-2.0/schemas/*.gschema.xml \
       -t "$pkgdir/usr/share/glib-2.0/schemas/"
@@ -197,38 +194,26 @@ package() {
   install -Dm644 "$srcdir/compiz-easy.gschema.override" \
     -t "$pkgdir/usr/share/glib-2.0/schemas/"
 
-  # Dokumentáció
   for doc in AUTHORS NEWS README; do
     if [[ -f "$_pkgsrc/$doc" ]]; then
       install -Dm644 "$_pkgsrc/$doc" "$pkgdir/usr/share/doc/compiz/$doc"
     fi
   done
 
-  # Licencek
   for i in COPYING COPYING.GPL COPYING.LGPL COPYING.MIT; do
     if [[ -f "$_pkgsrc/$i" ]]; then
       install -Dm644 "$_pkgsrc/$i" "$pkgdir/usr/share/licenses/$pkgname/LICENSE${i#COPYING}"
     fi
   done
 
-  # ---- Easy-patch extra fájlok és módosítások ----
-
-  # CCSM ikon Xfce beállítások közé
   sed -i 's|Categories=Settings;DesktopSettings;|Categories=Settings;DesktopSettings;X-XFCE-SettingsDialog;X-XFCE-OtherSettings;|' \
     "$pkgdir/usr/share/applications/ccsm.desktop"
 
-  # GWD téma választó
-  install -Dm755 "$srcdir/compiz-gtk-decorator-theme-selector" \
-    -t "$pkgdir/usr/bin/"
-  install -Dm644 "$srcdir/compiz-gtk-decorator-theme-selector.desktop" \
-    -t "$pkgdir/usr/share/applications/"
+  install -Dm755 "$srcdir/compiz-gtk-decorator-theme-selector" -t "$pkgdir/usr/bin/"
+  install -Dm644 "$srcdir/compiz-gtk-decorator-theme-selector.desktop" -t "$pkgdir/usr/share/applications/"
 
-  # Xfce autostart és eltávolító segéd
-  install -Dm755 "$srcdir"/compiz-xfce-{'autostart-setup','uninstall-helper'} \
-    -t "${pkgdir}/usr/bin/"
-  install -Dm644 "$srcdir"/compiz-xfce-{'autostart-setup','uninstall-helper'}.desktop \
-    -t "${pkgdir}/etc/xdg/autostart/"
+  install -Dm755 "$srcdir"/compiz-xfce-{'autostart-setup','uninstall-helper'} -t "${pkgdir}/usr/bin/"
+  install -Dm644 "$srcdir"/compiz-xfce-{'autostart-setup','uninstall-helper'}.desktop -t "${pkgdir}/etc/xdg/autostart/"
 
-  # Jogosultságok finomítása (bár a csomagolás általában megoldja)
   find "$pkgdir/usr/bin" -name "compiz-*" -exec chmod 755 {} \;
 }
