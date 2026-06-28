@@ -1,5 +1,4 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-# Contributor: Az easy-patch git változat készítője
 
 _pkgname='compiz'
 pkgname="${_pkgname}-easy-patch-git"
@@ -68,9 +67,9 @@ conflicts=(
   'simple-ccsm'
 )
 
-_pkgsrc="${_pkgname}"
+_pkgsrc="${_pkgname}"   # "compiz"
 source=(
-  "${pkgname}::git+https://git.launchpad.net/compiz"
+  "${_pkgsrc}::git+https://git.launchpad.net/compiz"
 
   # Alap patch-ek (compiz-git-ből és compiz-easy-patch-ből)
   "0001-reverse-unity-config.patch"
