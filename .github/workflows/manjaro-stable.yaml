@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Disk usage BEFORE cleanup
         run: |
@@ -99,7 +99,7 @@ jobs:
           lsblk || true
 
       - name: Checkout Code with Full History
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -118,7 +118,7 @@ jobs:
       # ================== CACHE: Yay AUR Cache ==================
       # Cache for AUR packages to avoid re-downloading AUR dependencies
       - name: Restore Yay AUR Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /mnt/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
@@ -129,7 +129,7 @@ jobs:
       # ================== CACHE: VPS Repository Mirror ==================
       # Cache for remote VPS packages to avoid re-downloading from VPS every run
       - name: Restore VPS Repository Mirror Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /mnt/vps_cache
           key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}
@@ -141,7 +141,7 @@ jobs:
       # ================== CACHE: Built Packages ==================
       # Cache for previously built packages to avoid rebuilding unchanged packages
       - name: Restore Built Packages Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             /mnt/build_artifacts
@@ -1021,28 +1021,28 @@ jobs:
       # ================== SAVE CACHES ==================
       # Save caches after successful build (or even on failure for debugging)
       - name: Save Pacman Package Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: always()
         with:
           path: /mnt/pacman_cache
           key: ${{ runner.os }}-pacman-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save Yay AUR Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: always()
         with:
           path: /mnt/yay_cache
           key: ${{ runner.os }}-yay-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Save VPS Repository Mirror Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: always()
         with:
           path: /mnt/vps_cache
           key: ${{ runner.os }}-vps-mirror-cache-manjaro-awesome-${{ hashFiles('packages.py') }}-${{ github.run_id }}
 
       - name: Save Built Packages Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: always()
         with:
           path: |
@@ -1053,7 +1053,7 @@ jobs:
 
       - name: Upload Build Artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-results-$(date +%Y%m%d-%H%M%S)
           path: |
