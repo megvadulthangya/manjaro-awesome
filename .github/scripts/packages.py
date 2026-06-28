@@ -30,6 +30,7 @@ LOCAL_PACKAGES = [
     "comfyui-cu126",
     "comfyui-cu126-git",
     "compiz-easy-patch",
+    "compiz-easy-patch-git",
 #    "stable-diffusion-webui-forge-sd35",
     "hyperfluent-grub-theme-manjaro",
     "dmgrub-nord-1080p",
