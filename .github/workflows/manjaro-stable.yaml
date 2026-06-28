@@ -39,11 +39,6 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-          remove-android: true
-          remove-dotnet: true
-          remove-haskell: true
-          remove-docker: true
-          force-remove-all-additional-packages: true
 
       - name: Disk usage AFTER cleanup
         run: |
