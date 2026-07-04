@@ -204,12 +204,28 @@ jobs:
           # NOTE: CacheDir modification is intentionally omitted here.
           # It will be applied AFTER the bootstrap/system upgrade to avoid
           # interfering with pacman's self-upgrade transaction.
-      - name: Switch Manjaro to testing branch
+          
+          
+      - name: Debug Manjaro branch
         run: |
-          echo "=== Switching to testing branch ==="
-          pacman-mirrors -B testing
-          pacman -Syy   # repo adatbázis frissítése az új branchhez
-          echo "✅ Branch switched to testing"
+          echo "=== pacman-mirrors version ==="
+          pacman-mirrors --version
+
+          echo
+          echo "=== pacman-mirrors help ==="
+          pacman-mirrors --help
+
+          echo
+          echo "=== pacman-mirrors.conf ==="
+          cat /etc/pacman-mirrors.conf || true
+
+          echo
+          echo "=== mirrorlist ==="
+          head -40 /etc/pacman.d/mirrorlist || true
+
+          echo
+          echo "=== os-release ==="
+          cat /etc/os-release
 
       - name: Install Python and Dependencies
         run: |
