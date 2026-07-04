@@ -59,7 +59,7 @@ jobs:
       contents: write  # Required for token-based git push
 
     container:
-      image: manjarolinux/build:testing
+      image: manjarolinux/build:latest
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
@@ -204,6 +204,12 @@ jobs:
           # NOTE: CacheDir modification is intentionally omitted here.
           # It will be applied AFTER the bootstrap/system upgrade to avoid
           # interfering with pacman's self-upgrade transaction.
+      - name: Switch Manjaro to testing branch
+        run: |
+          echo "=== Switching to testing branch ==="
+          pacman-mirrors -b testing
+          pacman -Syy   # repo adatbázis frissítése az új branchhez
+          echo "✅ Branch switched to testing"
 
       - name: Install Python and Dependencies
         run: |
