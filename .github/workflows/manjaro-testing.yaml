@@ -1,9 +1,9 @@
-name: Stable Manjaro Package Builder
+name: Testing Manjaro Package Builder
 
 on:
   workflow_dispatch:
-#  schedule:
-#    - cron: '0 3 * * *'  # Daily at 4 AM UTC
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 4 AM UTC
   push:
     paths:
       - 'packages.py'
@@ -59,7 +59,7 @@ jobs:
       contents: write  # Required for token-based git push
 
     container:
-      image: manjarolinux/build:latest
+      image: manjarolinux/build:testing
 
     env:
       # REQUIRED SECRETS (GitHub Secrets)
