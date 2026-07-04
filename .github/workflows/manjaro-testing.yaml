@@ -207,7 +207,7 @@ jobs:
       - name: Switch Manjaro to testing branch
         run: |
           echo "=== Switching to testing branch ==="
-          pacman-mirrors -b testing
+          pacman-mirrors -B testing
           pacman -Syy   # repo adatbázis frissítése az új branchhez
           echo "✅ Branch switched to testing"
 
