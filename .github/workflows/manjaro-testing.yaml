@@ -204,6 +204,19 @@ jobs:
           # NOTE: CacheDir modification is intentionally omitted here.
           # It will be applied AFTER the bootstrap/system upgrade to avoid
           # interfering with pacman's self-upgrade transaction.
+      - name: Switch Manjaro to testing
+        run: |
+          echo "=== Before ==="
+          grep Branch /etc/pacman-mirrors.conf || true
+          head -15 /etc/pacman.d/mirrorlist
+
+          pacman-mirrors --api -B testing -R
+
+          echo "=== After ==="
+          grep Branch /etc/pacman-mirrors.conf || true
+          head -15 /etc/pacman.d/mirrorlist
+
+          pacman -Syy
           
           
       - name: Debug Manjaro branch
