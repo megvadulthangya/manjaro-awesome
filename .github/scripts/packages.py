@@ -19,6 +19,7 @@ LOCAL_PACKAGES = [
     "stable-diffusion-webui-forge-cu124",
     "stable-diffusion-webui-forge-neo-git",
     "picom-pijulius-next-git",
+    "manjaro-awesome-keyring",
     "moneymanagerex",
     "nordic-theme-git",
     "nordic-theme",

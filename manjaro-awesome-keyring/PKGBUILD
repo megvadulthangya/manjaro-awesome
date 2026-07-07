@@ -1,0 +1,20 @@
+# Maintainer: Your Name <your@email.com>
+pkgname=manjaro-awesome-keyring
+pkgver=20260707
+pkgrel=1
+pkgdesc="PGP key for the Manjaro Awesome repository (repo.gshoots.hu)"
+arch=('any')
+url="https://repo.gshoots.hu/"
+license=('GPL')
+depends=('gnupg')
+makedepends=('gnupg')
+install=manjaro-awesome-keyring.install
+
+source=("https://repo.gshoots.hu/manjaro-awesome/x86_64/manjaro-awesome.pub")
+sha256sums=('c67f73ec76401d2c45db43756f71008644a61964f472d45d048598883b272a86')
+
+package() {
+    install -dm755 "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome"
+    install -m644 "$srcdir/manjaro-awesome.pub" \
+        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome/manjaro-awesome.asc"
+}
