@@ -1,4 +1,7 @@
 post_install() {
+    # Ensure pacman's GPG directory is initialized
+    pacman-key --init
+    # Load and trust the keys from the manjaro-awesome keyring
     pacman-key --populate manjaro-awesome
 }
 
