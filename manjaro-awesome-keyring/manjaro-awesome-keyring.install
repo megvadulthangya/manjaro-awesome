@@ -1,8 +1,9 @@
 post_install() {
-    # Ensure pacman's GPG directory is initialized
     pacman-key --init
-    # Load and trust the keys from the manjaro-awesome keyring
     pacman-key --populate manjaro-awesome
+
+    # Explicit local signing as a safety net (if populate didn't set trust)
+    pacman-key --lsign-key A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C
 }
 
 post_upgrade() {
