@@ -1,7 +1,7 @@
-# Maintainer: Your Name <your@email.com>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=manjaro-awesome-keyring
-pkgver=20260707
-pkgrel=1
+pkgver=20260708
+pkgrel=2
 pkgdesc="PGP key for the Manjaro Awesome repository (repo.gshoots.hu)"
 arch=('any')
 url="https://repo.gshoots.hu/"
@@ -14,7 +14,16 @@ source=("https://repo.gshoots.hu/manjaro-awesome/x86_64/manjaro-awesome.pub")
 sha256sums=('c67f73ec76401d2c45db43756f71008644a61964f472d45d048598883b272a86')
 
 package() {
-    install -dm755 "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome"
-    install -m644 "$srcdir/manjaro-awesome.pub" \
-        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome/manjaro-awesome.asc"
+    # Create the keyrings directory
+    install -dm755 "$pkgdir/usr/share/pacman/keyrings"
+
+    # Convert the ASCII-armored public key to a binary .gpg keyring
+    # (the file name MUST match the keyring name: manjaro-awesome.gpg)
+    gpg --dearmor < "$srcdir/manjaro-awesome.pub" > \
+        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome.gpg"
+
+    # Optional documentation
+    install -dm755 "$pkgdir/usr/share/doc/$pkgname"
+    echo "Manjaro Awesome signing key (repo.gshoots.hu)" > \
+        "$pkgdir/usr/share/doc/$pkgname/README"
 }
