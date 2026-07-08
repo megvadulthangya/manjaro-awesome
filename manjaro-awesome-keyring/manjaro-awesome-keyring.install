@@ -1,9 +1,10 @@
 post_install() {
-    pacman-key --init
+    # Inicializáld a pacman kulcstartót, ha még nincs
+    if ! pacman-key -l >/dev/null 2>&1; then
+        pacman-key --init
+    fi
+    # Töltsd be a kulcsot és a bizalmi beállításokat
     pacman-key --populate manjaro-awesome
-
-    # Explicit local signing as a safety net (if populate didn't set trust)
-    pacman-key --lsign-key A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C
 }
 
 post_upgrade() {

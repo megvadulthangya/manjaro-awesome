@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=manjaro-awesome-keyring
 pkgver=20260708
-pkgrel=2
+pkgrel=1
 pkgdesc="PGP key for the Manjaro Awesome repository (repo.gshoots.hu)"
 arch=('any')
 url="https://repo.gshoots.hu/"
@@ -14,16 +14,20 @@ source=("https://repo.gshoots.hu/manjaro-awesome/x86_64/manjaro-awesome.pub")
 sha256sums=('c67f73ec76401d2c45db43756f71008644a61964f472d45d048598883b272a86')
 
 package() {
-    # Create the keyrings directory
     install -dm755 "$pkgdir/usr/share/pacman/keyrings"
 
-    # Convert the ASCII-armored public key to a binary .gpg keyring
-    # (the file name MUST match the keyring name: manjaro-awesome.gpg)
+    # Konvertáld a nyilvános kulcsot bináris .gpg formátumba
     gpg --dearmor < "$srcdir/manjaro-awesome.pub" > \
         "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome.gpg"
 
-    # Optional documentation
+    # Hozd létre a -trusted fájlt a kulcs ujjlenyomatával és 4-es (ultimate) bizalmi szinttel
+    echo "A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C:4:" > \
+        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome-trusted"
+
+    # Ha vannak visszavont kulcsok, a -revoked fájlt is ide teheted (most üres)
+    touch "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome-revoked"
+
+    # Dokumentáció
     install -dm755 "$pkgdir/usr/share/doc/$pkgname"
-    echo "Manjaro Awesome signing key (repo.gshoots.hu)" > \
-        "$pkgdir/usr/share/doc/$pkgname/README"
+    echo "Manjaro Awesome signing key" > "$pkgdir/usr/share/doc/$pkgname/README"
 }
