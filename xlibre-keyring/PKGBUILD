@@ -16,6 +16,7 @@ arch=('any')
 url="https://github.com/xlibre/xlibre-keyring"
 license=('GPL-3.0-or-later')
 depends=('pacman')
+makedepends=('gnupg')
 install="${pkgname}.install"
 
 source=('Makefile'
