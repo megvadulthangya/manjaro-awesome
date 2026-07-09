@@ -25,12 +25,13 @@ source=('Makefile'
         'xlibre-archlinux-key.asc'
         'xlibre-manjarolinux-key.asc')
 # IMPORTANT: Replace the SKIP entries with the actual SHA256 hashes of the .asc files.
-# Run: sha256sum xlibre-archlinux-key.asc xlibre-manjarolinux-key.asc
+# Generate them with:
+#   sha256sum xlibre-archlinux-key.asc xlibre-manjarolinux-key.asc
 sha256sums=('SKIP'
             'SKIP'
             'SKIP'
-            'SKIP'   # <- replace with real hash
-            'SKIP')  # <- replace with real hash
+            'SKIP'   # <- replace with real hash of xlibre-archlinux-key.asc
+            'SKIP')  # <- replace with real hash of xlibre-manjarolinux-key.asc
 
 prepare() {
   # Generate the xlibre.gpg keyring from the local .asc files.
