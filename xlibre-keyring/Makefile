@@ -9,10 +9,6 @@ V        = 20260709
 PREFIX   = /usr
 KEYDIR   = $(DESTDIR)$(PREFIX)/share/pacman/keyrings/
 
-# Key fingerprints (for GPG import selection)
-ARCH_KEY_ID     = B97F7C613F359424
-MANJARO_KEY_ID  = D1445F51BC0A8969
-
 # Local ASCII-armored key files (using .gpg to avoid makepkg signature detection)
 ARCH_GPG        = xlibre-archlinux.gpg
 MANJARO_GPG     = xlibre-manjarolinux.gpg
@@ -31,7 +27,8 @@ update:
 		{ echo "ERROR: Failed to import $(MANJARO_GPG)"; exit 1; }
 
 	@echo "==> Exporting combined keyring to xlibre.gpg"
-	@gpg --homedir $(TEMPHOME) --export --armor $(ARCH_KEY_ID) $(MANJARO_KEY_ID) > xlibre.gpg
+	@gpg --homedir $(TEMPHOME) --export --armor > xlibre.gpg 2>/dev/null || \
+		{ echo "ERROR: Failed to export keyring"; exit 1; }
 	@rm -rf $(TEMPHOME)
 	@echo "==> Keyring update complete"
 
