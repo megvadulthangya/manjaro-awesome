@@ -14,8 +14,8 @@ ARCH_KEY_ID     = B97F7C613F359424
 MANJARO_KEY_ID  = D1445F51BC0A8969
 
 # Local ASCII-armored key files (renamed to avoid makepkg signature confusion)
-ARCH_ASC        = xlibre-archlinux-key.asc
-MANJARO_ASC     = xlibre-manjarolinux-key.asc
+ARCH_ASC        = xlibre-archlinux.asc
+MANJARO_ASC     = xlibre-manjarolinux.asc
 
 TEMPHOME = $(shell mktemp -d)
 
