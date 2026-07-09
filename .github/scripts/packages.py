@@ -55,6 +55,7 @@ LOCAL_PACKAGES = [
     "ttf-font-awesome-5",
     "tamzen-font",
     "nvidia-driver-assistant",
+    "xlibre-keyring",
     "grayjay-bin"
 ]
 

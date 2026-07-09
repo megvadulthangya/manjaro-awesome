@@ -1,0 +1,88 @@
+# xlibre-keyring.install
+# This script handles keyring updates, key deletion, and repository advice.
+# It is heavily commented to explain every step for future maintainers.
+
+# Helper function to print bold green messages
+msg() {
+    local ALL_OFF="\e[1;0m"
+    local BOLD="\e[1;1m"
+    local GREEN="${BOLD}\e[1;32m"
+
+    local MESSAGE=$1
+    shift 1
+    printf "${GREEN}==>${ALL_OFF}${BOLD} ${MESSAGE}${ALL_OFF}\n" "$@" >&2
+}
+
+# pre_upgrade: called before upgrading from an older version.
+# Here we clean up old or wrongly disabled keys from previous package versions.
+# The original manjaro-keyring cleanup logic is left commented for reference.
+# For xlibre, we remove the old/replaced signing key (73580DE2EDDFA6D6) if present.
+pre_upgrade() {
+    # ----------------------------------------------------------------------
+    # Example cleanup from Manjaro keyring (commented out):
+    # if [[ "$(vercmp $2 20220509-2)" -lt 0 ]]; then
+    #     msg "Delete wrongly disabled keys"
+    #     pacman-key -d 688E8F82879D0E25CE541426150C200743ED46D8
+    #     ...
+    # fi
+    # ----------------------------------------------------------------------
+
+    # Remove the old/revoked XLibre key if it was manually added before this package
+    if pacman-key -f 73580DE2EDDFA6D6 >/dev/null 2>&1; then
+        msg "Removing old/revoked XLibre key (73580DE2EDDFA6D6)"
+        pacman-key -d 73580DE2EDDFA6D6 2>/dev/null || true
+    fi
+}
+
+# post_upgrade: called after an upgrade (or fresh install via post_install).
+# It populates the pacman keyring with our trusted keys and prints
+# repository configuration advice based on the user's branch.
+post_upgrade() {
+    if /usr/bin/pacman-key -l >/dev/null 2>&1; then
+        /usr/bin/pacman-key --populate xlibre
+    else
+        echo " >>> Run \`pacman-key --init\` to set up your pacman keyring."
+        echo " >>> Then run \`pacman-key --populate xlibre\` to install the XLibre keyring."
+    fi
+
+    # ------------------------------------------------------------------
+    # After populating, advise the user which repository configuration
+    # to use in /etc/pacman.conf, depending on the detected Manjaro branch.
+    # Stable branch → use https://xlibre-manjaro.github.io/$arch
+    # Other branches or Arch → use https://packages.xlibre.net/arch/stable/$arch
+    # ------------------------------------------------------------------
+    echo ""
+    echo "  XLibre keyring installed successfully."
+    echo "  To enable the XLibre repository, add the following to /etc/pacman.conf:"
+    echo ""
+
+    # Try to detect Manjaro branch via /etc/manjaro-release
+    if [ -f /etc/manjaro-release ]; then
+        branch=$(grep -oP '(?<=branch=)\w+' /etc/manjaro-release 2>/dev/null)
+    else
+        branch=""
+    fi
+
+    if [ "$branch" = "stable" ]; then
+        echo "  [xlibre]"
+        echo "  Server = https://xlibre-manjaro.github.io/\$arch"
+        echo ""
+        echo "  (Manjaro stable branch detected)"
+    else
+        # All other Manjaro branches (testing, unstable) and Arch
+        echo "  [xlibre]"
+        echo "  Server = https://packages.xlibre.net/arch/stable/\$arch"
+        echo ""
+        echo "  (Non‑stable Manjaro branch or Arch Linux detected)"
+    fi
+    echo "  Then run:  sudo pacman -Syu"
+    echo ""
+}
+
+# post_install: called after a fresh installation (not an upgrade).
+# Just delegates to post_upgrade if pacman-key is available.
+post_install() {
+    if [ -x /usr/bin/pacman-key ]; then
+        post_upgrade
+    fi
+}
