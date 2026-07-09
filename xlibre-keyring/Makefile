@@ -9,46 +9,25 @@ V        = 20260709
 PREFIX   = /usr
 KEYDIR   = $(DESTDIR)$(PREFIX)/share/pacman/keyrings/
 
-# Local ASCII-armored key files (using .gpg extension to avoid makepkg PGP processing)
-ARCH_GPG        = xlibre-archlinux.gpg
-MANJARO_GPG     = xlibre-manjarolinux.gpg
-
-TEMPHOME = $(shell mktemp -d)
+ARCH_GPG    = xlibre-archlinux.gpg
+MANJARO_GPG = xlibre-manjarolinux.gpg
 
 .PHONY: update install uninstall
 
 update:
-	@echo "==> Creating temporary GPG home at $(TEMPHOME)"
-	@gpg --homedir $(TEMPHOME) --batch --import "$(ARCH_GPG)" ; \
-		if [ $$? -ne 0 ]; then \
-			echo "ERROR: Failed to import $(ARCH_GPG)"; \
-			rm -rf $(TEMPHOME); \
-			exit 1; \
-		fi
-
-	@gpg --homedir $(TEMPHOME) --batch --import "$(MANJARO_GPG)" ; \
-		if [ $$? -ne 0 ]; then \
-			echo "ERROR: Failed to import $(MANJARO_GPG)"; \
-			rm -rf $(TEMPHOME); \
-			exit 1; \
-		fi
-
-	@echo "==> Exporting combined keyring to xlibre.gpg"
-	@gpg --homedir $(TEMPHOME) --batch --export --armor > xlibre.gpg ; \
-		if [ $$? -ne 0 ]; then \
-			echo "ERROR: Failed to export keyring"; \
-			rm -rf $(TEMPHOME); \
-			exit 1; \
-		fi
-
-	@if [ ! -s xlibre.gpg ]; then \
-		echo "ERROR: Generated xlibre.gpg is empty!"; \
-		rm -rf $(TEMPHOME); \
+	@TEMPHOME=$$(mktemp -d); \
+	trap 'rm -rf "$$TEMPHOME"' EXIT; \
+	echo "==> Importing Arch XLibre key from $(ARCH_GPG)"; \
+	gpg --homedir "$$TEMPHOME" --batch --import "$(ARCH_GPG)" || exit 1; \
+	echo "==> Importing Manjaro XLibre key from $(MANJARO_GPG)"; \
+	gpg --homedir "$$TEMPHOME" --batch --import "$(MANJARO_GPG)" || exit 1; \
+	echo "==> Exporting combined keyring to xlibre.gpg"; \
+	gpg --homedir "$$TEMPHOME" --batch --export --armor > xlibre.gpg || exit 1; \
+	if [ ! -s xlibre.gpg ]; then \
+		echo "ERROR: Generated keyring is empty" >&2; \
 		exit 1; \
-	fi
-
-	@rm -rf $(TEMPHOME)
-	@echo "==> Keyring update complete"
+	fi; \
+	echo "==> Keyring update complete"
 
 install:
 	install -dm755 $(KEYDIR)

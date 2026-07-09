@@ -19,6 +19,9 @@ depends=('pacman')
 makedepends=('gnupg')
 install="${pkgname}.install"
 
+# SKIP tells makepkg not to try to verify any detached PGP signatures
+validpgpkeys=('SKIP')
+
 source=('Makefile'
         'xlibre-trusted'
         'xlibre-revoked'
