@@ -4,8 +4,7 @@
 # Contributor: Bernhard Landauer <bernhard[at]manjaro[dot]org>
 # This PKGBUILD provides the GPG keys for the XLibre xserver repositories.
 #
-# The .asc key files are stored alongside this PKGBUILD (renamed to avoid
-# makepkg treating them as detached signatures). Their integrity is
+# The .gpg key files are stored alongside this PKGBUILD. Their integrity is
 # verified via sha256sums. The Makefile prepares the combined keyring from them.
 # Trusted and revoked key lists are maintained statically.
 
@@ -22,19 +21,18 @@ install="${pkgname}.install"
 source=('Makefile'
         'xlibre-trusted'
         'xlibre-revoked'
-        'xlibre-archlinux.asc'
-        'xlibre-manjarolinux.asc')
-# IMPORTANT: Replace the SKIP entries with the actual SHA256 hashes of the .asc files.
-# Generate them with:
-#   sha256sum xlibre-archlinux-key.asc xlibre-manjarolinux-key.asc
+        'xlibre-archlinux.gpg'
+        'xlibre-manjarolinux.gpg')
+# IMPORTANT: Replace the SKIP entries with the actual SHA256 hashes of the .gpg files.
+# Run: sha256sum xlibre-archlinux.gpg xlibre-manjarolinux.gpg
 sha256sums=('SKIP'
             'SKIP'
             'SKIP'
-            'SKIP'   # <- replace with real hash of xlibre-archlinux.asc
-            'SKIP')  # <- replace with real hash of xlibre-manjarolinux.asc
+            'SKIP'   # <- replace with real hash
+            'SKIP')  # <- replace with real hash
 
 prepare() {
-  # Generate the xlibre.gpg keyring from the local .asc files.
+  # Generate the xlibre.gpg keyring from the local .gpg key files.
   cd "$srcdir"
   make update
 }
