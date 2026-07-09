@@ -1,63 +1,34 @@
 # Makefile for xlibre-keyring
-# Maintainer tooling:
-#   make update   - (re)generate xlibre.gpg from local .asc files or via
-#                   fallback downloads
-#   make install  - install keyring to system (typically used by PKGBUILD)
+# Manage the generation of xlibre.gpg from the .asc key files.
+# Maintainer targets:
+#   make update   - import local .asc files and export combined keyring
+#   make install  - install keyring to system (called by PKGBUILD)
 #   make uninstall- remove keyring files
 
 V        = 20260709
 PREFIX   = /usr
 KEYDIR   = $(DESTDIR)$(PREFIX)/share/pacman/keyrings/
 
-# Key fingerprints for XLibre repositories
+# Key fingerprints (for GPG import selection)
 ARCH_KEY_ID     = B97F7C613F359424
 MANJARO_KEY_ID  = D1445F51BC0A8969
 
-# URLs to the official key files (primary download source)
-ARCH_URL        = https://xlibre-arch.github.io/xlibre-archlinux.asc
-MANJARO_URL     = https://xlibre-manjaro.github.io/xlibre-manjarolinux.asc
-
-# Local file names (used if present, otherwise download)
+# Local ASCII-armored key files (must be present next to this Makefile)
 ARCH_ASC        = xlibre-archlinux.asc
 MANJARO_ASC     = xlibre-manjarolinux.asc
 
-# Temporary GPG home for import operations
 TEMPHOME = $(shell mktemp -d)
 
 .PHONY: update install uninstall
 
 update:
-	@echo "==> Obtaining Arch Linux XLibre key ($(ARCH_KEY_ID))"
-	@# Try local .asc file first, then fallback chain
-	@if [ -f "$(ARCH_ASC)" ]; then \
-		echo "   Using local $(ARCH_ASC)"; \
-		gpg --homedir $(TEMPHOME) --import "$(ARCH_ASC)" 2>/dev/null; \
-	else \
-		echo "   Downloading from primary URL..."; \
-		curl -fsS $(ARCH_URL) -o $(TEMPHOME)/arch.asc 2>/dev/null && \
-		gpg --homedir $(TEMPHOME) --import $(TEMPHOME)/arch.asc 2>/dev/null || \
-		(echo "   Primary URL failed, trying keyserver.ubuntu.com..."; \
-		 gpg --homedir $(TEMPHOME) --keyserver hkp://keyserver.ubuntu.com --recv-keys $(ARCH_KEY_ID) 2>/dev/null) || \
-		(echo "   Ubuntu keyserver failed, trying keys.openpgp.org..."; \
-		 gpg --homedir $(TEMPHOME) --keyserver hkps://keys.openpgp.org --recv-keys $(ARCH_KEY_ID) 2>/dev/null) || \
-		{ echo "ERROR: Could not obtain Arch key!"; exit 1; }; \
-	fi
+	@echo "==> Importing Arch XLibre key from $(ARCH_ASC)"
+	@gpg --homedir $(TEMPHOME) --import "$(ARCH_ASC)" 2>/dev/null || \
+		{ echo "ERROR: Failed to import $(ARCH_ASC)"; exit 1; }
 
-	@echo "==> Obtaining Manjaro XLibre key ($(MANJARO_KEY_ID))"
-	@# Try local .asc file first, then fallback chain
-	@if [ -f "$(MANJARO_ASC)" ]; then \
-		echo "   Using local $(MANJARO_ASC)"; \
-		gpg --homedir $(TEMPHOME) --import "$(MANJARO_ASC)" 2>/dev/null; \
-	else \
-		echo "   Downloading from primary URL..."; \
-		curl -fsS $(MANJARO_URL) -o $(TEMPHOME)/manjaro.asc 2>/dev/null && \
-		gpg --homedir $(TEMPHOME) --import $(TEMPHOME)/manjaro.asc 2>/dev/null || \
-		(echo "   Primary URL failed, trying keyserver.ubuntu.com..."; \
-		 gpg --homedir $(TEMPHOME) --keyserver hkp://keyserver.ubuntu.com --recv-keys $(MANJARO_KEY_ID) 2>/dev/null) || \
-		(echo "   Ubuntu keyserver failed, trying keys.openpgp.org..."; \
-		 gpg --homedir $(TEMPHOME) --keyserver hkps://keys.openpgp.org --recv-keys $(MANJARO_KEY_ID) 2>/dev/null) || \
-		{ echo "ERROR: Could not obtain Manjaro key!"; exit 1; }; \
-	fi
+	@echo "==> Importing Manjaro XLibre key from $(MANJARO_ASC)"
+	@gpg --homedir $(TEMPHOME) --import "$(MANJARO_ASC)" 2>/dev/null || \
+		{ echo "ERROR: Failed to import $(MANJARO_ASC)"; exit 1; }
 
 	@echo "==> Exporting combined keyring to xlibre.gpg"
 	@gpg --homedir $(TEMPHOME) --export --armor $(ARCH_KEY_ID) $(MANJARO_KEY_ID) > xlibre.gpg
