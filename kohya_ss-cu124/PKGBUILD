@@ -2,7 +2,7 @@
 
 _pkgname="kohya_ss"
 pkgname="kohya_ss-cu124"
-pkgver=r3450.d2c07a43
+pkgver=r3456.bf81f082
 pkgrel=1
 pkgdesc="Kohya_ss GUI (CUDA 12.4 backend) — supports NVIDIA GPUs with Compute Capability ≥5.0 (Kepler/Maxwell/Pascal/Volta/Turing/Ampere/Ada)"
 arch=('x86_64')
