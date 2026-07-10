@@ -1,20 +1,2 @@
-# xlibre-trusted
-# List of trusted key fingerprints for the XLibre repository, one per line.
-# Format:  fingerprint:trust_level:
-# Trust level "4" means "fully trusted" (as used by pacman-key).
-#
-# Current keys:
-B97F7C613F359424:4:   # Arch XLibre signing key
-D1445F51BC0A8969:4:   # Manjaro XLibre signing key
-
-# -------------------------------------------------------------------
-# The following entries are left commented for demonstration purposes.
-# They are the original Manjaro trusted keys that would be present
-# in a manjaro-keyring package. A maintainer can uncomment and adapt
-# if needed.
-#
-# 0037505D6C3F595C37F5626AFD847358FF20E35C:4:
-# 39F0EC1AE50B37E5F3196F09DAD3B211663CA268:4:
-# 22C903DE964E6FE321656E318DB9F8C18DF53602:4:
-# ... (many more)
-# -------------------------------------------------------------------
+B97F7C613F359424:4:
+D1445F51BC0A8969:4:

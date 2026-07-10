@@ -1,15 +1,1 @@
-# xlibre-revoked
-# List of revoked key fingerprints, one per line.
-# These keys have been withdrawn and should not be trusted.
-#
-# Current revoked keys:
-73580DE2EDDFA6D6   # Old XLibre signing key (replaced, no longer valid)
-
-# -------------------------------------------------------------------
-# Original Manjaro revoked keys are left commented as reference:
-#
-# 35B4FF23EA9477582C2A0AF12B80869C5C0102A6
-# B4663188A692DB1E45A98EE95BD96CC4247B52CC
-# 1E7908935AAB9A00D6B47503363DFFFD59152F77
-# ... (many more)
-# -------------------------------------------------------------------
+73580DE2EDDFA6D6
