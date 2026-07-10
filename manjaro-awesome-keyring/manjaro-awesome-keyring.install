@@ -1,12 +1,41 @@
-post_install() {
-    # Inicializáld a pacman kulcstartót, ha még nincs
-    if ! pacman-key -l >/dev/null 2>&1; then
-        pacman-key --init
-    fi
-    # Töltsd be a kulcsot és a bizalmi beállításokat
-    pacman-key --populate manjaro-awesome
+msg() {
+    local ALL_OFF="\e[1;0m"
+    local BOLD="\e[1;1m"
+    local GREEN="${BOLD}\e[1;32m"
+
+    local MESSAGE=$1
+    shift 1
+    printf "${GREEN}==>${ALL_OFF}${BOLD} ${MESSAGE}${ALL_OFF}\n" "$@" >&2
 }
 
+# -------------------------------------------------------------------
+# Example: How to revoke the current signing key if it ever needs replacement
+# -------------------------------------------------------------------
+# 1. Add the fingerprint of the key to be removed to manjaro-awesome-revoked
+#    (in this example: A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C)
+# 2. Uncomment and adjust the pre_upgrade() function below.
+# 3. Increment pkgver and rebuild the package.
+# 4. The new package will delete the old key on upgrade.
+# -------------------------------------------------------------------
+# pre_upgrade() {
+#   if [[ "$(vercmp $2 <oldversion>)" -lt 0 ]]; then
+#     msg "Revoking old Manjaro Awesome signing key"
+#     pacman-key -d A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C
+#   fi
+# }
+# -------------------------------------------------------------------
+
 post_upgrade() {
-    post_install
+	if usr/bin/pacman-key -l >/dev/null 2>&1; then
+		usr/bin/pacman-key --populate manjaro-awesome
+	else
+		echo " >>> Run \`pacman-key --init\` to set up your pacman keyring."
+		echo " >>> Then run \`pacman-key --populate manjaro-awesome\` to install the Manjaro Awesome keyring."
+	fi
+}
+
+post_install() {
+	if [ -x usr/bin/pacman-key ]; then
+		post_upgrade
+	fi
 }

@@ -1,33 +1,33 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-pkgname=manjaro-awesome-keyring
-pkgver=20260708
-pkgrel=1
-pkgdesc="PGP key for the Manjaro Awesome repository (repo.gshoots.hu)"
-arch=('any')
-url="https://repo.gshoots.hu/"
-license=('GPL')
-depends=('gnupg')
-makedepends=('gnupg')
-install=manjaro-awesome-keyring.install
+# Contributor: Philip Müller <philm[at]manjaro[dot]org>
+# Contributor: Bernhard Landauer <bernhard[at]manjaro[dot]org>
+# Contributor: Pierre Schmitz <pierre@archlinux.de>
 
-source=("https://repo.gshoots.hu/manjaro-awesome/x86_64/manjaro-awesome.pub")
-sha256sums=('c67f73ec76401d2c45db43756f71008644a61964f472d45d048598883b272a86')
+# Before building, generate manjaro-awesome.gpg with:
+#   gpg --export --armor A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C > manjaro-awesome.gpg
+
+pkgname=manjaro-awesome-keyring
+pkgver=20260117
+pkgrel=1
+pkgdesc="Manjaro Awesome PGP keyring"
+arch=('any')
+url="https://github.com/megvadulthangya/keyring/tree/manjaro-awesome"
+license=('GPL-3.0-or-later')
+depends=('pacman')
+install="${pkgname}.install"
+source=('Makefile'
+        'manjaro-awesome.gpg'
+        'manjaro-awesome-revoked'
+        'manjaro-awsome-trusted')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
+
+pkgver() {
+  date +%Y%m%d
+}
 
 package() {
-    install -dm755 "$pkgdir/usr/share/pacman/keyrings"
-
-    # Konvertáld a nyilvános kulcsot bináris .gpg formátumba
-    gpg --dearmor < "$srcdir/manjaro-awesome.pub" > \
-        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome.gpg"
-
-    # Hozd létre a -trusted fájlt a kulcs ujjlenyomatával és 4-es (ultimate) bizalmi szinttel
-    echo "A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C:4:" > \
-        "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome-trusted"
-
-    # Ha vannak visszavont kulcsok, a -revoked fájlt is ide teheted (most üres)
-    touch "$pkgdir/usr/share/pacman/keyrings/manjaro-awesome-revoked"
-
-    # Dokumentáció
-    install -dm755 "$pkgdir/usr/share/doc/$pkgname"
-    echo "Manjaro Awesome signing key" > "$pkgdir/usr/share/doc/$pkgname/README"
+  make DESTDIR="${pkgdir}" install
 }
