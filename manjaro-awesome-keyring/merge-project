@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+OUTPUT="full_project.txt"
+SCRIPT_NAME="merge-project"
+
+: > "$OUTPUT"
+
+echo "Szöveges fájlok összegyűjtése a(z) $OUTPUT fájlba..."
+
+find . -type f \
+  -not -path '*/.git/*' \
+  -not -name "$SCRIPT_NAME" \
+  -not -name "LICENSE" \
+  -not -path "./$OUTPUT" \
+  -print0 \
+| sort -z \
+| while IFS= read -r -d '' file; do
+    # Csak szöveges fájlok (binárisok kihagyása)
+    if ! grep -Iq '' "$file"; then
+      continue
+    fi
+
+    rel="${file#./}"
+
+    {
+      echo
+      echo "========================================="
+      echo "FILE: $rel"
+      echo "========================================="
+      echo
+      cat "$file"
+    } >> "$OUTPUT"
+  done
+
+echo "Kész: $OUTPUT"

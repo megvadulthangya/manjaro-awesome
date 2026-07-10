@@ -18,7 +18,7 @@ install="${pkgname}.install"
 source=('Makefile'
         'manjaro-awesome.gpg'
         'manjaro-awesome-revoked'
-        'manjaro-awsome-trusted')
+        'manjaro-awesome-trusted')
 sha256sums=('SKIP'
             'SKIP'
             'SKIP'
