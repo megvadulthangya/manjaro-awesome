@@ -1,0 +1,45 @@
+## Colored message
+
+#colored_msg() {
+  NC="\033[0m'"  # No color
+  BOLD="\e[1;1m"
+  MAIA="${BOLD}\e[32;1;24;144;200m"
+#  local mesg=$1; shift
+#  "${MAIA}==>${NC}${BOLD} ${mesg}${NC}" "$@" >&2
+#}
+
+post_upgrade() {
+
+## Apply accent color to Gtk3 / Gtk4 applications
+#echo ""
+  printf   "==> ${MAIA}To apply your preferred accent color to Gtk3 / Gtk4 applications 
+    to match the system Libadwaita theme, run the following script from your terminal:
+    -> accent-color-change${NC}\n"
+#echo ""
+
+## Check if printing support is installed
+
+#if pacman -Qi cups > /dev/null 2>&1; then
+#  echo ""
+#    colored_msg "Printing support installed"
+#  echo ""
+#else
+#  echo ""
+#    colored_msg "Printing support not installed, to enable run the following from your terminal:
+#      -> pamac install manjaro-printer
+#      -> or install manjaro-printer package via Add/Remove Software"
+#  echo ""
+#fi
+
+## Inform users about QT style changes
+
+#if pacman -Qi qt5ct > /dev/null 2>&1; then
+#  echo ""
+#    colored_msg "We have switched back to QGnomePlatform for GNOME 42.
+#      qt5ct and qt6ct (Qt Configuration Utilities) may be marked as orphans.
+#      If you want use QGnomePlatform with the Adwaita Qt style,
+#      you'll need remove or comment the QT_QPA_PLATFORMTHEME variable
+#      in /etc/environment."
+#  echo ""
+#fi
+}
