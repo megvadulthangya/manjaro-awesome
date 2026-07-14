@@ -20,18 +20,23 @@ pkgver() {
 
 prepare() {
   cd "${srcdir}/capitaine-cursors"
-  # Javítás: az npx tsc helyett közvetlenül tsc (a yarn úgyis elérhetővé teszi)
+  # Javítás: npx helyett közvetlen tsc (bár a yarn elérhetővé tenné, de biztos ami biztos)
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
 }
 
 package() {
   cd "${srcdir}/capitaine-cursors"
+
+  # Fontos: fejlesztői függőségek telepítéséhez NODE_ENV=development
+  export NODE_ENV=development
+
   install -Ddm755 "$pkgdir/usr/share/icons"
   for style in Default Nord Gruvbox Palenight ; do
     ./patch.sh "${style}"
     make unix
-    cp -dr --no-preserve=ownership "themes/*" "$pkgdir/usr/share/icons/"
+    # Helyes cp parancs – idézőjelek nélkül a * kiterjed
+    cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
     git checkout -- .
   done
 }
