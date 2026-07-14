@@ -1,8 +1,8 @@
-# Maintainer: Your Name <you@example.com>
-pkgname=capitaine-cursors-custom-git
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+pkgname=capitaine-cursors-nord-git
 pkgver=r55.b97fd0c
 pkgrel=1
-pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (custom fork)"
+pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (Nord variant, custom fork)"
 arch=('any')
 url="https://github.com/megvadulthangya/capitaine-cursors"
 license=('GPL3')
@@ -11,14 +11,13 @@ makedepends=('git' 'yarn' 'nodejs' 'python' 'python-pip' 'python-clickgen')
 provides=("${pkgname%-git}")
 conflicts=("${pkgname%-git}")
 
-# Use your fork and the CI branch
 _gitname=capitaine-cursors
 source=("${_gitname}::git+https://github.com/megvadulthangya/capitaine-cursors.git#branch=CI")
 sha256sums=('SKIP')
 
 pkgver() {
   cd "$_gitname"
-  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
