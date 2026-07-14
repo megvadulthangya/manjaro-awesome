@@ -30,6 +30,12 @@ package() {
   install -Ddm755 "${pkgdir}/usr/share/icons"
 
   ./patch.sh Nord
+
+  # Explicitly install bitmapper Node.js dependencies
+  cd bitmapper
+  yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
+  cd ..
+
   make unix
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
 }
