@@ -1,0 +1,36 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=capitaine-cursors-nord-git
+pkgver=r19.g9b12de9
+pkgrel=1
+pkgdesc="Capitaine cursor theme with Nord color palette (git version)"
+arch=(any)
+url="https://github.com/sainnhe/capitaine-cursors"
+license=(LGPL3)
+source=("${pkgname}::git+${url}.git#branch=master")
+provides=('capitaine-cursors-nord')
+conflicts=('capitaine-cursors' 'capitaine-cursors-sainnhe-git' 'capitaine-cursors-nord-variant-git')
+makedepends=(git libx11 libxcursor libpng nodejs yarn python python-pip)
+sha256sums=('SKIP')
+
+pkgver() {
+  local _repo="${srcdir}/${pkgname}"
+  if [[ -d "${_repo}/.git" ]]; then
+    printf "r%s.%s" \
+      "$(git -C "${_repo}" rev-list --count HEAD)" \
+      "$(git -C "${_repo}" rev-parse --short=8 HEAD)"
+  else
+    return 1
+  fi
+}
+
+package() {
+  local _srcdir="${srcdir}/${pkgname}"
+  cd "${_srcdir}"
+  install -Ddm755 "${pkgdir}/usr/share/icons"
+
+  ./patch.sh Nord
+  make unix
+  cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
+}
+
