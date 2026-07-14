@@ -1,44 +1,46 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-
-pkgname=capitaine-cursors-nord-git
-pkgver=r19.g9b12de9
+# Maintainer: Your Name <you@example.com>
+pkgname=capitaine-cursors-custom-git
+pkgver=r55.b97fd0c
 pkgrel=1
-pkgdesc="Capitaine cursor theme with Nord color palette (git version)"
-arch=(any)
-url="https://github.com/sainnhe/capitaine-cursors"
-license=(LGPL3)
-source=("${pkgname}::git+${url}.git#branch=master")
-provides=('capitaine-cursors-nord')
-conflicts=('capitaine-cursors' 'capitaine-cursors-sainnhe-git' 'capitaine-cursors-nord-variant-git')
-makedepends=(git libx11 libxcursor libpng nodejs npm yarn typescript chromium python python-pip)
+pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (custom fork)"
+arch=('any')
+url="https://github.com/megvadulthangya/capitaine-cursors"
+license=('GPL3')
+depends=('libxcursor' 'libx11' 'libpng' 'gcc-libs')
+makedepends=('git' 'yarn' 'nodejs' 'python' 'python-pip' 'python-clickgen')
+provides=("${pkgname%-git}")
+conflicts=("${pkgname%-git}")
+
+# Use your fork and the CI branch
+_gitname=capitaine-cursors
+source=("${_gitname}::git+https://github.com/megvadulthangya/capitaine-cursors.git#branch=CI")
 sha256sums=('SKIP')
 
 pkgver() {
-  local _repo="${srcdir}/${pkgname}"
-  if [[ -d "${_repo}/.git" ]]; then
-    printf "r%s.%s" \
-      "$(git -C "${_repo}" rev-list --count HEAD)" \
-      "$(git -C "${_repo}" rev-parse --short=8 HEAD)"
-  else
-    return 1
-  fi
+  cd "$_gitname"
+  git describe --long --tags | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  cd "$_gitname"
+
+  # Build bitmaps (SVG → PNG)
+  cd bitmapper
+  yarn install
+  yarn render:dark
+  yarn render:light
+  cd ..
+
+  # Build cursor themes
+  cd builder
+  python -m pip install --user clickgen
+  python build.py
 }
 
 package() {
-  local _srcdir="${srcdir}/${pkgname}"
-  cd "${_srcdir}"
-  install -Ddm755 "${pkgdir}/usr/share/icons"
+  cd "$_gitname"
 
-  ./patch.sh Nord
-
-  cd bitmapper
-  yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
-  cd ..
-
-  # Helyi gépen ezek a beállítások működnek; CI-ben sajnos nem elégségesek
-  env PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --disable-namespace-sandbox" \
-      make unix
-
-  cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
+  # Install cursor themes
+  install -dm755 "$pkgdir/usr/share/icons"
+  cp -r themes/* "$pkgdir/usr/share/icons/"
 }
