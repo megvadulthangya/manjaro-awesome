@@ -18,6 +18,13 @@ pkgver() {
   git describe origin/master --long --tags | sed 's/^r//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
 
+prepare() {
+  cd "${srcdir}/capitaine-cursors"
+  # Javítás: az npx tsc helyett közvetlenül tsc (a yarn úgyis elérhetővé teszi)
+  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
+  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
+}
+
 package() {
   cd "${srcdir}/capitaine-cursors"
   install -Ddm755 "$pkgdir/usr/share/icons"
