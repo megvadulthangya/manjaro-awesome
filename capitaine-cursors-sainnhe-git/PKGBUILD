@@ -54,8 +54,18 @@ prepare() {
   NODE_ENV=development yarn install
   cd ..
 
-  # Python clickgen telepítés globálisan, root joggal
-  sed -i 's|@python3 -m pip install clickgen --user|@sudo python3 -m pip install --break-system-packages --root-user-action=ignore clickgen|' builder/Makefile
+  # Python virtuális környezet a clickgen számára
+  python3 -m venv builder/venv
+  builder/venv/bin/pip install --upgrade pip
+  builder/venv/bin/pip install clickgen
+
+  # A builder Makefile módosítása, hogy a venv Pythonját használja
+  cd builder
+  # setup cél – legyen üres
+  sed -i 's/^setup:.*/setup:\n\t@true/' Makefile
+  # python3 lecserélése a venv Pythonra
+  sed -i 's|@python3 build.py|@./venv/bin/python build.py|g' Makefile
+  cd ..
 }
 
 package() {
@@ -78,7 +88,7 @@ package() {
 
     # Render + build
     make -C bitmapper install render_dark render_light
-    make -C builder setup build_unix
+    make -C builder build_unix
 
     cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
     git checkout -- .
