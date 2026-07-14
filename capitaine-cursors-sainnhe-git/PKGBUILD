@@ -48,7 +48,7 @@ prepare() {
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
 
-  # Ne töltse le a saját Chromiumját, a rendszerét fogjuk használni
+  # Rendszer Chromium használata, ne töltsön le sajátot
   export PUPPETEER_SKIP_DOWNLOAD=true
   cd bitmapper
   NODE_ENV=development yarn install
@@ -64,7 +64,7 @@ package() {
   for style in Default Nord Gruvbox Palenight ; do
     ./patch.sh "${style}"
 
-    # Indítási argumentumok beillesztése a Puppeteer számára (no‑sandbox szükséges CI‑ben)
+    # Indítási argumentumok a Puppeteer számára
     sed -i '/ignoreDefaultArgs:/d' bitmapper/packages/core/src/BitmapsGenerator.ts
     sed -i '/headless: true,/a\
       args: [\
@@ -73,7 +73,10 @@ package() {
         "--disable-dev-shm-usage",\
       ],' bitmapper/packages/core/src/BitmapsGenerator.ts
 
-    make unix
+    # Render és build közvetlenül a megfelelő könyvtárakban
+    make -C bitmapper install render_dark render_light
+    make -C builder setup build_unix
+
     cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
     git checkout -- .
   done
