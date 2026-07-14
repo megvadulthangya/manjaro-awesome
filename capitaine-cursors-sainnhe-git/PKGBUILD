@@ -48,12 +48,6 @@ prepare() {
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
 
-  # Rendszer Chromium, ne töltsön le sajátot
-  export PUPPETEER_SKIP_DOWNLOAD=true
-  cd bitmapper
-  NODE_ENV=development yarn install
-  cd ..
-
   # Python virtuális környezet a kompatibilis clickgen számára
   python3 -m venv builder/venv
   builder/venv/bin/pip install clickgen==1.2.1
@@ -68,7 +62,13 @@ prepare() {
 package() {
   cd "${srcdir}/capitaine-cursors"
   export NODE_ENV=development
+  export PUPPETEER_SKIP_DOWNLOAD=true
   export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+  # Node függőségek telepítése itt (a package() már működő környezet)
+  cd bitmapper
+  yarn install
+  cd ..
 
   install -Ddm755 "$pkgdir/usr/share/icons"
   for style in Default Nord Gruvbox Palenight ; do
