@@ -10,7 +10,7 @@ license=(LGPL3)
 source=("${pkgname}::git+${url}.git#branch=master")
 provides=('capitaine-cursors-nord')
 conflicts=('capitaine-cursors' 'capitaine-cursors-sainnhe-git' 'capitaine-cursors-nord-variant-git')
-makedepends=(git libx11 libxcursor libpng nodejs yarn python python-pip)
+makedepends=(git libx11 libxcursor libpng nodejs npm yarn python python-pip)
 sha256sums=('SKIP')
 
 pkgver() {
@@ -33,4 +33,3 @@ package() {
   make unix
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
 }
-
