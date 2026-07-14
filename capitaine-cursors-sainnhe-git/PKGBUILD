@@ -1,7 +1,7 @@
 # Maintainer: Sainnhe Park <sainnhe@gmail.com>
 
 pkgname=capitaine-cursors-sainnhe-git
-pkgver=5.r19.g9b12de9
+pkgver=5.r22.gff16e74
 pkgrel=1
 pkgdesc="Sainnhe's fork of capitaine cursor theme, patched with some additional variants (Gruvbox, Nord, Palenight)"
 arch=(any)
