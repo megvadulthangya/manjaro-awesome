@@ -10,7 +10,7 @@ license=(LGPL3)
 source=("${pkgname}::git+${url}.git#branch=master")
 provides=('capitaine-cursors-nord')
 conflicts=('capitaine-cursors' 'capitaine-cursors-sainnhe-git' 'capitaine-cursors-nord-variant-git')
-makedepends=(git libx11 libxcursor libpng nodejs npm yarn typescript nss alsa-lib python python-pip)
+makedepends=(git libx11 libxcursor libpng nodejs npm yarn typescript nss alsa-lib chromium python python-pip)
 sha256sums=('SKIP')
 
 pkgver() {
@@ -35,8 +35,11 @@ package() {
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
   cd ..
 
-  # A Chromium konténerbarát indításához szükséges argumentumok
-  env PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu" make unix
+  # A rendszer chromium böngészőjét használjuk (friss, kompatibilis)
+  # és hozzáadjuk a konténerbarát indítási argumentumokat
+  env PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu" \
+      make unix
 
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
 }
