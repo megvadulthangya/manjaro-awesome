@@ -32,6 +32,7 @@ makedepends=(
   mesa
   pango
   ttf-liberation
+  chromium
 )
 sha256sums=('SKIP')
 
@@ -42,36 +43,35 @@ pkgver() {
 
 prepare() {
   cd "${srcdir}/capitaine-cursors"
+
   # Javítás: npx helyett közvetlen tsc
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
 
-  # Függőségek telepítése (devDependencies is)
+  # Ne töltse le a saját Chromiumját, a rendszerét fogjuk használni
+  export PUPPETEER_SKIP_DOWNLOAD=true
   cd bitmapper
   NODE_ENV=development yarn install
   cd ..
-
-  # Beszúrandó argumentumok a Puppeteer számára
-  cat > /tmp/puppeteer_args.txt << 'EOF'
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-EOF
 }
 
 package() {
   cd "${srcdir}/capitaine-cursors"
   export NODE_ENV=development
+  export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
   install -Ddm755 "$pkgdir/usr/share/icons"
   for style in Default Nord Gruvbox Palenight ; do
     ./patch.sh "${style}"
 
-    # A Puppeteer indítási paramétereinek javítása a TypeScript forrásban
+    # Indítási argumentumok beillesztése a Puppeteer számára (no‑sandbox szükséges CI‑ben)
     sed -i '/ignoreDefaultArgs:/d' bitmapper/packages/core/src/BitmapsGenerator.ts
-    sed -i '/headless: true,/r /tmp/puppeteer_args.txt' bitmapper/packages/core/src/BitmapsGenerator.ts
+    sed -i '/headless: true,/a\
+      args: [\
+        "--no-sandbox",\
+        "--disable-setuid-sandbox",\
+        "--disable-dev-shm-usage",\
+      ],' bitmapper/packages/core/src/BitmapsGenerator.ts
 
     make unix
     cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
