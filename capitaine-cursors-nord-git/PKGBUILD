@@ -31,13 +31,19 @@ package() {
 
   ./patch.sh Nord
 
+  # Telepítjük a bitmapper Node.js függőségeit
   cd bitmapper
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
+
+  # Létrehozzuk a Puppeteer konfigurációs fájlt, hogy a Chromium --no-sandbox kapcsolóval induljon
+  cat > .puppeteerrc.cjs << 'EOF'
+module.exports = {
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+};
+EOF
+
   cd ..
 
-  # A CI konténerben a Chromiumnak szüksége van a --no-sandbox opcióra
-  export PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox"
   make unix
-
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
 }
