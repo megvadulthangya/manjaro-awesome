@@ -50,7 +50,8 @@ prepare() {
 
   # Python virtuális környezet a kompatibilis clickgen számára
   python3 -m venv builder/venv
-  builder/venv/bin/pip install clickgen==1.2.1
+  # Használj clickgen 1.2.0-t, amelyben még megtalálható a clickgen.util modul
+  builder/venv/bin/pip install clickgen==1.2.0
 
   # A builder Makefile módosítása: setup üres, python3 → venv python
   cd builder
@@ -65,7 +66,7 @@ package() {
   export PUPPETEER_SKIP_DOWNLOAD=true
   export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-  # Node függőségek telepítése itt (a package() már működő környezet)
+  # Node függőségek telepítése
   cd bitmapper
   yarn install
   cd ..
