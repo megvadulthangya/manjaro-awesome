@@ -65,6 +65,7 @@ AUR_PACKAGES = [
 #    "picom-pijulius-next-git",
     "gtkd",
     "qt5-styleplugins",
+    "papirus-folders-nordic",
     "urxvt-resize-font-git",
     "i3lock-color",
     "raw-thumbnailer",
