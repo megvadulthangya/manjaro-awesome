@@ -6,7 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
-    "capitaine-cursors-nord-git",
+#    "capitaine-cursors-nord-git",
 #    "lua54",
 #    "lgi",
     "gghelper",
@@ -66,6 +66,7 @@ AUR_PACKAGES = [
 #    "picom-pijulius-next-git",
     "gtkd",
     "qt5-styleplugins",
+    "capitaine-cursors-nord-git",
     "papirus-folders-nordic",
     "urxvt-resize-font-git",
     "i3lock-color",
