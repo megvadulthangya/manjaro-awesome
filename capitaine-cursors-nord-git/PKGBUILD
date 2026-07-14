@@ -10,7 +10,7 @@ license=(LGPL3)
 source=("${pkgname}::git+${url}.git#branch=master")
 provides=('capitaine-cursors-nord')
 conflicts=('capitaine-cursors' 'capitaine-cursors-sainnhe-git' 'capitaine-cursors-nord-variant-git')
-makedepends=(git libx11 libxcursor libpng nodejs npm yarn typescript nss python python-pip)
+makedepends=(git libx11 libxcursor libpng nodejs npm yarn typescript nss alsa-lib python python-pip)
 sha256sums=('SKIP')
 
 pkgver() {
@@ -31,7 +31,6 @@ package() {
 
   ./patch.sh Nord
 
-  # Bitmapper Node.js függőségek telepítése
   cd bitmapper
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
   cd ..
