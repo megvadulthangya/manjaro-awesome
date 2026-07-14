@@ -54,8 +54,8 @@ prepare() {
   NODE_ENV=development yarn install
   cd ..
 
-  # Python clickgen telepítés globálisan (a rendszer site-packages-be)
-  sed -i 's|pip install clickgen --user|pip install --break-system-packages --root-user-action=ignore clickgen|' builder/Makefile
+  # Python clickgen telepítés globálisan, root joggal
+  sed -i 's|@python3 -m pip install clickgen --user|@sudo python3 -m pip install --break-system-packages --root-user-action=ignore clickgen|' builder/Makefile
 }
 
 package() {
