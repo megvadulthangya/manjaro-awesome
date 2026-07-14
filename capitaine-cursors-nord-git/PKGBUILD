@@ -33,15 +33,31 @@ package() {
 
   cd bitmapper
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
+
+  # Puppeteer konfigurációs fájl létrehozása, hogy a rendszer Chromiumot
+  # a szükséges (konténerbarát) argumentumokkal indítsa
+  cat > puppeteer.config.cjs << 'EOF'
+const path = require('path');
+
+module.exports = {
+  executablePath: '/usr/bin/chromium',
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-zygote',
+    '--single-process',
+    '--disable-namespace-sandbox'
+  ],
+};
+EOF
+
   cd ..
 
-  # Eltávolítjuk a fakeroot LD_PRELOAD-ját, hogy a Chromium ne örökölje
+  # Eltávolítjuk a fakeroot LD_PRELOAD-ját
   unset LD_PRELOAD
 
-  # Rendszer chromium + teljes sandbox kikapcsolás és zygote/single‑process
-  env PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --single-process" \
-      make unix
-
+  make unix
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
 }
