@@ -10,7 +10,27 @@ license=(LGPL3)
 source=("git+${url}.git#branch=master")
 provides=('capitaine-cursors')
 conflicts=('capitaine-cursors')
-makedepends=(git libx11 libxcursor libpng nodejs yarn python python-pip nss)
+makedepends=(
+  git
+  libx11
+  libxcursor
+  libpng
+  nodejs
+  yarn
+  python
+  python-pip
+  nss
+  alsa-lib
+  atk
+  cups
+  gtk3
+  libdrm
+  libxcomposite
+  libxdamage
+  libxrandr
+  mesa
+  pango
+)
 sha256sums=('SKIP')
 
 pkgver() {
@@ -20,10 +40,10 @@ pkgver() {
 
 prepare() {
   cd "${srcdir}/capitaine-cursors"
-  # Az npx hívások cseréje közvetlen tsc-re
+  # Javítás: npx helyett közvetlen tsc
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
-  # Függőségek (devDependencies is) telepítése még a fakeroot előtt
+  # Függőségek (devDependencies is) telepítése
   cd bitmapper
   NODE_ENV=development yarn install
 }
