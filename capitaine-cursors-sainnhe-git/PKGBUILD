@@ -44,15 +44,18 @@ pkgver() {
 prepare() {
   cd "${srcdir}/capitaine-cursors"
 
-  # Javítás: npx helyett közvetlen tsc
+  # npx → tsc
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
 
-  # Rendszer Chromium használata, ne töltsön le sajátot
+  # Rendszer Chromium, ne töltsön le sajátot
   export PUPPETEER_SKIP_DOWNLOAD=true
   cd bitmapper
   NODE_ENV=development yarn install
   cd ..
+
+  # Python csomag telepítés engedélyezése CI-ben (PEP 668)
+  sed -i 's/pip install clickgen --user/pip install --break-system-packages clickgen/' builder/Makefile
 }
 
 package() {
@@ -73,7 +76,7 @@ package() {
         "--disable-dev-shm-usage",\
       ],' bitmapper/packages/core/src/BitmapsGenerator.ts
 
-    # Render és build közvetlenül a megfelelő könyvtárakban
+    # Render + build
     make -C bitmapper install render_dark render_light
     make -C builder setup build_unix
 
