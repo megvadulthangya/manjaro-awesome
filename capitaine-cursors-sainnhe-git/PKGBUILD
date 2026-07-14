@@ -54,8 +54,8 @@ prepare() {
   NODE_ENV=development yarn install
   cd ..
 
-  # Python csomag telepítés engedélyezése CI-ben (PEP 668)
-  sed -i 's/pip install clickgen --user/pip install --break-system-packages clickgen/' builder/Makefile
+  # Python clickgen telepítés globálisan (a rendszer site-packages-be)
+  sed -i 's|pip install clickgen --user|pip install --break-system-packages --root-user-action=ignore clickgen|' builder/Makefile
 }
 
 package() {
