@@ -35,9 +35,12 @@ package() {
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
   cd ..
 
-  # Rendszer chromium + konténerbarát argumentumok (no‑zygote, single‑process)
+  # Eltávolítjuk a fakeroot LD_PRELOAD-ját, hogy a Chromium ne örökölje
+  unset LD_PRELOAD
+
+  # Rendszer chromium + konténerbarát argumentumok (namespace sandbox kikapcsolása)
   env PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --single-process" \
+      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-namespace-sandbox" \
       make unix
 
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
