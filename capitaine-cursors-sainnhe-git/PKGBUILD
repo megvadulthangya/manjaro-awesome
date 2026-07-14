@@ -22,6 +22,7 @@ makedepends=(
   nss
   alsa-lib
   atk
+  at-spi2-atk
   cups
   gtk3
   libdrm
@@ -30,6 +31,7 @@ makedepends=(
   libxrandr
   mesa
   pango
+  ttf-liberation
 )
 sha256sums=('SKIP')
 
@@ -43,9 +45,20 @@ prepare() {
   # Javítás: npx helyett közvetlen tsc
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
   sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
-  # Függőségek (devDependencies is) telepítése
+
+  # Függőségek telepítése (devDependencies is)
   cd bitmapper
   NODE_ENV=development yarn install
+  cd ..
+
+  # Beszúrandó argumentumok a Puppeteer számára
+  cat > /tmp/puppeteer_args.txt << 'EOF'
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+      ],
+EOF
 }
 
 package() {
@@ -55,6 +68,11 @@ package() {
   install -Ddm755 "$pkgdir/usr/share/icons"
   for style in Default Nord Gruvbox Palenight ; do
     ./patch.sh "${style}"
+
+    # A Puppeteer indítási paramétereinek javítása a TypeScript forrásban
+    sed -i '/ignoreDefaultArgs:/d' bitmapper/packages/core/src/BitmapsGenerator.ts
+    sed -i '/headless: true,/r /tmp/puppeteer_args.txt' bitmapper/packages/core/src/BitmapsGenerator.ts
+
     make unix
     cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
     git checkout -- .
