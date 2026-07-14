@@ -33,30 +33,11 @@ package() {
 
   cd bitmapper
   yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache
-
-  # A Puppeteer konfigurációs fájl: a rendszer chromiumját használjuk
-  # a szükséges (konténerbarát) argumentumokkal
-  cat > .puppeteerrc.cjs << 'EOF'
-module.exports = {
-  executablePath: '/usr/bin/chromium',
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--no-zygote',
-    '--disable-namespace-sandbox'
-  ]
-};
-EOF
-
   cd ..
 
-  # A fakeroot eltávolítása, hogy a Chromium ne örökölje a libfakeroot-ot
-  unset LD_PRELOAD
-
-  # Biztonsági környezeti változók (a konfig fájl mellett)
+  # Helyi gépen ezek a beállítások működnek; CI-ben sajnos nem elégségesek
   env PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+      PUPPETEER_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --disable-namespace-sandbox" \
       make unix
 
   cp -dr --no-preserve=ownership themes/* "${pkgdir}/usr/share/icons/"
