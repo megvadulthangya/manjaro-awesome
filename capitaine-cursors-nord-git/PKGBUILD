@@ -7,7 +7,24 @@ arch=('any')
 url="https://github.com/megvadulthangya/capitaine-cursors"
 license=('GPL3')
 depends=('libxcursor' 'libx11' 'libpng' 'gcc-libs')
-makedepends=('git' 'yarn' 'nodejs' 'python' 'python-pip' 'python-clickgen')
+makedepends=(
+    'git'
+    'yarn'
+    'nodejs'
+    'python'
+    'python-pip'
+    'python-clickgen'
+    # Chromium/Puppeteer runtime libs for headless build
+    'nss'
+    'gtk3'
+    'libxcomposite'
+    'libxdamage'
+    'libxrandr'
+    'mesa'
+    'alsa-lib'
+    'at-spi2-core'
+    'libdrm'
+)
 provides=("${pkgname%-git}")
 conflicts=("${pkgname%-git}")
 
