@@ -54,16 +54,13 @@ prepare() {
   NODE_ENV=development yarn install
   cd ..
 
-  # Python virtuális környezet a clickgen számára
+  # Python virtuális környezet a kompatibilis clickgen számára
   python3 -m venv builder/venv
-  builder/venv/bin/pip install --upgrade pip
-  builder/venv/bin/pip install clickgen
+  builder/venv/bin/pip install clickgen==1.2.1
 
-  # A builder Makefile módosítása, hogy a venv Pythonját használja
+  # A builder Makefile módosítása: setup üres, python3 → venv python
   cd builder
-  # setup cél – legyen üres
   sed -i 's/^setup:.*/setup:\n\t@true/' Makefile
-  # python3 lecserélése a venv Pythonra
   sed -i 's|@python3 build.py|@./venv/bin/python build.py|g' Makefile
   cd ..
 }
