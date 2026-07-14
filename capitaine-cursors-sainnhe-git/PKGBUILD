@@ -44,13 +44,8 @@ pkgver() {
 prepare() {
   cd "${srcdir}/capitaine-cursors"
 
-  # npx → tsc
-  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
-  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
-
   # Python virtuális környezet a kompatibilis clickgen számára
   python3 -m venv builder/venv
-  # Használj clickgen 1.2.0-t, amelyben még megtalálható a clickgen.util modul
   builder/venv/bin/pip install clickgen==1.2.0
 
   # A builder Makefile módosítása: setup üres, python3 → venv python
@@ -66,7 +61,7 @@ package() {
   export PUPPETEER_SKIP_DOWNLOAD=true
   export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-  # Node függőségek telepítése
+  # Node függőségek telepítése (csak egyszer, a git checkout után is megmaradnak)
   cd bitmapper
   yarn install
   cd ..
@@ -75,7 +70,11 @@ package() {
   for style in Default Nord Gruvbox Palenight ; do
     ./patch.sh "${style}"
 
-    # Indítási argumentumok a Puppeteer számára
+    # Alapvető javítások, amiket a git checkout felülírna, ezért ide tesszük
+    sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
+    sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
+
+    # Puppeteer argumentumok a CI-hez
     sed -i '/ignoreDefaultArgs:/d' bitmapper/packages/core/src/BitmapsGenerator.ts
     sed -i '/headless: true,/a\
       args: [\
