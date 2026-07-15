@@ -2,7 +2,7 @@
 # Contributor: Sainnhe Park <sainnhe@gmail.com>
 
 pkgname=capitaine-cursors-nord-git
-pkgver=r22.gff16e74
+pkgver=r75.ff16e74
 pkgrel=1
 pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (Nord variant, built from Sainnhe's fork)"
 arch=('any')
