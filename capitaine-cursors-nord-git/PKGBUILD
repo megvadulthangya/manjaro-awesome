@@ -1,35 +1,43 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Sainnhe Park <sainnhe@gmail.com>
+
 pkgname=capitaine-cursors-nord-git
-pkgver=r55.b97fd0c
+pkgver=r22.gff16e74
 pkgrel=1
-pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (Nord variant, custom fork)"
+pkgdesc="An x-cursor theme inspired by macOS and based on KDE Breeze (Nord variant, built from Sainnhe's fork)"
 arch=('any')
-url="https://github.com/megvadulthangya/capitaine-cursors"
+url="https://github.com/sainnhe/capitaine-cursors"
 license=('GPL3')
-depends=('libxcursor' 'libx11' 'libpng' 'gcc-libs')
 makedepends=(
-    'git'
-    'yarn'
-    'nodejs'
-    'python'
-    'python-pip'
-    'python-clickgen'
-    # Chromium/Puppeteer runtime libs for headless build
-    'nss'
-    'gtk3'
-    'libxcomposite'
-    'libxdamage'
-    'libxrandr'
-    'mesa'
-    'alsa-lib'
-    'at-spi2-core'
-    'libdrm'
+  git
+  libx11
+  libxcursor
+  libpng
+  nodejs
+  yarn
+  python
+  python-pip
+  nss
+  alsa-lib
+  atk
+  at-spi2-atk
+  cups
+  gtk3
+  libdrm
+  libxcomposite
+  libxdamage
+  libxrandr
+  mesa
+  pango
+  ttf-liberation
+  chromium
 )
+depends=('libxcursor' 'libx11' 'libpng' 'gcc-libs')
 provides=("${pkgname%-git}")
 conflicts=("${pkgname%-git}")
 
 _gitname=capitaine-cursors
-source=("${_gitname}::git+https://github.com/megvadulthangya/capitaine-cursors.git#branch=CI")
+source=("${_gitname}::git+https://github.com/sainnhe/capitaine-cursors.git#branch=master")
 sha256sums=('SKIP')
 
 pkgver() {
@@ -37,26 +45,52 @@ pkgver() {
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
-build() {
+prepare() {
   cd "$_gitname"
 
-  # Build bitmaps (SVG → PNG)
-  cd bitmapper
-  yarn install
-  yarn render:dark
-  yarn render:light
-  cd ..
-
-  # Build cursor themes
-  cd builder
-  python -m pip install --user clickgen
-  python build.py
+  # Python virtuális környezet a kompatibilis clickgen számára
+  python3 -m venv builder/venv
+  builder/venv/bin/pip install clickgen==1.2.0
 }
 
 package() {
   cd "$_gitname"
+  export NODE_ENV=development
+  export PUPPETEER_SKIP_DOWNLOAD=true
+  export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-  # Install cursor themes
-  install -dm755 "$pkgdir/usr/share/icons"
-  cp -r themes/* "$pkgdir/usr/share/icons/"
+  # Node függőségek
+  cd bitmapper
+  yarn install
+  cd ..
+
+  # Csak a Nord változat építése
+  ./patch.sh Nord
+
+  # Az npx hívások cseréje tsc-re (a patch.sh visszaállíthatja az eredetit)
+  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/dark/package.json
+  sed -i 's/npx tsc --build/tsc --build/' bitmapper/packages/light/package.json
+
+  # Puppeteer argumentumok a CI környezethez
+  sed -i '/ignoreDefaultArgs:/d' bitmapper/packages/core/src/BitmapsGenerator.ts
+  sed -i '/headless: true,/a\
+      args: [\
+        "--no-sandbox",\
+        "--disable-setuid-sandbox",\
+        "--disable-dev-shm-usage",\
+      ],' bitmapper/packages/core/src/BitmapsGenerator.ts
+
+  # Builder Makefile módosítása (venv python használata)
+  cd builder
+  sed -i 's/^setup:.*/setup:\n\t@true/' Makefile
+  sed -i 's|@python3 build.py|@./venv/bin/python build.py|g' Makefile
+  cd ..
+
+  # Render + build
+  make -C bitmapper install render_dark render_light
+  make -C builder build_unix
+
+  # Telepítés
+  install -Ddm755 "$pkgdir/usr/share/icons"
+  cp -dr --no-preserve=ownership themes/* "$pkgdir/usr/share/icons/"
 }
