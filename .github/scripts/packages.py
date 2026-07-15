@@ -63,6 +63,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "papirus-nord",
     "libinput-gestures",
 #    "picom-pijulius-next-git",
     "gtkd",
