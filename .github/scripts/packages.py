@@ -41,6 +41,7 @@ LOCAL_PACKAGES = [
     "dmgrub-nord-1440p",
     "dmgrub-nord-1440p-ai",
     "manjaro-distro-grub-theme",
+    "manjaro-gnome-settings",
     "manjaro-distro-grub-theme-ai",
     "gtk2",
     "awesome-freedesktop-git",
