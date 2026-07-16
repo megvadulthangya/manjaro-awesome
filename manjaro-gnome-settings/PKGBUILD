@@ -28,7 +28,7 @@ package_manjaro-gnome-settings() {
     'accent-color-change'
     'nordic-standard-buttons-theme-git'
     'nordzy-icon-theme'
-    'capitaine-nord-git'
+    'capitaine-cursors-nord-git'
     'manjaro-gnome-backgrounds'
     'manjaro-base-skel'
     'ttf-firacode-nerd'
