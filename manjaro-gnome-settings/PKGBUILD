@@ -76,14 +76,14 @@ package_manjaro-gnome-settings() {
   cp -r profile.d skel "${pkgdir}"/etc/
 
   # Qt5Ct / Qt6Ct color schemes (Nord)
-  install -Dm644 colors/Adwaita-nord.conf -t \
-    "${pkgdir}"/usr/share/qt5ct/colors/
-  install -Dm644 colors/Adwaita-nord-dark.conf -t \
-    "${pkgdir}"/usr/share/qt5ct/colors/
-  install -Dm644 colors/Adwaita-nord.conf -t \
-    "${pkgdir}"/usr/share/qt6ct/colors/
-  install -Dm644 colors/Adwaita-nord-dark.conf -t \
-    "${pkgdir}"/usr/share/qt6ct/colors/
+#   install -Dm644 colors/Adwaita-nord.conf -t \
+#    "${pkgdir}"/usr/share/qt5ct/colors/
+#  install -Dm644 colors/Adwaita-nord-dark.conf -t \
+#    "${pkgdir}"/usr/share/qt5ct/colors/
+#  install -Dm644 colors/Adwaita-nord.conf -t \
+#    "${pkgdir}"/usr/share/qt6ct/colors/
+#  install -Dm644 colors/Adwaita-nord-dark.conf -t \
+#    "${pkgdir}"/usr/share/qt6ct/colors/
 
   # GTK4 symlinks to Nordic-standard-buttons theme
   mkdir -p "${pkgdir}/etc/skel/.config/gtk-4.0"
