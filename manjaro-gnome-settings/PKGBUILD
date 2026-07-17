@@ -90,7 +90,7 @@ package_manjaro-gnome-settings() {
 #    "${pkgdir}/etc/skel/.config/gtk-4.0/assets"
   ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk.css"
-  ln -s /usr/share/themes/Nordic-darker-standard-buttons/gtk-4.0/gtk-dark.css \
+  ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk-dark.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk-dark.css"
 }
 
