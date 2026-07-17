@@ -29,7 +29,6 @@ package_manjaro-gnome-settings() {
     'nordic-standard-buttons-theme-git'
     'nordzy-icon-theme'
     'capitaine-cursors-nord-git'
-    'manjaro-gnome-backgrounds'
     'manjaro-base-skel'
     'ttf-firacode-nerd'
   )
@@ -87,11 +86,11 @@ package_manjaro-gnome-settings() {
 
   # GTK4 symlinks to Nordic-standard-buttons theme
   mkdir -p "${pkgdir}/etc/skel/.config/gtk-4.0"
-  ln -s /usr/share/themes/Nordic-standard-buttons/assets \
-    "${pkgdir}/etc/skel/.config/gtk-4.0/assets"
+#  ln -s /usr/share/themes/Nordic-standard-buttons/assets \
+#    "${pkgdir}/etc/skel/.config/gtk-4.0/assets"
   ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk.css"
-  ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk-dark.css \
+  ln -s /usr/share/themes/Nordic-darker-standard-buttons/gtk-4.0/gtk-dark.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk-dark.css"
 }
 
