@@ -74,6 +74,7 @@ AUR_PACKAGES = [
     "i3lock-color",
     "raw-thumbnailer",
     "gsconnect",
+    "gnome-shell-extension-nightthemeswitcher",
     "betterlockscreen",
 #    "nordic-theme",
     "geany-nord-theme",
