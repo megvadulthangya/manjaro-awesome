@@ -1,0 +1,85 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgbase=nordic-polar-theme-git
+pkgname=(
+    nordic-polar-theme-git
+    nordic-polar-standard-buttons-theme-git
+)
+pkgver=r100.abcdef1   # a pkgver() úgyis felülírja, csak placeholder
+pkgrel=1
+pkgdesc="Nordic-Polar themes for GTK (light, cold variant of Nordic) - Latest Git HEAD"
+arch=('any')
+url="https://github.com/EliverLara/Nordic-Polar"
+license=('GPL3')
+makedepends=('git' 'sassc')
+
+source=(
+    "Nordic-Polar::git+${url}.git#branch=master"
+    "Nordic-Polar-standard-buttons::git+${url}.git#branch=standard-buttons"
+)
+sha256sums=('SKIP' 'SKIP')
+
+pkgver() {
+    cd "$srcdir/Nordic-Polar"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+_package() {
+    local _reponame="$1"
+    local _pkgname="$2"
+    local _targetdir="$pkgdir/usr/share/themes/$_reponame"
+
+    cd "$srcdir/$_reponame"
+
+    # SCSS -> CSS fordítás
+    if [[ -f gtk-3.0/gtk.scss ]]; then
+        sassc -M -t expanded gtk-3.0/gtk.scss gtk-3.0/gtk.css
+        sassc -M -t expanded gtk-3.0/gtk-dark.scss gtk-3.0/gtk-dark.css
+    fi
+    if [[ -f gtk-4.0/gtk.scss ]]; then
+        sassc -M -t expanded gtk-4.0/gtk.scss gtk-4.0/gtk.css
+        sassc -M -t expanded gtk-4.0/gtk-dark.scss gtk-4.0/gtk-dark.css
+    fi
+    if [[ -f cinnamon/cinnamon.scss ]]; then
+        sassc -M -t expanded cinnamon/cinnamon.scss cinnamon/cinnamon.css
+        sassc -M -t expanded cinnamon/cinnamon-dark.scss cinnamon/cinnamon-dark.css
+    fi
+    if [[ -f gnome-shell/gnome-shell.scss ]]; then
+        sassc -M -t expanded gnome-shell/gnome-shell.scss gnome-shell/gnome-shell.css
+    fi
+
+    # Témafájlok másolása
+    install -d "$_targetdir"
+    cp -a --no-preserve=ownership . "$_targetdir/"
+
+    # Takarítás
+    rm -rf "$_targetdir/.git" \
+           "$_targetdir/.gitignore" \
+           "$_targetdir/FUNDING.yml" \
+           "$_targetdir/LICENSE" \
+           "$_targetdir/README.md" \
+           "$_targetdir/Gulpfile.js" \
+           "$_targetdir/package.json" \
+           "$_targetdir/package-lock.json"
+    find "$_targetdir" -type f -name '*.old' -delete
+
+    # Licenc + opcionális README
+    install -Dm644 "$srcdir/$_reponame/LICENSE" \
+        "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+    if [[ -f "$srcdir/$_reponame/README.md" ]]; then
+        install -Dm644 "$srcdir/$_reponame/README.md" \
+            "$pkgdir/usr/share/doc/$_pkgname/README.md"
+    fi
+}
+
+package_nordic-polar-theme-git() {
+    provides=("nordic-polar-theme")
+    conflicts=("nordic-polar-theme")
+    _package "Nordic-Polar" "nordic-polar-theme-git"
+}
+
+package_nordic-polar-standard-buttons-theme-git() {
+    provides=("nordic-polar-standard-buttons-theme")
+    conflicts=("nordic-polar-standard-buttons-theme")
+    _package "Nordic-Polar-standard-buttons" "nordic-polar-standard-buttons-theme-git"
+}
