@@ -24,6 +24,7 @@ LOCAL_PACKAGES = [
     "manjaro-awesome-keyring",
     "moneymanagerex",
     "nordic-theme-git",
+    "nordic-polar-theme-git",
     "nordic-theme",
     "kohya_ss",
     "kohya_ss-cu124",

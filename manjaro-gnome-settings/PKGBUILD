@@ -27,6 +27,7 @@ package_manjaro-gnome-settings() {
   depends=(
     'accent-color-change'
     'nordic-standard-buttons-theme-git'
+    'nordic-polar-standard-buttons-theme-git'
     'nordzy-icon-theme'
     'capitaine-cursors-nord-git'
     'manjaro-base-skel'
@@ -88,7 +89,7 @@ package_manjaro-gnome-settings() {
   mkdir -p "${pkgdir}/etc/skel/.config/gtk-4.0"
 #  ln -s /usr/share/themes/Nordic-standard-buttons/assets \
 #    "${pkgdir}/etc/skel/.config/gtk-4.0/assets"
-  ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk.css \
+  ln -s /usr/share/themes/Nordic-Polar-standard-buttons/gtk-4.0/gtk.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk.css"
   ln -s /usr/share/themes/Nordic-standard-buttons/gtk-4.0/gtk-dark.css \
     "${pkgdir}/etc/skel/.config/gtk-4.0/gtk-dark.css"
