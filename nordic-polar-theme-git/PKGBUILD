@@ -5,7 +5,7 @@ pkgname=(
     nordic-polar-theme-git
     nordic-polar-standard-buttons-theme-git
 )
-pkgver=r100.abcdef1   # a pkgver() úgyis felülírja, csak placeholder
+pkgver=r277.2f4b9e2
 pkgrel=1
 pkgdesc="Nordic-Polar themes for GTK (light, cold variant of Nordic) - Latest Git HEAD"
 arch=('any')
