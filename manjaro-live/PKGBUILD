@@ -1,0 +1,71 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# Contributor: artoo <artoo@manjaro.org>
+# Contributor: anex <assassin.anex[@]gmail.com>
+
+pkgname=(
+  'manjaro-live-base'
+#  'manjaro-live-openrc'
+  'manjaro-live-systemd'
+  'manjaro-live-skel'
+  'manjaro-live-portable-efi'
+)
+pkgbase=manjaro-live
+pkgver=20241119
+pkgrel=1
+pkgdesc="Manjaro Linux live session"
+arch=('any')
+url="https://gitlab.manjaro.org/tools/development-tools/manjaro-tools-livecd"
+license=('GPL-3.0-or-later')
+makedepends=('git')
+_commit=56b53f56a2d35e05eeebe2a4f028b30afc93a99f
+source=("git+https://gitlab.manjaro.org/tools/development-tools/manjaro-tools-livecd.git#commit=${_commit}")
+sha256sums=('a1d296b6442a5825e415cd484e38ff9a71c7a260225196d9748ca020bea26b9c')
+
+pkgver() {
+  cd manjaro-tools-livecd
+  git show -s --date=format:'%Y%m%d' --format=%cd
+}
+
+build() {
+  cd manjaro-tools-livecd
+  make PREFIX='/usr'
+}
+
+package_manjaro-live-base() {
+  pkgdesc="Manjaro Linux live base scripts"
+  depends=('manjaro-tools-base')
+
+  cd manjaro-tools-livecd
+  make PREFIX='/usr' DESTDIR="${pkgdir}" install_base
+}
+
+package_manjaro-live-openrc() {
+  pkgdesc="Manjaro Linux live openrc init scripts"
+  depends=('openrc' 'manjaro-live-base')
+
+  cd manjaro-tools-livecd
+  make PREFIX='/usr' DESTDIR="${pkgdir}" install_rc
+}
+
+package_manjaro-live-systemd() {
+  pkgdesc="Manjaro Linux live systemd units"
+  depends=('systemd' 'manjaro-live-base')
+
+  cd manjaro-tools-livecd
+  make PREFIX='/usr' DESTDIR="${pkgdir}" install_sd
+}
+
+package_manjaro-live-skel() {
+  pkgdesc="Manjaro Linux live session autostart items"
+
+  cd manjaro-tools-livecd
+  make PREFIX='/usr' DESTDIR="${pkgdir}" install_xdg
+}
+
+package_manjaro-live-portable-efi() {
+  pkgdesc="Manjaro Linux live session portable efi settings"
+  depends=('grub')
+
+  cd manjaro-tools-livecd
+  make PREFIX='/usr' DESTDIR="${pkgdir}" install_portable_efi
+}
