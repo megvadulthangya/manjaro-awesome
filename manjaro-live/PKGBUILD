@@ -1,4 +1,5 @@
-# Maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Philip Müller <philm[at]manjaro[dog]org>
 # Contributor: artoo <artoo@manjaro.org>
 # Contributor: anex <assassin.anex[@]gmail.com>
 
@@ -17,9 +18,8 @@ arch=('any')
 url="https://gitlab.manjaro.org/tools/development-tools/manjaro-tools-livecd"
 license=('GPL-3.0-or-later')
 makedepends=('git')
-_commit=56b53f56a2d35e05eeebe2a4f028b30afc93a99f
-source=("git+https://gitlab.manjaro.org/tools/development-tools/manjaro-tools-livecd.git#commit=${_commit}")
-sha256sums=('a1d296b6442a5825e415cd484e38ff9a71c7a260225196d9748ca020bea26b9c')
+source=("git+https://github.com/megvadulthangya/manjaro-tools-livecd.git#branch=workingon")
+sha256sums=('SKIP')
 
 pkgver() {
   cd manjaro-tools-livecd
