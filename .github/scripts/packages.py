@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
     "manjaro-live",
+    "gvc-git",
     "gsconnect",
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
