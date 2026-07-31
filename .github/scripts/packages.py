@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
     "manjaro-live",
+    "gsconnect",
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
     "capitaine-cursors-nord-git",
@@ -74,7 +75,7 @@ AUR_PACKAGES = [
     "urxvt-resize-font-git",
     "i3lock-color",
     "raw-thumbnailer",
-    "gsconnect",
+#    "gsconnect",
     "gnome-shell-extension-nightthemeswitcher",
     "betterlockscreen",
 #    "nordic-theme",
