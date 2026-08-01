@@ -11,7 +11,7 @@ pkgname=(
   'manjaro-live-portable-efi'
 )
 pkgbase=manjaro-live
-pkgver=20241119
+pkgver=20260801
 pkgrel=1
 pkgdesc="Manjaro Linux live session"
 arch=('any')
