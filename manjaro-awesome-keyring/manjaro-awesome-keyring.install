@@ -26,17 +26,16 @@ msg() {
 # -------------------------------------------------------------------
 
 post_upgrade() {
-	# Automatikus inicializálás, ha a pacman kulcstartó még nincs kész
-	if ! usr/bin/pacman-key -l >/dev/null 2>&1; then
-		msg "Initializing pacman keyring..."
-		usr/bin/pacman-key --init
-	fi
-	# Kulcstartó betöltése
-	usr/bin/pacman-key --populate manjaro-awesome
+    if usr/bin/pacman-key -l >/dev/null 2>&1; then
+        usr/bin/pacman-key --populate manjaro-awesome
+    else
+        echo " >>> Run \`pacman-key --init\` to set up your pacman keyring."
+        echo " >>> Then run \`pacman-key --populate manjaro-awesome\` to install the Manjaro Awesome keyring."
+    fi
 }
 
 post_install() {
-	if [ -x usr/bin/pacman-key ]; then
-		post_upgrade
-	fi
+    if [ -x usr/bin/pacman-key ]; then
+        post_upgrade
+    fi
 }
