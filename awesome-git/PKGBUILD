@@ -15,7 +15,7 @@ depends=(
   'libxdg-basedir'
   'libxkbcommon-x11'
   'lua'
-  'lua-lgi-git',
+  'lua-lgi-git'
 #  'lua-lgi'
   'pango'
   'startup-notification'
