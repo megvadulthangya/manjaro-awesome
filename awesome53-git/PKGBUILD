@@ -1,9 +1,9 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
-pkgname=awesome-git
+pkgname=awesome53-git
 pkgver=4.3.1745.gef525c2ec
 pkgrel=1
-pkgdesc='Highly configurable framework window manager (Lua 5.5 build)'
+pkgdesc='Highly configurable framework window manager (Lua 5.3 build)'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
 license=('GPL2')
@@ -14,8 +14,8 @@ depends=(
   'gdk-pixbuf2'
   'libxdg-basedir'
   'libxkbcommon-x11'
-  'lua'
-  'lua-lgi'
+  'lua53'
+  'lua53-lgi'
   'pango'
   'startup-notification'
   'xcb-util-cursor'
@@ -32,7 +32,7 @@ makedepends=(
   'git'
   'imagemagick'
   'luarocks'
-  'lua-penlight'
+  'lua53-penlight'
   'xmlto'
 )
 
@@ -44,12 +44,12 @@ optdepends=(
 )
 
 provides=('notification-daemon' 'awesome')
-conflicts=('awesome' 'awesome53-git' 'awesome54-git')
+conflicts=('awesome' 'awesome54-git')
 
 source=("$pkgname::git+https://github.com/awesomeWM/awesome.git")
 md5sums=('SKIP')
 
-_LUA_VER=5.5
+_LUA_VER=5.3
 
 pkgver() {
   cd "$srcdir/$pkgname"
@@ -62,7 +62,7 @@ build() {
 
   mkdir -p "$builddir" "$rockstree"
 
-  luarocks --lua-version=5.5 --tree="$rockstree" install ldoc --deps-mode=none
+  luarocks --lua-version=5.3 --tree="$rockstree" install ldoc --deps-mode=none
 
   export PATH="$rockstree/bin:$PATH"
 

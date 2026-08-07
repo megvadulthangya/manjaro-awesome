@@ -3,7 +3,7 @@
 pkgname=awesome54-git
 pkgver=4.3.1745.gef525c2ec
 pkgrel=1
-pkgdesc='Highly configurable framework window manager'
+pkgdesc='Highly configurable framework window manager (Lua 5.4 build)'
 arch=('i686' 'x86_64')
 url='https://awesomewm.org/'
 license=('GPL2')

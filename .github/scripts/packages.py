@@ -51,6 +51,7 @@ LOCAL_PACKAGES = [
     "lain-git",
     "awesome-rofi",
     "awesome-git",
+    "awesome53-git",
     "awesome54-git",
     "awesome-welcome",
     "awesome-welcome-ai",
