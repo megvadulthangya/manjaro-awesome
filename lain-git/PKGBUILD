@@ -1,15 +1,15 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 # upstream: Luca CPZ <luca.cpz [at] gmail [dot] com>
-# Modified for local build with automatic versioning
+# Modified for local build from megvadulthangya/lain lua5.5-compatibility branch
 
 _pkgname=lain
 pkgname=$_pkgname-git
 pkgver=r1800.34a8d51
 pkgrel=1
 epoch=1
-pkgdesc="Layouts, asynchronous widgets and utilities for Awesome WM"
+pkgdesc="Layouts, asynchronous widgets and utilities for Awesome WM (lua5.5-compat fork)"
 arch=("any")
-url="https://github.com/lcpz/$_pkgname"
+url="https://github.com/megvadulthangya/$_pkgname"
 license=("GPL2")
 depends=("awesome")
 makedepends=("git")
@@ -18,8 +18,8 @@ provides=("$_pkgname")
 conflicts=("$_pkgname")
 # SKIP checksum for CI/CD compatibility
 sha256sums=("SKIP")
-# Use direct GitHub URL - NO AUR CAPTCHA!
-source=("git+https://github.com/lcpz/lain.git")
+# Use the fork with specific branch
+source=("git+https://github.com/megvadulthangya/lain.git#branch=lua5.5-compatibility")
 
 pkgver() {
     cd "$_pkgname"
