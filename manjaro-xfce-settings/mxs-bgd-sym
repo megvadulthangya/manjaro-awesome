@@ -1,0 +1,6 @@
+#!/bin/bash
+for i in $(ls /usr/share/backgrounds/); do
+    if [ -f "/usr/share/backgrounds/$i" ]; then
+        ln -sfv /usr/share/backgrounds/$i /usr/share/backgrounds/xfce/$i
+    fi;
+done;

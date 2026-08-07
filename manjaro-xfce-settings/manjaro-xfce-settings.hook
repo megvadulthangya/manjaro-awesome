@@ -1,0 +1,11 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/share/backgrounds/*
+
+[Action]
+Description = Creating background picture sym-links for XFCE...
+When = PostTransaction
+Exec = /usr/bin/%BIN%
