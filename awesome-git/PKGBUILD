@@ -15,8 +15,7 @@ depends=(
   'libxdg-basedir'
   'libxkbcommon-x11'
   'lua'
-  'lua-lgi-git'
-#  'lua-lgi'
+  'lua-lgi-git'          # Lua 5.5 kompatibilis verzió
   'pango'
   'startup-notification'
   'xcb-util-cursor'
@@ -32,8 +31,6 @@ makedepends=(
   'docbook-xsl'
   'git'
   'imagemagick'
-  'luarocks'
-  'lua-penlight'
   'xmlto'
 )
 
@@ -59,13 +56,8 @@ pkgver() {
 
 build() {
   local builddir="$srcdir/build"
-  local rockstree="$srcdir/luarocks-tree"
 
-  mkdir -p "$builddir" "$rockstree"
-
-  luarocks --lua-version=5.5 --tree="$rockstree" install ldoc --deps-mode=none
-
-  export PATH="$rockstree/bin:$PATH"
+  mkdir -p "$builddir"
 
   cd "$builddir"
   cmake "$srcdir/$pkgname" \
@@ -75,7 +67,7 @@ build() {
     -DLUA_INCLUDE_DIR=/usr/include/lua${_LUA_VER} \
     -DLUA_LIBRARY=/usr/lib/liblua.so.${_LUA_VER} \
     -DLUA_EXECUTABLE=/usr/bin/lua${_LUA_VER} \
-    -DLDOC_EXECUTABLE="$rockstree/bin/ldoc" \
+    -DGENERATE_DOCS=OFF \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
   make
