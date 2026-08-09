@@ -7,7 +7,7 @@ pkgname=(
   'manjaro-gnome-extension-settings'
 )
 pkgbase=manjaro-gnome-settings
-pkgver=20260717
+pkgver=20260809
 pkgrel=1
 arch=('any')
 url="https://github.com/megvadulthangya/manjaro-gnome-settings"
