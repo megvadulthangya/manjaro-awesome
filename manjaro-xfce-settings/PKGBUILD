@@ -8,8 +8,8 @@
 pkgbase=manjaro-xfce-settings
 pkgname=('manjaro-xfce-settings'
          'manjaro-xfce-minimal-settings')
-pkgver=20260221
-pkgrel=4
+pkgver=20260810
+pkgrel=1
 pkgdesc="Manjaro Linux Xfce settings"
 arch=('any')
 url="https://github.com/megvadulthangya/manjaro-xfce-settings"
