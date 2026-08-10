@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
     "manjaro-xfce-settings",
+    "nordic-wallpaper-default",
     "manjaro-live-base",
     "gsconnect",
     "cuda-12.9",

@@ -1,0 +1,15 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+pkgname=nordic-wallpaper-default
+pkgver=1.0
+pkgrel=1
+pkgdesc="Default Nordic wallpaper for Manjaro Xfce"
+arch=('any')
+url="https://github.com/megvadulthangya/nordic-backgrounds"
+license=('GPL')
+source=("ign_manjaro.jpg")
+sha256sums=('SKIP')
+
+package() {
+    install -Dm644 "$srcdir/ign_manjaro.jpg" \
+        "$pkgdir/usr/share/backgrounds/nordic-backgrounds/ign_manjaro.jpg"
+}

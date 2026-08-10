@@ -1,0 +1,150 @@
+
+=========================================
+FILE: manjaro-xfce-settings.hook
+=========================================
+
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/share/backgrounds/*
+
+[Action]
+Description = Creating background picture sym-links for XFCE...
+When = PostTransaction
+Exec = /usr/bin/%BIN%
+
+=========================================
+FILE: mxs-bgd-sym
+=========================================
+
+#!/bin/bash
+for i in $(ls /usr/share/backgrounds/); do
+    if [ -f "/usr/share/backgrounds/$i" ]; then
+        ln -sfv /usr/share/backgrounds/$i /usr/share/backgrounds/xfce/$i
+    fi;
+done;
+
+=========================================
+FILE: PKGBUILD
+=========================================
+
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Maintainer: Philip Müller <philm@manjaro.org>
+# Maintainer: Mark Wagie <mark at manjaro dot org>
+# Contributor: Bernhard Landauer <oberon@manjaro.org>
+# Contributor: Ramon Buldó
+# Contributor: Te neved (fork fenntartó)
+
+pkgbase=manjaro-xfce-settings
+pkgname=('manjaro-xfce-settings'
+         'manjaro-xfce-minimal-settings')
+pkgver=20260810
+pkgrel=1
+pkgdesc="Manjaro Linux Xfce settings"
+arch=('any')
+url="https://github.com/megvadulthangya/manjaro-xfce-settings"
+license=('GPL')
+depends=('capitaine-cursors-nord-git'
+         'manjaro-base-skel'
+         'manjaro-icons'
+         'nordic-standard-buttons-theme-git'
+         'ttf-firacode-nerd'
+         'capitaine-cursors-nord-git'
+         'qt5ct'
+         'qt6ct'
+         'xcape')
+makedepends=('git')
+source=("git+$url.git#branch=nord"
+        "${pkgbase}.hook"
+        'mxs-bgd-sym'
+        'xfce-pbw.sh'
+        'xfce-panel-workaround.desktop')
+sha256sums=('SKIP'
+            'b18b45c0b88a4e282aa7f75caa5ab245443beba5de004042df3cf7361c1e4a2e'
+            '03770c4735b588bdee49f7e1e5d73d8500524d875603c473bdf0f4ffb862c152'
+            'c2a09b24e47df963fae456df3286e0f1525eb16b48da5a020579e788037631da'
+            '3afbe1b3e8b8339ace5f8496f8fcd605d5768c10145da15a71a9d487be45a8c9')
+
+pkgver() {
+  cd "${pkgbase}"
+  printf "$(git show -s --format=%cd --date=format:%Y%m%d HEAD)"
+}
+
+_inst_dir(){
+  install -d "${pkgdir}/etc"
+  cp -rL "${pkgbase}${1}/skel" "${pkgdir}/etc"
+
+  install -d "${pkgdir}/usr/share/glib-2.0"
+  cp -r "${pkgbase}/schemas" "${pkgdir}/usr/share/glib-2.0"
+}
+
+package_manjaro-xfce-settings() {
+  pkgdesc="Manjaro Linux Xfce settings"
+  provides=('manjaro-desktop-settings')
+  conflicts=('manjaro-desktop-settings' 'manjaro-xfce-gtk3-settings')
+  replaces=('manjaro-xfce-gtk3-settings')
+
+  _inst_dir
+
+  local _subst="
+    s|%BIN%|mxs-bgd-sym|g
+  "
+
+  sed "${_subst}" "${pkgbase}.hook" |
+    install -Dm644 /dev/stdin "${pkgdir}/usr/share/libalpm/hooks/${pkgbase}.hook"
+  install -Dm755 mxs-bgd-sym "${pkgdir}/usr/bin/mxs-bgd-sym"
+  install -Dm755 xfce-pbw.sh "${pkgdir}/etc/skel/.config/autostart/xfce-pbw.sh"
+  install -Dm644 xfce-panel-workaround.desktop "${pkgdir}/etc/skel/.config/autostart/xfce-panel-workaround.desktop"
+}
+
+#############minimal######################
+
+package_manjaro-xfce-minimal-settings() {
+  pkgdesc="Manjaro Linux Xfce Minimal settings"
+  provides=('manjaro-desktop-settings')
+  conflicts=('manjaro-desktop-settings' 'manjaro-xfce-gtk3-minimal-settings')
+  replaces=('manjaro-xfce-gtk3-minimal-settings')
+
+  _inst_dir '/minimal'
+
+  local _subst="
+    s|%BIN%|mxms-bgd-sym|g
+  "
+
+  sed "${_subst}" "${pkgbase}.hook" |
+    install -Dm644 /dev/stdin "${pkgdir}/usr/share/libalpm/hooks/manjaro-xfce-minimal-settings.hook"
+  install -Dm755 mxs-bgd-sym "${pkgdir}/usr/bin/mxs-bgd-sym"
+  install -Dm755 xfce-pbw.sh "${pkgdir}/etc/skel/.config/autostart/xfce-pbw.sh"
+  install -Dm644 xfce-panel-workaround.desktop "${pkgdir}/etc/skel/.config/autostart/xfce-panel-workaround.desktop"
+}
+
+=========================================
+FILE: xfce-panel-workaround.desktop
+=========================================
+
+[Desktop Entry]
+Encoding=UTF-8
+Version=0.9.4
+Type=Application
+Name=XFCE-Panel Workaround
+Comment=
+Exec=/etc/skel/.config/autostart/xfce-pbw.sh
+OnlyShowIn=XFCE;
+StartupNotify=false
+Terminal=false
+Hidden=false
+
+
+=========================================
+FILE: xfce-pbw.sh
+=========================================
+
+#/bin/sh
+sleep 5
+xfsettingsd --replace &
+sleep 15
+xfsettingsd --replace &
+sleep 25
+xfsettingsd --replace &
