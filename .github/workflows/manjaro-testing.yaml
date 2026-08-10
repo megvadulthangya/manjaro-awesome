@@ -463,7 +463,10 @@ jobs:
           # Repository bejegyzés hozzáadása a pacman.conf-hoz
           if ! grep -q "^\[${REPO_NAME}\]" /etc/pacman.conf; then
             echo "➕ Inserting [${REPO_NAME}] before [extra] in pacman.conf"
-            sed -i "/^\[extra\]/i $'[${REPO_NAME}]\nSigLevel = PackageRequired\nInclude = ${REPO_FILE}'" /etc/pacman.conf
+            sed -i "/^\[extra\]/i\\
+[${REPO_NAME}]\\
+SigLevel = PackageRequired\\
+Include = ${REPO_FILE}" /etc/pacman.conf
           else
             echo "ℹ️ [${REPO_NAME}] already present in pacman.conf"
           fi
