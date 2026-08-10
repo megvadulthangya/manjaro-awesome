@@ -1,6 +1,6 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=nordic-backgrounds
-pkgver=r161.e6670ac
+pkgver=r163.9d3d72e
 pkgrel=1
 pkgdesc="Currated Nordic theme wallpapers"
 arch=('any')
