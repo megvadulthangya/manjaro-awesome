@@ -523,9 +523,13 @@ jobs:
           # Save current pacman.conf
           cp /etc/pacman.conf /etc/pacman.conf.backup
 
-          # Temporarily comment out our repository to avoid 404 errors
-          echo "Temporarily commenting out $REPO_NAME repository for dependency installation..."
-          sed -i "/^\[$REPO_NAME\]/,/^\[/ s/^/#/" /etc/pacman.conf
+          # Temporarily disable our custom repository to avoid 404 errors
+          echo "Temporarily disabling $REPO_NAME repository for dependency installation..."
+          REPO_FILE="/etc/pacman.d/${REPO_NAME}"
+          if [ -f "$REPO_FILE" ]; then
+            sed -i "s|^\[$REPO_NAME\]|# [${REPO_NAME}]|" /etc/pacman.conf
+            sed -i "s|^Include = $REPO_FILE|# Include = ${REPO_FILE}|" /etc/pacman.conf
+          fi
 
           # Install remaining build tools
           echo "Installing build tools..."
