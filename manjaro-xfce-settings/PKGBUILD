@@ -1,7 +1,9 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 # Maintainer: Philip Müller <philm@manjaro.org>
 # Maintainer: Mark Wagie <mark at manjaro dot org>
 # Contributor: Bernhard Landauer <oberon@manjaro.org>
 # Contributor: Ramon Buldó
+# Contributor: Te neved (fork fenntartó)
 
 pkgbase=manjaro-xfce-settings
 pkgname=('manjaro-xfce-settings'
@@ -10,27 +12,24 @@ pkgver=20260221
 pkgrel=4
 pkgdesc="Manjaro Linux Xfce settings"
 arch=('any')
-url="https://gitlab.manjaro.org/profiles-and-settings/manjaro-xfce-settings"
+url="https://github.com/megvadulthangya/manjaro-xfce-settings"
 license=('GPL')
-depends=('breeze-cursors5'
-         'illyria-wallpaper'
-         'kvantum-theme-matcha'
+depends=('capitaine-cursors-nord-git'
          'manjaro-base-skel'
          'manjaro-icons'
-         'matcha-gtk-theme'
-         'noto-fonts'
-         'papirus-maia-icon-theme'
+         'Nordic-standard-buttons-git'
+         'ttf-firacode-nerd'
+         'capitaine-cursors-nord-git'
          'qt5ct'
          'qt6ct'
          'xcape')
 makedepends=('git')
-_commit=41bee99b146b980f8a0b96de2b9f7724e86737db  # branch/master
-source=("git+$url.git#commit=${_commit}"
+source=("git+$url.git#branch=nord"
         "${pkgbase}.hook"
         'mxs-bgd-sym'
         'xfce-pbw.sh'
         'xfce-panel-workaround.desktop')
-sha256sums=('29d1fb2aaabbb683c03d20a4321600f67030aa34c7bc68fd8e8889a388965752'
+sha256sums=('SKIP'
             'b18b45c0b88a4e282aa7f75caa5ab245443beba5de004042df3cf7361c1e4a2e'
             '03770c4735b588bdee49f7e1e5d73d8500524d875603c473bdf0f4ffb862c152'
             'c2a09b24e47df963fae456df3286e0f1525eb16b48da5a020579e788037631da'
