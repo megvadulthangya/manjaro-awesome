@@ -10,7 +10,7 @@ pkgname=(
   'manjaro-live-skel'
   'manjaro-live-portable-efi'
 )
-pkgbase=manjaro-live
+pkgbase=manjaro-live-base
 pkgver=20260731
 pkgrel=1
 pkgdesc="Manjaro Linux live session"
