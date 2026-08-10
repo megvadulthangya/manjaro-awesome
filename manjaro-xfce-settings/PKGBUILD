@@ -17,7 +17,7 @@ license=('GPL')
 depends=('capitaine-cursors-nord-git'
          'manjaro-base-skel'
          'manjaro-icons'
-         'Nordic-standard-buttons-git'
+         'nordic-standard-buttons-theme-git'
          'ttf-firacode-nerd'
          'capitaine-cursors-nord-git'
          'qt5ct'
