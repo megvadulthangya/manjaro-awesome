@@ -5,6 +5,7 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
+    "nvidia-390xx-utils",
     "manjaro-xfce-settings",
     "nordic-wallpaper-default",
     "manjaro-live-base",

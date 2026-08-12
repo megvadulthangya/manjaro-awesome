@@ -1,0 +1,60 @@
+--- a/kernel/nvidia/nvlink_linux.c.orig	2026-04-18 20:06:50.922706401 +0200
++++ b/kernel/nvidia/nvlink_linux.c	2026-04-18 20:07:45.245405729 +0200
+@@ -571,7 +571,11 @@ void NVLINK_API_CALL nvlink_sleep(unsign
+ 
+     nv_gettimeofday(&tm_aux);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
++    if (in_irq() && (ms > NV_MAX_ISR_DELAY_MS))
++#else
+     if (in_hardirq() && (ms > NV_MAX_ISR_DELAY_MS))
++#endif
+     {
+         return;
+     }
+--- a/kernel/nvidia/os-interface.c.orig	2026-04-18 19:51:43.010539120 +0200
++++ b/kernel/nvidia/os-interface.c	2026-04-18 19:55:39.001337275 +0200
+@@ -18,6 +18,7 @@
+ #include "nv-gpu-numa.h"
+ 
+ #include <linux/hardirq.h>
++#include <linux/version.h>
+ 
+ #define MAX_ERROR_STRING 512
+ static char nv_error_string[MAX_ERROR_STRING];
+@@ -195,7 +196,11 @@ BOOL NV_API_CALL os_semaphore_may_sleep(
+ 
+ BOOL NV_API_CALL os_is_isr(void)
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
++    return (in_irq());
++#else
+     return (in_hardirq());
++#endif
+ }
+ 
+ // return TRUE if the caller is the super-user
+@@ -512,7 +517,11 @@ NV_STATUS NV_API_CALL os_delay_us(NvU32
+     nv_gettimeofday(&tm1);
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
++    if (in_irq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
++#else
+     if (in_hardirq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
++#endif
+         return NV_ERR_GENERIC;
+     
+     mdelay_safe_msec = MicroSeconds / 1000;
+@@ -557,7 +566,11 @@ NV_STATUS NV_API_CALL os_delay(NvU32 Mil
+     tm_start = tm_aux;
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
++    if (in_irq() && (MilliSeconds > NV_MAX_ISR_DELAY_MS))
++#else
+     if (in_hardirq() && (MilliSeconds > NV_MAX_ISR_DELAY_MS))
++#endif
+         return NV_ERR_GENERIC;
+ 
+     if (!NV_MAY_SLEEP()) 

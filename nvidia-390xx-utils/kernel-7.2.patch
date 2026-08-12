@@ -1,0 +1,432 @@
+diff -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conftest.sh
+--- nvidia-390.157-base/conftest.sh	2026-08-11 19:16:34.750000000 +0200
++++ nvidia-390.157-7.2/conftest.sh	2026-08-12 11:28:18.546730209 +0200
+@@ -2345,7 +2345,7 @@
+             #
+             # Determine if the DRM atomic modesetting subsystem is usable
+             #
+-            # ("drm/atomic: Allow drivers to subclass drm_atomic_state, v3") in
++            # ("drm/atomic: Allow drivers to subclass drm_atomic_commit, v3") in
+             # v4.2 (2018-05-18).
+             #
+             # Make conftest more robust by adding test for
+@@ -3360,23 +3360,23 @@
+             compile_check_conftest "$CODE" "NV_DRM_ATOMIC_MODESET_NONBLOCKING_COMMIT_AVAILABLE" "" "generic"
+         ;;
+ 
+-        drm_atomic_state_ref_counting)
++        drm_atomic_commit_ref_counting)
+             #
+-            # Determine if functions drm_atomic_state_get/put() are
++            # Determine if functions drm_atomic_commit_get/put() are
+             # present.
+             #
+             # Added by commit 0853695c3ba4 ("drm: Add reference counting to
+-            # drm_atomic_state") in v4.10 (2016-10-14)
++            # drm_atomic_commit") in v4.10 (2016-10-14)
+             #
+             CODE="
+             #if defined(NV_DRM_DRM_ATOMIC_H_PRESENT)
+             #include <drm/drm_atomic.h>
+             #endif
+-            void conftest_drm_atomic_state_get(void) {
+-                drm_atomic_state_get();
++            void conftest_drm_atomic_commit_get(void) {
++                drm_atomic_commit_get();
+             }"
+ 
+-            compile_check_conftest "$CODE" "NV_DRM_ATOMIC_STATE_REF_COUNTING_PRESENT" "" "functions"
++            compile_check_conftest "$CODE" "NV_DRM_ATOMIC_COMMIT_REF_COUNTING_PRESENT" "" "functions"
+         ;;
+ 
+         vm_ops_fault_removed_vma_arg)
+@@ -3688,7 +3688,7 @@
+             fi
+         ;;
+ 
+-        drm_old_atomic_state_iterators_present)
++        drm_old_atomic_commit_iterators_present)
+             #
+             # Determine if the old atomic state iterators
+             # for_each_crtc_in_state(), for_each_connector_in_state() and
+@@ -3702,9 +3702,9 @@
+             CODE="
+             #include <drm/drmP.h>
+             #include <drm/drm_atomic.h>
+-            void conftest_drm_old_atomic_state_iterators_present(void) {
++            void conftest_drm_old_atomic_commit_iterators_present(void) {
+                 struct drm_crtc_state *crtc_state;
+-                struct drm_atomic_state *state;
++                struct drm_atomic_commit *state;
+                 struct drm_crtc *crtc;
+                 int i;
+ 
+@@ -3941,7 +3941,7 @@
+             CODE="
+             #include <drm/drm_atomic_helper.h>
+             void conftest_drm_atomic_helper_swap_state_has_stall_arg(
+-                    struct drm_atomic_state *state,
++                    struct drm_atomic_commit *state,
+                     bool stall) {
+                 (void)drm_atomic_helper_swap_state(state, stall);
+             }"
+@@ -3960,7 +3960,7 @@
+             CODE="
+             #include <drm/drm_atomic_helper.h>
+             int conftest_drm_atomic_helper_swap_state_return_int(
+-                    struct drm_atomic_state *state,
++                    struct drm_atomic_commit *state,
+                     bool stall) {
+                 return drm_atomic_helper_swap_state(state, stall);
+             }"
+@@ -4413,10 +4413,10 @@
+             compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS" "" "types"
+         ;;
+ 
+-        drm_crtc_atomic_check_has_atomic_state_arg)
++        drm_crtc_atomic_check_has_atomic_commit_arg)
+             #
+             # Determine if drm_crtc_helper_funcs::atomic_check takes 'state'
+-            # argument of 'struct drm_atomic_state' type.
++            # argument of 'struct drm_atomic_commit' type.
+             #
+             # The commit 29b77ad7b9ca ("drm/atomic: Pass the full state to CRTC
+             # atomic_check") passed the full atomic state to
+@@ -4432,10 +4432,10 @@
+             #include <drm/drm_modeset_helper_vtables.h>
+ 
+             static const struct drm_crtc_helper_funcs *funcs;
+-            typeof(*funcs->atomic_check) conftest_drm_crtc_atomic_check_has_atomic_state_arg;
++            typeof(*funcs->atomic_check) conftest_drm_crtc_atomic_check_has_atomic_commit_arg;
+ 
+-            int conftest_drm_crtc_atomic_check_has_atomic_state_arg(
+-                    struct drm_crtc *crtc, struct drm_atomic_state *state) {
++            int conftest_drm_crtc_atomic_check_has_atomic_commit_arg(
++                    struct drm_crtc *crtc, struct drm_atomic_commit *state) {
+                 return 0;
+             }" > conftest$$.c
+ 
+@@ -4444,9 +4444,9 @@
+ 
+             if [ -f conftest$$.o ]; then
+                 rm -f conftest$$.o
+-                echo "#define NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG" | append_conftest "types"
++                echo "#define NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG" | append_conftest "types"
+             else
+-                echo "#undef NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG" | append_conftest "types"
++                echo "#undef NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG" | append_conftest "types"
+             fi
+         ;;
+ 
+@@ -4487,10 +4487,10 @@
+             compile_check_conftest "$CODE" "NV_FOLLOW_PFN_PRESENT" "" "functions"
+         ;;
+ 
+-        drm_plane_atomic_check_has_atomic_state_arg)
++        drm_plane_atomic_check_has_atomic_commit_arg)
+             #
+             # Determine if drm_plane_helper_funcs::atomic_check takes 'state'
+-            # argument of 'struct drm_atomic_state' type.
++            # argument of 'struct drm_atomic_commit' type.
+             #
+             # The commit 7c11b99a8e58 ("drm/atomic: Pass the full state to
+             # planes atomic_check") passed the full atomic state to
+@@ -4506,10 +4506,10 @@
+             #include <drm/drm_modeset_helper_vtables.h>
+ 
+             static const struct drm_plane_helper_funcs *funcs;
+-            typeof(*funcs->atomic_check) conftest_drm_plane_atomic_check_has_atomic_state_arg;
++            typeof(*funcs->atomic_check) conftest_drm_plane_atomic_check_has_atomic_commit_arg;
+ 
+-            int conftest_drm_plane_atomic_check_has_atomic_state_arg(
+-                    struct drm_plane *plane, struct drm_atomic_state *state) {
++            int conftest_drm_plane_atomic_check_has_atomic_commit_arg(
++                    struct drm_plane *plane, struct drm_atomic_commit *state) {
+                 return 0;
+             }" > conftest$$.c
+ 
+@@ -4518,9 +4518,9 @@
+ 
+             if [ -f conftest$$.o ]; then
+                 rm -f conftest$$.o
+-                echo "#define NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG" | append_conftest "types"
++                echo "#define NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG" | append_conftest "types"
+             else
+-                echo "#undef NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG" | append_conftest "types"
++                echo "#undef NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG" | append_conftest "types"
+             fi
+         ;;
+ 
+diff -ruN nvidia-390.157-base/nvidia/nv-gpu-numa.c nvidia-390.157-7.2/nvidia/nv-gpu-numa.c
+--- nvidia-390.157-base/nvidia/nv-gpu-numa.c	2026-08-11 19:16:34.750000000 +0200
++++ nvidia-390.157-7.2/nvidia/nv-gpu-numa.c	2026-08-12 10:45:51.938985834 +0200
+@@ -158,8 +158,7 @@
+     if (name_len + 1 > BUF_SIZE)
+         return -ERANGE;
+ 
+-    strncpy(name_copy, name, name_len);
+-    *(name_copy + name_len) = '\0';
++    strscpy(name_copy, name, name_len + 1);
+ 
+     // Convert the memory block ID into an integer
+     if (kstrtoull(name_copy + strlen(MEMBLOCK_PREFIX), 0, &memblock_id) != 0) 
+diff -ruN nvidia-390.157-base/nvidia/os-interface.c nvidia-390.157-7.2/nvidia/os-interface.c
+--- nvidia-390.157-base/nvidia/os-interface.c	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia/os-interface.c	2026-08-12 10:35:59.997705356 +0200
+@@ -655,8 +655,7 @@
+ void NV_API_CALL os_get_current_process_name(char *buf, NvU32 len)
+ {
+     task_lock(current);
+-    strncpy(buf, current->comm, len - 1);
+-    buf[len - 1] = '\0';
++    strscpy(buf, current->comm, len);
+     task_unlock(current);
+ }
+ 
+diff -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c nvidia-390.157-7.2/nvidia-drm/nvidia-drm-crtc.c
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-crtc.c	2026-08-12 10:29:12.840408529 +0200
+@@ -130,15 +130,15 @@
+         old_config.dstHeight != req_config->config.dstHeight;
+ }
+ 
+-#if defined(NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG)
++#if defined(NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG)
+ static int nv_drm_plane_atomic_check(struct drm_plane *plane,
+-                                     struct drm_atomic_state *state)
++                                     struct drm_atomic_commit *state)
+ #else
+ static int nv_drm_plane_atomic_check(struct drm_plane *plane,
+                                      struct drm_plane_state *plane_state)
+ #endif
+ {
+-#if defined(NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG)
++#if defined(NV_DRM_PLANE_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG)
+     struct drm_plane_state *plane_state =
+         drm_atomic_get_new_plane_state(state, plane);
+ #endif
+@@ -333,15 +333,15 @@
+  * the 'nv_drm_crtc_state::req_config', that is fine becase 'nv_drm_crtc_state'
+  * will be discarded if ->atomic_check() fails.
+  */
+-#if defined(NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG)
++#if defined(NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG)
+ static int nv_drm_crtc_atomic_check(struct drm_crtc *crtc,
+-                                    struct drm_atomic_state *state)
++                                    struct drm_atomic_commit *state)
+ #else
+ static int nv_drm_crtc_atomic_check(struct drm_crtc *crtc,
+                                     struct drm_crtc_state *crtc_state)
+ #endif
+ {
+-#if defined(NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_STATE_ARG)
++#if defined(NV_DRM_CRTC_ATOMIC_CHECK_HAS_ATOMIC_COMMIT_ARG)
+     struct drm_crtc_state *crtc_state =
+         drm_atomic_get_new_crtc_state(state, crtc);
+ #endif
+diff -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild nvidia-390.157-7.2/nvidia-drm/nvidia-drm.Kbuild
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm.Kbuild	2026-08-12 10:29:12.839971671 +0200
+@@ -57,7 +57,7 @@
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_user_pages_remote
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_user_pages
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_gem_object_lookup
+-NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_atomic_state_ref_counting
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_atomic_commit_ref_counting
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_driver_has_gem_prime_res_obj
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_atomic_helper_connector_dpms
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_connector_funcs_have_mode_in_name
+@@ -99,9 +99,9 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_gem_free_object
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_prime_pages_to_sg_has_drm_device_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_gem_prime_callbacks
+-NV_CONFTEST_TYPE_COMPILE_TESTS += drm_crtc_atomic_check_has_atomic_state_arg
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_crtc_atomic_check_has_atomic_commit_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_gem_object_vmap_has_map_arg
+-NV_CONFTEST_TYPE_COMPILE_TESTS += drm_plane_atomic_check_has_atomic_state_arg
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_plane_atomic_check_has_atomic_commit_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_device_has_pdev
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_add_fence
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_reserve_fences
+diff -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.c
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.c	2026-08-12 10:29:12.925138856 +0200
+@@ -42,23 +42,23 @@
+ #include <drm/drm_atomic_helper.h>
+ #include <drm/drm_crtc.h>
+ 
+-struct nv_drm_atomic_state {
++struct nv_drm_atomic_commit {
+     struct NvKmsKapiRequestedModeSetConfig config;
+-    struct drm_atomic_state base;
++    struct drm_atomic_commit base;
+ };
+ 
+-static inline struct nv_drm_atomic_state *to_nv_atomic_state(
+-    struct drm_atomic_state *state)
++static inline struct nv_drm_atomic_commit *to_nv_atomic_commit(
++    struct drm_atomic_commit *state)
+ {
+-    return container_of(state, struct nv_drm_atomic_state, base);
++    return container_of(state, struct nv_drm_atomic_commit, base);
+ }
+ 
+-struct drm_atomic_state *nv_drm_atomic_state_alloc(struct drm_device *dev)
++struct drm_atomic_commit *nv_drm_atomic_state_alloc(struct drm_device *dev)
+ {
+-    struct nv_drm_atomic_state *nv_state =
++    struct nv_drm_atomic_commit *nv_state =
+             nv_drm_calloc(1, sizeof(*nv_state));
+ 
+-    if (nv_state == NULL || drm_atomic_state_init(dev, &nv_state->base) < 0) {
++    if (nv_state == NULL || drm_atomic_commit_init(dev, &nv_state->base) < 0) {
+         nv_drm_free(nv_state);
+         return NULL;
+     }
+@@ -66,16 +66,16 @@
+     return &nv_state->base;
+ }
+ 
+-void nv_drm_atomic_state_clear(struct drm_atomic_state *state)
++void nv_drm_atomic_state_clear(struct drm_atomic_commit *state)
+ {
+-    drm_atomic_state_default_clear(state);
++    drm_atomic_commit_default_clear(state);
+ }
+ 
+-void nv_drm_atomic_state_free(struct drm_atomic_state *state)
++void nv_drm_atomic_state_free(struct drm_atomic_commit *state)
+ {
+-    struct nv_drm_atomic_state *nv_state =
+-                    to_nv_atomic_state(state);
+-    drm_atomic_state_default_release(state);
++    struct nv_drm_atomic_commit *nv_state =
++                    to_nv_atomic_commit(state);
++    drm_atomic_commit_default_release(state);
+     nv_drm_free(nv_state);
+ }
+ 
+@@ -105,12 +105,12 @@
+  */
+ static int
+ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
+-                                   struct drm_atomic_state *state,
++                                   struct drm_atomic_commit *state,
+                                    bool commit)
+ {
+     struct nv_drm_device *nv_dev = to_nv_device(dev);
+     struct NvKmsKapiRequestedModeSetConfig *requested_config =
+-        &(to_nv_atomic_state(state)->config);
++        &(to_nv_atomic_commit(state)->config);
+     struct drm_crtc *crtc;
+     struct drm_crtc_state *old_crtc_state, *new_crtc_state;
+     int i;
+@@ -161,7 +161,7 @@
+ }
+ 
+ int nv_drm_atomic_check(struct drm_device *dev,
+-                        struct drm_atomic_state *state)
++                        struct drm_atomic_commit *state)
+ {
+     int ret = 0;
+ 
+@@ -205,7 +205,7 @@
+ }
+ 
+ int nv_drm_atomic_commit(struct drm_device *dev,
+-                         struct drm_atomic_state *state,
++                         struct drm_atomic_commit *state,
+                          bool nonblock)
+ {
+     int ret = -EBUSY;
+@@ -333,7 +333,7 @@
+         }
+     }
+ 
+-#if defined(NV_DRM_ATOMIC_STATE_REF_COUNTING_PRESENT)
++#if defined(NV_DRM_ATOMIC_COMMIT_REF_COUNTING_PRESENT)
+     /*
+      * If ref counting is present, state will be freed when the caller
+      * drops its reference after we return.
+diff -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.h
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.h	2026-08-12 10:29:12.925838598 +0200
+@@ -30,17 +30,17 @@
+ #include "nvkms-kapi.h"
+ 
+ struct drm_device;
+-struct drm_atomic_state;
++struct drm_atomic_commit;
+ 
+-struct drm_atomic_state *nv_drm_atomic_state_alloc(struct drm_device *dev);
+-void nv_drm_atomic_state_clear(struct drm_atomic_state *state);
+-void nv_drm_atomic_state_free(struct drm_atomic_state *state);
++struct drm_atomic_commit *nv_drm_atomic_state_alloc(struct drm_device *dev);
++void nv_drm_atomic_state_clear(struct drm_atomic_commit *state);
++void nv_drm_atomic_state_free(struct drm_atomic_commit *state);
+ 
+ int nv_drm_atomic_check(struct drm_device *dev,
+-                        struct drm_atomic_state *state);
++                        struct drm_atomic_commit *state);
+ 
+ int nv_drm_atomic_commit(struct drm_device *dev,
+-                         struct drm_atomic_state *state, bool nonblock);
++                         struct drm_atomic_commit *state, bool nonblock);
+ 
+ 
+ void nv_drm_handle_flip_occurred(struct nv_drm_device *nv_dev,
+diff -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h nvidia-390.157-7.2/nvidia-drm/nvidia-drm-priv.h
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h	2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-priv.h	2026-08-12 10:58:49.970562148 +0200
+@@ -23,6 +23,19 @@
+ #ifndef __NVIDIA_DRM_PRIV_H__
+ #define __NVIDIA_DRM_PRIV_H__
+ 
++#include <linux/version.h>
++
++/* 7.2 kernel: drm_atomic_state renamed to drm_atomic_commit */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
++#define drm_atomic_commit                 drm_atomic_state
++#define drm_atomic_commit_init            drm_atomic_state_init
++#define drm_atomic_commit_free            drm_atomic_state_free
++#define drm_atomic_commit_get             drm_atomic_state_get
++#define drm_atomic_commit_put             drm_atomic_state_put
++#define drm_atomic_commit_default_clear   drm_atomic_state_default_clear
++#define drm_atomic_commit_default_release drm_atomic_state_default_release
++#endif
++
+ #include "nvidia-drm-conftest.h" /* NV_DRM_AVAILABLE */
+ 
+ #if defined(NV_DRM_AVAILABLE)
+diff -ruN nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux.c nvidia-390.157-7.2/nvidia-modeset/nvidia-modeset-linux.c
+--- nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux.c	2026-08-11 19:16:34.780000000 +0200
++++ nvidia-390.157-7.2/nvidia-modeset/nvidia-modeset-linux.c	2026-08-12 10:44:26.007810107 +0200
+@@ -181,7 +181,16 @@
+ 
+ char* NVKMS_API_CALL nvkms_strncpy(char *dest, const char *src, size_t n)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
++    size_t i;
++    for (i = 0; i < n && src[i] != '\0'; i++)
++        dest[i] = src[i];
++    for (; i < n; i++)
++        dest[i] = '\0';
++    return dest;
++#else
+     return strncpy(dest, src, n);
++#endif
+ }
+ 
+ void NVKMS_API_CALL nvkms_usleep(NvU64 usec)
+diff -ruN nvidia-390.157-base/nvidia-uvm/uvm8_pmm_gpu.c nvidia-390.157-7.2/nvidia-uvm/uvm8_pmm_gpu.c
+--- nvidia-390.157-base/nvidia-uvm/uvm8_pmm_gpu.c	2026-08-11 19:16:34.790000000 +0200
++++ nvidia-390.157-7.2/nvidia-uvm/uvm8_pmm_gpu.c	2026-08-12 10:39:04.082913916 +0200
+@@ -2794,7 +2794,7 @@
+             size_t size;
+             size_t align;
+             if (level == 0) {
+-                strncpy(chunk_split_cache[level].name, "uvm_gpu_chunk_t", sizeof(chunk_split_cache[level].name) - 1);
++                strscpy(chunk_split_cache[level].name, "uvm_gpu_chunk_t", sizeof(chunk_split_cache[level].name));
+                 size = sizeof(uvm_gpu_chunk_t);
+                 align = __alignof__(uvm_gpu_chunk_t);
+             } else {
