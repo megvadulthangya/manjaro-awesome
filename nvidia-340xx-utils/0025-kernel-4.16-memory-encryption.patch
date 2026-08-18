@@ -1,0 +1,14 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-linux.h	2026-08-14 10:41:59.376866021 +0200
++++ work/kernel-4.16-memory-encryption/nv-linux.h	2026-08-14 11:45:31.238271721 +0200
+@@ -154,7 +154,11 @@
+ 
+ #if defined(NV_VM_INSERT_PAGE_PRESENT)
+ #include <linux/pagemap.h>
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+ #include <linux/dma-mapping.h>
++#else
++#include <linux/dma-direct.h>
++#endif
+ #endif
+ 
+ #if defined(NV_SCATTERLIST_HAS_PAGE_LINK)

@@ -1,0 +1,52 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv.c	2026-08-13 14:08:03.848078098 +0200
++++ work/kernel-7.0-screen_info/nv.c	2026-08-14 11:25:36.630455441 +0200
+@@ -1455,7 +1455,12 @@
+ #endif
+ #if !defined(NV_VMWARE) && \
+   (defined(NVCPU_X86) || defined(NVCPU_X86_64))
+-        if (nv->primary_vga && (screen_info.orig_video_isVGA != 0x01))
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++        const struct screen_info *si = &sysfb_primary_display.screen;
++#else
++        const struct screen_info *si = &screen_info;
++#endif
++        if (nv->primary_vga && (si->orig_video_isVGA != 0x01))
+         {
+             if (!nv_fbdev_failure_detected)
+             {
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-linux.h	2026-08-13 22:40:56.562095703 +0200
++++ work/kernel-7.0-screen_info/nv-linux.h	2026-08-14 10:41:59.376866021 +0200
+@@ -178,6 +178,9 @@
+ #endif
+ #if defined(NV_LINUX_SCREEN_INFO_H_PRESENT)
+ #include <linux/screen_info.h>      /* screen_info                      */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++#include <linux/sysfb.h>            /* sysfb_primary_display            */
++#endif
+ #else
+ #include <linux/tty.h>              /* screen_info                      */
+ #endif
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/os-interface.c	2026-08-14 08:31:28.868067706 +0200
++++ work/kernel-7.0-screen_info/os-interface.c	2026-08-14 10:59:18.745384584 +0200
+@@ -1166,12 +1166,17 @@
+ #if !defined(NV_VMWARE) && (defined(NVCPU_X86) || defined(NVCPU_X86_64))
+     if (NV_EFI_ENABLED())
+     {
+-        *pPhysicalAddress = screen_info.lfb_base;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++        const struct screen_info *si = &sysfb_primary_display.screen;
++#else
++        const struct screen_info *si = &screen_info;
++#endif
++        *pPhysicalAddress = si->lfb_base;
+ #if defined(VIDEO_CAPABILITY_64BIT_BASE)
+-        *pPhysicalAddress |= (NvU64)screen_info.ext_lfb_base << 32;
++        *pPhysicalAddress |= (NvU64)si->ext_lfb_base << 32;
+ #endif
+-        *pHeight = screen_info.lfb_height;
+-        *pPitch = screen_info.lfb_linelength;
++        *pHeight = si->lfb_height;
++        *pPitch = si->lfb_linelength;
+         return RM_OK;
+     }
+ #endif

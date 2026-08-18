@@ -1,0 +1,10 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-frontend.c	2026-08-13 14:08:03.798786541 +0200
++++ work/module-description/nv-frontend.c	2026-08-14 12:05:05.792396950 +0200
+@@ -18,6 +18,7 @@
+ MODULE_LICENSE("GPL");
+ #endif
+ #if defined(MODULE_INFO)
++MODULE_DESCRIPTION("NVIDIA GPU frontend kernel module");
+ MODULE_INFO(supported, "external");
+ #endif
+ #if defined(MODULE_VERSION)

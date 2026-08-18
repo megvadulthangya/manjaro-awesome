@@ -1,0 +1,12 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-drm.c	2026-08-13 14:08:03.824036903 +0200
++++ work/kernel-6.14/nv-drm.c	2026-08-13 21:54:34.524516471 +0200
+@@ -532,7 +532,9 @@
+ 
+     .name = "nvidia-drm",
+     .desc = "NVIDIA DRM driver",
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 14, 0)
+     .date = "20150116",
++#endif
+     .major = 0,
+     .minor = 0,
+     .patchlevel = 0,

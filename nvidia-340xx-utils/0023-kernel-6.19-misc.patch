@@ -1,0 +1,25 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/conftest.sh	2026-08-13 14:08:03.845390457 +0200
++++ work/kernel-6.19-misc/conftest.sh	2026-08-14 09:07:40.646715807 +0200
+@@ -289,6 +289,10 @@
+             CFLAGS="$CFLAGS -DCC_HAVE_ASM_GOTO"
+         fi
+     fi
++
++    # Rel. commit "Kbuild: enable -fms-extensions" (Rasmus Villemoes, 20 Oct 2025)
++    # Enable the flags since the Linux headers use those extensions in some structs
++    CFLAGS="$CFLAGS -fms-extensions"
+ }
+ 
+ CONFTEST_PREAMBLE="#include \"conftest.h\"
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/uvm/conftest.sh	2026-08-13 14:08:03.840724974 +0200
++++ work/kernel-6.19-misc/uvm/conftest.sh	2026-08-14 09:13:30.435387838 +0200
+@@ -289,6 +289,9 @@
+             CFLAGS="$CFLAGS -DCC_HAVE_ASM_GOTO"
+         fi
+     fi
++    # Rel. commit "Kbuild: enable -fms-extensions" (Rasmus Villemoes, 20 Oct 2025)
++    # Enable the flags since the Linux headers use those extensions in some structs
++    CFLAGS="$CFLAGS -fms-extensions"
+ }
+ 
+ CONFTEST_PREAMBLE="#include \"conftest.h\"

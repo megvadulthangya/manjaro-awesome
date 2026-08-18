@@ -1,0 +1,64 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dot]org>
+
+pkgbase=linux-lts-extramodules-meta
+pkgname=(
+  'linux-lts-acpi_call-meta'
+  'linux-lts-bbswitch-meta'
+  'linux-lts-broadcom-wl-meta'
+  'linux-lts-nvidia-meta'
+  'linux-lts-nvidia-open-meta'
+  'linux-lts-nvidia-340xx-meta'
+  'linux-lts-nvidia-390xx-meta'
+  'linux-lts-nvidia-470xx-meta'
+  'linux-lts-nvidia-580xx-meta'
+  'linux-lts-nvidia-580xx-open-meta'
+  'linux-lts-r8168-meta'
+  'linux-lts-rtl8723bu-meta'
+  'linux-lts-tp_smapi-meta'
+  'linux-lts-vhba-module-meta'
+  'linux-lts-virtualbox-host-modules-meta'
+  'linux-lts-zfs-meta'
+)
+pkgdesc="Manjaro LTS Kernel Extra Modules Meta Package"
+pkgver=6.1
+_pkgver="${pkgver//./}"
+pkgrel=2
+arch=('any')
+url="https://manjaro.org"
+license=('LicenseRef-None')
+
+_eol=(
+  '49'
+  '414'
+  '419'
+  '54'
+  '510' ## Dec 2026 Note: doesn't compile zfs-module
+  '515' ## Dec 2026 Note: doesn't compile with GCC16
+#  '61' ## Dec 2027
+#  '66' ## Dec 2027
+#  '612 ## Dec 2028
+#  '618 ## Dec 2028
+)
+
+_array() {
+  _array=''
+  for k in ${_eol[@]}; do
+    _array+=" linux${k}-${_module}"
+  done
+  _array=(${_array})
+}
+
+_package() {
+  pkgdesc="Manjaro LTS ${_module} kernel module"
+  depends=("linux${_pkgver}-${_module}")
+  conflicts=("${_array[@]}")
+  replaces=("${_array[@]}")
+}
+
+for _p in "${pkgname[@]}"; do
+  eval "package_$_p() {
+    _module=$(echo $_p | sed 's/linux-lts-//;s/-meta//')
+    _array
+    _package
+  }"
+done

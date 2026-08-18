@@ -1,0 +1,15 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-linux.h	2026-08-13 14:08:03.850260366 +0200
++++ work/kernel-6.18-workqueue-flush/nv-linux.h	2026-08-13 22:40:56.562095703 +0200
+@@ -1714,8 +1714,12 @@
+ } nv_work_t;
+ 
+ #define NV_TASKQUEUE_SCHEDULE(work) schedule_work(work)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++#define NV_TASKQUEUE_FLUSH() do { } while (0)
++#else
+ #define NV_TASKQUEUE_FLUSH()                           \
+     flush_scheduled_work();
++#endif
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_TASKQUEUE_INIT(tq,handler,data)             \
+     {                                                  \

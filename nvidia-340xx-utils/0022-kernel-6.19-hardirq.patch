@@ -1,0 +1,47 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/os-interface.c	2026-08-13 14:08:03.773769659 +0200
++++ work/kernel-6.19-hardirq/os-interface.c	2026-08-14 08:31:28.868067706 +0200
+@@ -14,6 +14,8 @@
+ #include "os-interface.h"
+ #include "nv-linux.h"
+ #include "nv-time.h"
++#include <linux/hardirq.h>
++#include <linux/version.h>
+ 
+ RM_STATUS NV_API_CALL os_disable_console_access(void)
+ {
+@@ -219,7 +221,11 @@
+ 
+ BOOL NV_API_CALL os_is_isr(void)
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+     return (in_irq());
++#else
++    return (in_hardirq());
++#endif
+ }
+ 
+ // return TRUE if the caller is the super-user
+@@ -479,7 +485,11 @@
+     nv_gettimeofday(&tm1);
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+     if (in_irq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
++#else
++    if (in_hardirq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
++#endif
+         return RM_ERROR;
+     
+     mdelay_safe_msec = MicroSeconds / 1000;
+@@ -524,7 +534,11 @@
+     tm_start = tm_aux;
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+     if (in_irq() && (MilliSeconds > NV_MAX_ISR_DELAY_MS))
++#else
++    if (in_hardirq() && (MilliSeconds > NV_MAX_ISR_DELAY_MS))
++#endif
+         return RM_ERROR;
+ 
+     if (!NV_MAY_SLEEP()) 

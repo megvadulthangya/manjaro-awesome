@@ -1,0 +1,47 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# Maintainer: Mark Wagie <mark at manjaro dot org>
+# Contributor: Roland Singer
+# Contributor: megvadulthangya (340xx fork)
+
+pkgname=mhwd-db
+pkgver=20260305
+pkgrel=1
+pkgdesc="Manjaro Linux Hardware Detection Database"
+arch=('any')
+url="https://github.com/megvadulthangya/mhwd-db"
+license=('GPL-3.0-or-later')
+depends=(
+  'libnotify'
+  'mhwd-amdgpu'
+  'mhwd-ati'
+  'mhwd-nvidia>=455' 
+  'mhwd-nvidia-340xx'
+  'mhwd-nvidia-390xx'
+  'mhwd-nvidia-470xx'
+  'mhwd-nvidia-580xx'
+  'nvidia-driver-assistant'
+)
+makedepends=(
+  'git'
+)
+install="$pkgname.install"
+source=("git+https://github.com/megvadulthangya/mhwd-db.git#branch=develop")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  printf "$(git show -s --format=%cd --date=format:%Y%m%d HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+}
+
+package() {
+  cd "$pkgname"
+  install -d "$pkgdir/var/lib/mhwd/db"
+  install -d "$pkgdir/etc/X11/mhwd.d"
+
+  cp -r pci "$pkgdir/var/lib/mhwd/db/"
+  # cp -r usb "$pkgdir/var/lib/mhwd/db/"
+}

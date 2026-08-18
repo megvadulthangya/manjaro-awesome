@@ -1,0 +1,89 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dot]org>
+
+pkgbase=linux-extramodules-meta
+pkgname=(
+  'linux-acpi_call-meta'
+  'linux-bbswitch-meta'
+  'linux-broadcom-wl-meta'
+  'linux-nvidia-meta'
+  'linux-nvidia-open-meta'
+  'linux-nvidia-340xx-meta'
+  'linux-nvidia-390xx-meta'
+  'linux-nvidia-470xx-meta'
+  'linux-nvidia-580xx-meta'
+  'linux-nvidia-580xx-open-meta'
+  'linux-r8168-meta'
+  'linux-rtl8723bu-meta'
+  'linux-tp_smapi-meta'
+  'linux-vhba-module-meta'
+  'linux-virtualbox-host-modules-meta'
+  'linux-zfs-meta'
+)
+pkgdesc="Manjaro Kernel Extra Modules Meta Package"
+pkgver=7.1
+_pkgver="${pkgver//./}"
+pkgrel=1
+arch=('any')
+url="https://manjaro.org"
+license=('LicenseRef-None')
+
+_eol=(
+  '418'
+  '420'
+  '50'
+  '52'
+  '53'
+  '55'
+  '56'
+  '57'
+  '58'
+  '59'
+  '511'
+  '512'
+  '513'
+  '514'
+  '516'
+  '517'
+  '518'
+  '519'
+  '60'
+  '62'
+  '63'
+  '64'
+  '65'
+  '67'
+  '68'
+  '69'
+  '610'
+  '611'
+  '613'
+  '614'
+  '615'
+  '616'
+  '617'
+  '619'
+  '70'
+)
+
+_array() {
+  _array=''
+  for k in ${_eol[@]}; do
+    _array+=" linux${k}-${_module}"
+  done
+  _array=(${_array})
+}
+
+_package() {
+  pkgdesc="Recommended stable ${_module} kernel module"
+  depends=("linux${_pkgver}-${_module}")
+  conflicts=("${_array[@]}" "linux-meta-${_module}")
+  replaces=("${_array[@]}" "linux-meta-${_module}")
+}
+
+for _p in "${pkgname[@]}"; do
+  eval "package_$_p() {
+    _module=$(echo $_p | sed 's/linux-//;s/-meta//')
+    _array
+    _package
+  }"
+done

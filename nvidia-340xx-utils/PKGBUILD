@@ -1,0 +1,269 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Philip Müller <philm[at]manjaro[dot]org>
+# Contributor: Thomas Baechler <thomas@archlinux.org>
+# Contributor: Jerry Xiao <aur@mail.jerryxiao.cc>
+# Contributor: Giancarlo Razzolini <grazzolini@archlinux.org>
+
+pkgbase=nvidia-340xx-utils
+pkgname=('nvidia-340xx-utils' 'opencl-nvidia-340xx' 'nvidia-340xx-dkms' 'mhwd-nvidia-340xx')
+pkgver=340.108
+pkgrel=1
+arch=('x86_64')
+url="https://www.nvidia.com/"
+license=('custom')
+options=('!strip')
+_pkg="NVIDIA-Linux-x86_64-${pkgver}-no-compat32"
+source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.run"
+        'mhwd-nvidia'
+        'nvidia-drm-outputclass.conf'
+        'nvidia-340xx-utils.install'
+	'nvidia-utils.sysusers'
+        '20-nvidia.conf'
+        'nvidia-340xx.rules'
+        '0001-kernel-5.7.patch'
+        '0002-kernel-5.8.patch'
+        '0003-kernel-5.9.patch'
+        '0004-kernel-5.10.patch'
+        '0005-kernel-5.11.patch'
+        '0006-kernel-5.14.patch'
+        '0007-kernel-5.15.patch'
+        '0008-kernel-5.16.patch'
+        '0009-kernel-5.17.patch'
+        '0010-kernel-5.18.patch'
+        '0011-kernel-6.0.patch'
+        '0012-kernel-6.2.patch'
+        '0013-kernel-6.3.patch'
+        '0014-kernel-6.5.patch'
+        '0015-kernel-6.6.patch'
+        '0016-kernel-6.8.patch'
+        '0017-gcc-14.patch'
+        '0018-gcc-15.patch'
+        '0019-kernel-6.15.patch'
+        '0020-kernel-6.14.patch'
+        '0021-kernel-6.18-workqueue-flush.patch'
+        '0022-kernel-6.19-hardirq.patch'
+        '0023-kernel-6.19-misc.patch'
+        '0024-kernel-7.0-screen_info.patch'
+        '0025-kernel-4.16-memory-encryption.patch'
+        '0026-module-description.patch')
+sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
+            '9513f636c27d6ac06a3dd41f7761d2cf4fe8f1c91bb177fce3f333dd2b072713'
+            '089d6dc247c9091b320c418b0d91ae6adda65e170934d178cdd4e9bd0785b182'
+            'da91d297dab211622e5d025582c3a997865ab6fda3d63d343787c4148f9f15be'
+            'd8d1caa5d72c71c6430c2a0d9ce1a674787e9272ccce28b9d5898ca24e60a167'
+            '5b4cb7620abc1729a13c78a2fb33ccaeb7d92f42936d929885324c81f2b7c985'
+            '19b61cce21c440bf86bde883ce8384dc1032ff30ca6785f03a02cfa0de425fbf'
+            'c8bda5fb238fbebc5bf6ae4b7646e48b30a96b9060ced20d93c53c14ac3161f6'
+            '10b91c8dbc269ff1d8e3e8a1866926c309ff3912d191a05cd5724a3139776f32'
+            'e06af37ffa2203698594e0f58816b809feced9b2374927e13b85fd5c18fa3114'
+            '5e184ca5fcbf5071050f23503bfd3391c4bc1ccc31453338791a3da3885b6085'
+            '2430303d6a0f48418532229aa5377e8848be762a8fdc790edeba30e6eec5214c'
+            '47ca88252c6b40f488f403f81c3eb1c1e5a5eed1dc353e31d53b5c815c433238'
+            'ff4869ea16eb3d894b13a6ca6775906ce0feacf405a2ade63c4f052df6024769'
+            'ad663464d7f57f0f7136bd727ed088d733b087be10cd944ba7d089c421536717'
+            'e9970b3ab78f34bdfa29f5dc4f6772aa35026d14d14a0e35bd9744187583edc9'
+            'ebb3c5f9b41d0d5081b27a6335ffa6114d65dbcb98f935158167877c394ccb89'
+            'b741790983e2bfba1c7d1842af73a353fbe0de987bec3ee05385d20f244226b9'
+            '84373dd6280ae2358017a23a1ee30a570990a7d5087ab67037dd1a5076a176b1'
+            '20a60e305c3228ace56ba0e1846aa6000fefbf0a07b7b18007e10cc2f183ea29'
+            'b2687197a42b02f4886f43284a8c45fc6610f5e0ed515a5c132f8803165ebebf'
+            'e6269d4ffd22ddfb3dd436e02d4b6b3cac8c7779795ab4f30917673152e862fd'
+            '06ab027cd786de4c5afd8b9ee2c7a2a21d5a029de513d77e13f7d0b018073a20'
+            'c2fee0f46ae5650328e70a0cf076f685d4a9005a178cb0150d3537e10567bf81'
+            '9e67b8e96caeae132a3dfc94d0c8f4e8e5c89fdb5122bd3d8b6f4745185a78d5'
+            '8cf4c3fd074ebd0d46c6dd16f63e40e1e31770a0580aea604fe55f91a10b45b9'
+            '6e42738cb4f80f0a354f3170e2e950aff413dbccea08f090b307172f26809a30'
+            '875f748cb4ea5459cd14e070ba1ccbc1335a833eae61b5b21e781915bf0ad0d0'
+            'cc2109738c0d3cb059e05c509eb84dbc6065e4fb519ae89cce39fe4cc31a06fb'
+            'aefb4f5d6419675d59bdd809732065ef39873a4307e4689877571c245d64b21b'
+            'bad7868b9cbff26949f808d5a9e995662fb0ad3d484087484aefeb2087d9fa51'
+            '70f21b1a85e29414902d7dc6fc158d3b40e3a8072bc94fea727a4b25e17c69ca'
+            '347c18848f10bf6a968e108ffc7ba445086460cacb996e670ab5756c943004e1')
+create_links() {
+    find "$pkgdir" -type f -name '*.so*' ! -path '*xorg/*' -print0 | while read -d $'\0' _lib; do
+        _soname=$(dirname "${_lib}")/$(readelf -d "${_lib}" | grep -Po 'SONAME.*: \[\K[^]]*' || true)
+        _base=$(echo ${_soname} | sed -r 's/(.*)\.so.*/\1.so/')
+        [[ -e "${_soname}" ]] || ln -s $(basename "${_lib}") "${_soname}"
+        [[ -e "${_base}" ]] || ln -s $(basename "${_soname}") "${_base}"
+    done
+}
+
+prepare() {
+    rm -rf "${_pkg}"
+    sh "${_pkg}.run" --extract-only
+
+    cd "${_pkg}"
+
+    # Apply all patches in order
+    for src in "${source[@]}"; do
+        src="${src%%::*}"
+        src="${src##*/}"
+        [[ $src = 0*.patch ]] || continue
+        echo "Applying patch $src..."
+        patch -Np1 < "../$src"
+    done
+
+    # Prepare DKMS
+    cd kernel
+    # Add UVM module to dkms.conf
+    if ! grep -q "nvidia-uvm" dkms.conf; then
+        cat uvm/dkms.conf.fragment >> dkms.conf
+    fi
+    # Set make jobs based on nproc
+    sed -i "s/__JOBS/`nproc`/" dkms.conf
+    # Modernize deprecated DKMS directive names (CLEAN -> clean)
+    sed -i -E 's/^([[:space:]]*)CLEAN/\1clean/' dkms.conf
+    cd ..
+}
+
+package_opencl-nvidia-340xx() {
+    pkgdesc="OpenCL implemention for NVIDIA"
+    depends=('zlib')
+    optdepends=('opencl-headers: headers necessary for OpenCL development')
+    provides=("opencl-nvidia=${pkgver}" 'opencl-driver')
+    conflicts=('opencl-nvidia')
+
+    cd "${_pkg}"
+
+    install -Dm644 nvidia.icd "${pkgdir}/etc/OpenCL/vendors/nvidia.icd"
+    install -Dm755 "libnvidia-compiler.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-compiler.so.${pkgver}"
+    install -Dm755 "libnvidia-opencl.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-opencl.so.${pkgver}"
+
+    create_links
+
+    mkdir -p "${pkgdir}/usr/share/licenses"
+    ln -s nvidia "${pkgdir}/usr/share/licenses/opencl-nvidia"
+}
+
+package_nvidia-340xx-dkms() {
+    pkgdesc="NVIDIA driver sources for linux, 340xx legacy branch"
+    depends=('dkms' "nvidia-340xx-utils=${pkgver}")
+    provides=('NVIDIA-MODULE' "nvidia-dkms=${pkgver}")
+    conflicts=('nvidia-dkms')
+
+    cd "${_pkg}"
+
+    install -dm 755 "${pkgdir}"/usr/src
+    cp -dr --no-preserve='ownership' kernel "${pkgdir}/usr/src/nvidia-${pkgver}"
+
+    install -Dt "${pkgdir}/usr/share/licenses/${pkgname}" -m644 "${srcdir}/${_pkg}/LICENSE"
+}
+
+package_nvidia-340xx-utils() {
+    pkgdesc="NVIDIA drivers utilities"
+    depends=('xorg-server' 'mesa' 'mhwd')
+    optdepends=('gtk2: nvidia-settings'
+                'xorg-server-devel: nvidia-xconfig'
+                'opencl-nvidia-340xx: OpenCL support')
+    conflicts=('nvidia-utils' 'nvidia-304xx-utils' 'nvidia-340xx-libgl')
+    provides=('opengl-driver' 'nvidia-libgl' "nvidia-utils=${pkgver}" 'nvidia-340xx-libgl')
+    replaces=('nvidia-340xx-libgl')
+    install="${pkgname}.install"
+
+    cd "${_pkg}"
+
+    # X driver
+    install -Dm755 nvidia_drv.so "${pkgdir}/usr/lib/xorg/modules/drivers/nvidia_drv.so"
+
+    # GLX extension module for X
+    install -Dm755 "libglx.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/xorg/libglx.so.${pkgver}"
+    ln -s "libglx.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/xorg/libglx.so.1"
+    ln -s "libglx.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/xorg/libglx.so"
+
+    # OpenGL libraries
+    install -Dm755 "libGL.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/libGL.so.${pkgver}"
+    install -Dm755 "libEGL.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/libEGL.so.${pkgver}"
+    install -Dm755 "libGLESv1_CM.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/libGLESv1_CM.so.${pkgver}"
+    install -Dm755 "libGLESv2.so.${pkgver}" "${pkgdir}/usr/lib/nvidia/libGLESv2.so.${pkgver}"
+
+    # OpenGL core library
+    install -Dm755 "libnvidia-glcore.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-glcore.so.${pkgver}"
+    install -Dm755 "libnvidia-eglcore.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-eglcore.so.${pkgver}"
+    install -Dm755 "libnvidia-glsi.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-glsi.so.${pkgver}"
+
+    # misc
+    install -Dm755 "libnvidia-ifr.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-ifr.so.${pkgver}"
+    install -Dm755 "libnvidia-fbc.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-fbc.so.${pkgver}"
+    install -Dm755 "libnvidia-encode.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-encode.so.${pkgver}"
+    install -Dm755 "libnvidia-cfg.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-cfg.so.${pkgver}"
+    install -Dm755 "libnvidia-ml.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-ml.so.${pkgver}"
+
+    # VDPAU
+    install -Dm755 "libvdpau_nvidia.so.${pkgver}" "${pkgdir}/usr/lib/vdpau/libvdpau_nvidia.so.${pkgver}"
+
+    # nvidia-tls library
+    install -Dm755 "tls/libnvidia-tls.so.${pkgver}" "${pkgdir}/usr/lib/libnvidia-tls.so.${pkgver}"
+
+    # CUDA
+    install -Dm755 "libcuda.so.${pkgver}" "${pkgdir}/usr/lib/libcuda.so.${pkgver}"
+    install -Dm755 "libnvcuvid.so.${pkgver}" "${pkgdir}/usr/lib/libnvcuvid.so.${pkgver}"
+
+    # DEBUG
+    install -Dm755 nvidia-debugdump "${pkgdir}/usr/bin/nvidia-debugdump"
+
+    # nvidia-xconfig
+    install -Dm755 nvidia-xconfig "${pkgdir}/usr/bin/nvidia-xconfig"
+    install -Dm644 nvidia-xconfig.1.gz "${pkgdir}/usr/share/man/man1/nvidia-xconfig.1.gz"
+
+    # nvidia-settings
+    install -Dm755 nvidia-settings "${pkgdir}/usr/bin/nvidia-settings"
+    install -Dm644 nvidia-settings.1.gz "${pkgdir}/usr/share/man/man1/nvidia-settings.1.gz"
+    install -Dm644 nvidia-settings.desktop "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
+    install -Dm644 nvidia-settings.png "${pkgdir}/usr/share/pixmaps/nvidia-settings.png"
+    sed -e 's:__UTILS_PATH__:/usr/bin:' -e 's:__PIXMAP_PATH__:/usr/share/pixmaps:' -i "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
+
+    # gsync support
+    install -Dm444 pci.ids "${pkgdir}/usr/share/nvidia/pci.ids"
+    install -Dm444 monitoring.conf "${pkgdir}/usr/share/nvidia/monitoring.conf"
+
+    # nvidia-bug-report
+    install -Dm755 nvidia-bug-report.sh "${pkgdir}/usr/bin/nvidia-bug-report.sh"
+
+    # nvidia-smi
+    install -Dm755 nvidia-smi "${pkgdir}/usr/bin/nvidia-smi"
+    install -Dm644 nvidia-smi.1.gz "${pkgdir}/usr/share/man/man1/nvidia-smi.1.gz"
+
+    # nvidia-cuda-mps
+    install -Dm755 nvidia-cuda-mps-server "${pkgdir}/usr/bin/nvidia-cuda-mps-server"
+    install -Dm644 nvidia-cuda-mps-control.1.gz "${pkgdir}/usr/share/man/man1/nvidia-cuda-mps-control.1.gz"
+
+    # nvidia-modprobe
+    install -Dm4755 nvidia-modprobe "${pkgdir}/usr/bin/nvidia-modprobe"
+
+    # application profiles
+    install -Dm644 nvidia-application-profiles-${pkgver}-rc "${pkgdir}/usr/share/nvidia/nvidia-application-profiles-${pkgver}-rc"
+    install -Dm644 nvidia-application-profiles-${pkgver}-key-documentation "${pkgdir}/usr/share/nvidia/nvidia-application-profiles-${pkgver}-key-documentation"
+
+    # License, docs
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/nvidia/LICENSE"
+    ln -s nvidia "${pkgdir}/usr/share/licenses/nvidia-utils"
+    install -Dm644 README.txt "${pkgdir}/usr/share/doc/nvidia/README"
+    install -Dm644 NVIDIA_Changelog "${pkgdir}/usr/share/doc/nvidia/NVIDIA_Changelog"
+    ln -s nvidia "${pkgdir}/usr/share/doc/nvidia-utils"
+
+    # distro specific files
+    install -Dm644 "${srcdir}/nvidia-drm-outputclass.conf" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia-drm-outputclass.conf"
+    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/usr/share/nvidia-340xx/20-nvidia.conf"
+
+    install -Dm644 "${srcdir}/nvidia-340xx.rules" "${pkgdir}/usr/lib/udev/rules.d/60-nvidia-340xx.rules"
+
+    install -Dm644 "${srcdir}/nvidia-utils.sysusers" "${pkgdir}/usr/lib/sysusers.d/nvidia-340xx-utils.conf"
+
+    echo "blacklist nouveau" | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modprobe.d/${pkgname}.conf"
+    echo "nvidia-uvm" | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modules-load.d/${pkgname}.conf"
+
+    create_links
+}
+
+package_mhwd-nvidia-340xx() {
+    pkgdesc="MHWD module-ids for nvidia ${pkgver}"
+    arch=('any')
+    depends=('mhwd')
+
+    install -d -m755 "${pkgdir}/var/lib/mhwd/ids/pci/"
+
+    sh -e ${srcdir}/mhwd-nvidia \
+        ${srcdir}/${_pkg}/README.txt \
+        ${srcdir}/${_pkg}/kernel/nv-kernel.o \
+        > ${pkgdir}/var/lib/mhwd/ids/pci/nvidia-340xx.ids
+}
