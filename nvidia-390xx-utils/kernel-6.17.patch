@@ -1,8 +1,19 @@
-diff --git a/kernel/nvidia-drm/nvidia-drm-drv.c b/kernel/nvidia-drm/nvidia-drm-drv.c
-index 7feb5d2..2bcf29c 100644
---- a/kernel/nvidia-drm/nvidia-drm-drv.c
-+++ b/kernel/nvidia-drm/nvidia-drm-drv.c
-@@ -139,6 +139,10 @@ static void nv_drm_output_poll_changed(struct drm_device *dev)
+From fd52e276f587394b9ae3ba7013b6a44cbdd526f2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Joan=20Bruguera=20Mic=C3=B3?= <joanbrugueram@gmail.com>
+Date: Sat, 26 Jul 2025 21:19:03 +0000
+Subject: [PATCH] Tentative fix for NVIDIA 470.256.02 driver for Linux 6.17-rc1
+
+---
+ nvidia-drm/nvidia-drm-drv.c | 8 ++++++++
+ nvidia-drm/nvidia-drm-fb.c  | 9 +++++++++
+ nvidia-drm/nvidia-drm-fb.h  | 6 ++++++
+ 3 files changed, 23 insertions(+)
+
+diff --git a/nvidia-drm/nvidia-drm-drv.c b/nvidia-drm/nvidia-drm-drv.c
+index b50b17a..9da3294 100644
+--- a/nvidia-drm/nvidia-drm-drv.c
++++ b/nvidia-drm/nvidia-drm-drv.c
+@@ -140,6 +140,10 @@ static void nv_drm_output_poll_changed(struct drm_device *dev)
  static struct drm_framebuffer *nv_drm_framebuffer_create(
      struct drm_device *dev,
      struct drm_file *file,
@@ -13,7 +24,7 @@ index 7feb5d2..2bcf29c 100644
      #if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG)
      const struct drm_mode_fb_cmd2 *cmd
      #else
-@@ -154,6 +158,10 @@ static struct drm_framebuffer *nv_drm_framebuffer_create(
+@@ -155,6 +159,10 @@ static struct drm_framebuffer *nv_drm_framebuffer_create(
      fb = nv_drm_internal_framebuffer_create(
              dev,
              file,
@@ -24,19 +35,19 @@ index 7feb5d2..2bcf29c 100644
              &local_cmd);
  
      #if !defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG)
-diff --git a/kernel/nvidia-drm/nvidia-drm-fb.c b/kernel/nvidia-drm/nvidia-drm-fb.c
-index c35e0ee..91161ff 100644
---- a/kernel/nvidia-drm/nvidia-drm-fb.c
-+++ b/kernel/nvidia-drm/nvidia-drm-fb.c
-@@ -32,6 +32,7 @@
- #include "nvidia-drm-helper.h"
+diff --git a/nvidia-drm/nvidia-drm-fb.c b/nvidia-drm/nvidia-drm-fb.c
+index d119e7c..b84e026 100644
+--- a/nvidia-drm/nvidia-drm-fb.c
++++ b/nvidia-drm/nvidia-drm-fb.c
+@@ -33,6 +33,7 @@
+ #include "nvidia-drm-format.h"
  
  #include <drm/drm_crtc_helper.h>
 +#include <linux/version.h>
  
- static void nv_drm_framebuffer_destroy(struct drm_framebuffer *fb)
+ static void __nv_drm_framebuffer_free(struct nv_drm_framebuffer *nv_fb)
  {
-@@ -157,6 +158,10 @@ static int nv_drm_framebuffer_init(
+@@ -184,6 +185,10 @@ static int nv_drm_framebuffer_init(struct drm_device *dev,
  struct drm_framebuffer *nv_drm_internal_framebuffer_create(
      struct drm_device *dev,
      struct drm_file *file,
@@ -46,8 +57,8 @@ index c35e0ee..91161ff 100644
 +#endif
      struct drm_mode_fb_cmd2 *cmd)
  {
-     struct nv_drm_framebuffer *nv_fb;
-@@ -183,6 +188,10 @@ struct drm_framebuffer *nv_drm_internal_framebuffer_create(
+     struct nv_drm_device *nv_dev = to_nv_device(dev);
+@@ -237,6 +242,10 @@ struct drm_framebuffer *nv_drm_internal_framebuffer_create(
          dev,
          #endif
          &nv_fb->base,
@@ -58,10 +69,10 @@ index c35e0ee..91161ff 100644
          cmd);
  
      /*
-diff --git a/kernel/nvidia-drm/nvidia-drm-fb.h b/kernel/nvidia-drm/nvidia-drm-fb.h
-index bfa93fd..68a634a 100644
---- a/kernel/nvidia-drm/nvidia-drm-fb.h
-+++ b/kernel/nvidia-drm/nvidia-drm-fb.h
+diff --git a/nvidia-drm/nvidia-drm-fb.h b/nvidia-drm/nvidia-drm-fb.h
+index cf477cc..b61b309 100644
+--- a/nvidia-drm/nvidia-drm-fb.h
++++ b/nvidia-drm/nvidia-drm-fb.h
 @@ -35,6 +35,8 @@
  #include <drm/drm_framebuffer.h>
  #endif
@@ -71,7 +82,7 @@ index bfa93fd..68a634a 100644
  #include "nvidia-drm-gem-nvkms-memory.h"
  #include "nvkms-kapi.h"
  
-@@ -58,6 +60,10 @@ static inline struct nv_drm_framebuffer *to_nv_framebuffer(
+@@ -59,6 +61,10 @@ static inline struct nv_drm_framebuffer *to_nv_framebuffer(
  struct drm_framebuffer *nv_drm_internal_framebuffer_create(
      struct drm_device *dev,
      struct drm_file *file,
@@ -82,3 +93,6 @@ index bfa93fd..68a634a 100644
      struct drm_mode_fb_cmd2 *cmd);
  
  #endif /* NV_DRM_ATOMIC_MODESET_AVAILABLE */
+-- 
+2.50.1
+

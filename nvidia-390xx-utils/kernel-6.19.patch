@@ -454,10 +454,18 @@ index a06c12c..c30f8cc 100644
  #else
      return NV_FALSE;
  #endif
-diff --git a/kernel/nvidia/nvlink_linux.c b/kernel/nvidia/nvlink_linux.c
-index ba57b86..39816ae 100644
---- a/kernel/nvidia/nvlink_linux.c
-+++ b/kernel/nvidia/nvlink_linux.c
+--- a/kernel/common/inc/nv-time.h	2022-10-12 11:30:26.000000000 +0200
++++ b/kernel/common/inc/nv-time.h	2026-03-01 22:30:01.103420398 +0100
+@@ -24,6 +24,7 @@
+ #define __NV_TIME_H__
+ 
+ #include "conftest.h"
++#include <linux/preempt.h>
+ 
+ #include <linux/time.h>
+ #if defined(NV_LINUX_KTIME_H_PRESENT)
+--- a/kernel/nvidia/nvlink_linux.c	2026-02-16 16:02:42.319377041 +0100
++++ b/kernel/nvidia/nvlink_linux.c	2026-02-16 16:32:44.088068710 +0100
 @@ -30,6 +30,7 @@
  #include "nv-linux.h"
  #include "nv-procfs.h"
@@ -466,7 +474,7 @@ index ba57b86..39816ae 100644
  
  #define MAX_ERROR_STRING           512
  
-@@ -570,7 +571,7 @@ void NVLINK_API_CALL nvlink_sleep(unsigned int ms)
+@@ -570,7 +571,7 @@ void NVLINK_API_CALL nvlink_sleep(unsign
  
      nv_gettimeofday(&tm_aux);
  
@@ -475,10 +483,9 @@ index ba57b86..39816ae 100644
      {
          return;
      }
-diff --git a/kernel/nvidia/os-interface.c b/kernel/nvidia/os-interface.c
-index 262171f..dd65432 100644
---- a/kernel/nvidia/os-interface.c
-+++ b/kernel/nvidia/os-interface.c
+diff -u -r -p a/kernel/nvidia/os-interface.c b/kernel/nvidia/os-interface.c
+--- a/kernel/nvidia/os-interface.c	2026-02-16 16:02:42.307376767 +0100
++++ b/kernel/nvidia/os-interface.c	2026-02-16 16:28:25.242236893 +0100
 @@ -17,6 +17,8 @@
  #include "nv-time.h"
  #include "nv-gpu-numa.h"
@@ -488,7 +495,7 @@ index 262171f..dd65432 100644
  #define MAX_ERROR_STRING 512
  static char nv_error_string[MAX_ERROR_STRING];
  nv_spinlock_t nv_error_string_lock;
-@@ -193,7 +195,7 @@ BOOL NV_API_CALL os_semaphore_may_sleep(void)
+@@ -193,7 +195,7 @@ BOOL NV_API_CALL os_semaphore_may_sleep(
  
  BOOL NV_API_CALL os_is_isr(void)
  {
@@ -497,7 +504,7 @@ index 262171f..dd65432 100644
  }
  
  // return TRUE if the caller is the super-user
-@@ -510,7 +512,7 @@ NV_STATUS NV_API_CALL os_delay_us(NvU32 MicroSeconds)
+@@ -510,7 +512,7 @@ NV_STATUS NV_API_CALL os_delay_us(NvU32
      nv_gettimeofday(&tm1);
  #endif
  
@@ -506,7 +513,7 @@ index 262171f..dd65432 100644
          return NV_ERR_GENERIC;
      
      mdelay_safe_msec = MicroSeconds / 1000;
-@@ -555,7 +557,7 @@ NV_STATUS NV_API_CALL os_delay(NvU32 MilliSeconds)
+@@ -555,7 +557,7 @@ NV_STATUS NV_API_CALL os_delay(NvU32 Mil
      tm_start = tm_aux;
  #endif
  
