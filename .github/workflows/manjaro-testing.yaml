@@ -697,7 +697,6 @@ jobs:
           # Győződj meg róla, hogy az mhwd-db csomag telepítve van
           pacman -S --needed --noconfirm mhwd-db
           # Frissítsd az adatbázist a repókból
-          mhwd-db --update || mhwd-db -u
           # Ha a '-t' flag szükséges (pl. teszteléshez), akkor:
           # mhwd-db -t
 
