@@ -27,7 +27,7 @@ build() {
 package() {
     _kernver="$(cat /usr/src/${_linuxprefix}/version)"
 
-    install -Dt "${pkgdir}/usr/lib/modules/${_kernver}/extramodules" -m644 nvidia/${pkgver}/${_kernver}/${CARCH}/module/*.ko.zst
+    install -Dt "${pkgdir}/usr/lib/modules/${_kernver}/extramodules" -m644 nvidia/${pkgver}/${_kernver}/${CARCH}/module/*.ko
 
     # compress each module individually
     find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +

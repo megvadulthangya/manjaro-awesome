@@ -9,8 +9,6 @@ LOCAL_PACKAGES = [
     "nvidia-390xx-utils",
     "mhwd-db",
     "lib32-nvidia-340xx-utils",
-    "linux61-nvidia-340xx",
-    "linux61-rt-nvidia-340xx",
     "linux66-nvidia-340xx",
     "linux66-rt-nvidia-340xx",
     "linux71-nvidia-340xx",
