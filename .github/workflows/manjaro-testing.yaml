@@ -205,6 +205,38 @@ jobs:
           # NOTE: CacheDir modification is intentionally omitted here.
           # It will be applied AFTER the bootstrap/system upgrade to avoid
           # interfering with pacman's self-upgrade transaction.
+      - name: Enable Multilib Repository
+        run: |
+          echo "=== Enabling multilib repository ==="
+
+          # Ellenőrizzük, hogy a multilib szekció létezik-e
+          if grep -q '^\[multilib\]' /etc/pacman.conf; then
+            echo "✅ [multilib] already enabled"
+          else
+            # Ha kommentben van, vegyük ki a kommentet
+            if grep -q '^#\s*\[multilib\]' /etc/pacman.conf; then
+              echo "🔧 Uncommenting [multilib] section"
+              sed -i 's/^#\s*\[multilib\]/[multilib]/' /etc/pacman.conf
+            else
+              # Ha egyáltalán nincs ilyen szekció, adjuk hozzá
+              echo "➕ Adding [multilib] section"
+              echo "" >> /etc/pacman.conf
+              echo "[multilib]" >> /etc/pacman.conf
+              echo "Include = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
+            fi
+          fi
+
+          # Győződjünk meg róla, hogy az Include sor is aktív
+          if grep -q '^#\s*Include = /etc/pacman.d/mirrorlist' /etc/pacman.conf; then
+            sed -i 's/^#\s*Include = /etc/pacman.d/mirrorlist/Include = /etc/pacman.d/mirrorlist/' /etc/pacman.conf
+          fi
+
+          # Adatbázis frissítése, hogy a multilib csomagok látszódjanak
+          echo "🔄 Syncing package databases"
+          pacman -Sy --noconfirm
+
+          echo "✅ Multilib repository enabled"
+
       - name: Switch Manjaro to testing
         run: |
           echo "=== Before ==="
