@@ -545,7 +545,8 @@ jobs:
             dbus polkit \
             systemd systemd-sysvcompat \
             arch-install-scripts \
-            ldc po4a dconf
+            ldc po4a dconf \
+            lib32-zlib lib32-gcc-libs lib32-mesa
 
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
@@ -661,6 +662,16 @@ jobs:
           fi
 
           echo "✅ Build dependencies installed"
+
+      - name: Update mhwd database from custom repository
+        run: |
+          echo "=== Updating mhwd database ==="
+          # Győződj meg róla, hogy az mhwd-db csomag telepítve van
+          pacman -S --needed --noconfirm mhwd-db
+          # Frissítsd az adatbázist a repókból
+          mhwd-db --update || mhwd-db -u
+          # Ha a '-t' flag szükséges (pl. teszteléshez), akkor:
+          # mhwd-db -t
 
       - name: Network Diagnostics
         run: |
@@ -965,6 +976,34 @@ jobs:
           echo "========================================="
           grep -E '^\[.*\]' /etc/pacman.conf
 
+      - name: Update mhwd-db from manjaro-awesome repo
+        if: ${{ env.REPO_SERVER_URL != '' }}
+        run: |
+          echo "=== Re-enabling $REPO_NAME repository and updating mhwd-db ==="
+          REPO_FILE="/etc/pacman.d/${REPO_NAME}"
+
+          # 1. Kapcsoljuk vissza a repót, ha korábban kommentezve lett
+          if grep -q "^# \[${REPO_NAME}\]" /etc/pacman.conf; then
+            echo "Repository $REPO_NAME is commented - uncommenting..."
+            sed -i "s|^# \[${REPO_NAME}\]|[${REPO_NAME}]|" /etc/pacman.conf
+            sed -i "s|^# Include = ${REPO_FILE}|Include = ${REPO_FILE}|" /etc/pacman.conf
+          else
+            echo "Repository $REPO_NAME already enabled (or not present)."
+          fi
+
+          # 2. Adatbázis frissítése (most már minden aktív repóval)
+          echo "Syncing package databases..."
+          pacman -Sy --noconfirm
+
+          # 3. mhwd-db telepítése/frissítése a manjaro-awesome repóból
+          echo "Installing/updating mhwd-db from $REPO_NAME..."
+          pacman -S --needed --noconfirm mhwd-db
+
+          # 4. (Opcionális) Ha szükséges, futtassunk egy parancsot is
+          # pl. mhwd-db -t
+          # mhwd-db -t
+
+          echo "✅ mhwd-db updated from $REPO_NAME"
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
