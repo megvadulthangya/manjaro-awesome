@@ -1,5 +1,6 @@
+diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conftest.sh
 --- nvidia-390.157-base/conftest.sh	2026-08-11 19:16:34.750000000 +0200
-+++ nvidia-390.157-7.2/conftest.sh	2026-08-19 13:23:59.052637119 +0200
++++ nvidia-390.157-7.2/conftest.sh	2026-08-19 15:22:46.041105470 +0200
 @@ -2345,7 +2345,7 @@
              #
              # Determine if the DRM atomic modesetting subsystem is usable
@@ -47,28 +48,35 @@
          ;;
  
          vm_ops_fault_removed_vma_arg)
-@@ -3688,7 +3696,7 @@
-             fi
-         ;;
- 
--        drm_old_atomic_state_iterators_present)
-+        drm_old_atomic_commit_iterators_present)
-             #
-             # Determine if the old atomic state iterators
+@@ -3694,11 +3702,6 @@
              # for_each_crtc_in_state(), for_each_connector_in_state() and
-@@ -3702,9 +3710,9 @@
+             # for_each_plane_in_state() are present.
+             #
+-            # These old atomic state iterators were added by:
+-            #   2015-04-10  df63b9994eaf942afcdb946d27a28661d7dfbf2a
+-            # and they are removed by:
+-            #   2017-07-19  77ac3b00b13185741effd0d5e2f1f05e4bfef7dc
+-            #
              CODE="
              #include <drm/drmP.h>
              #include <drm/drm_atomic.h>
--            void conftest_drm_old_atomic_state_iterators_present(void) {
-+            void conftest_drm_old_atomic_commit_iterators_present(void) {
-                 struct drm_crtc_state *crtc_state;
--                struct drm_atomic_state *state;
-+                struct drm_atomic_commit *state;
+@@ -3708,13 +3711,13 @@
                  struct drm_crtc *crtc;
                  int i;
  
-@@ -3941,7 +3949,7 @@
+-                for_each_crtc_in_state(state, crtc, crtc_state, i) {
+-                }
++                for_each_crtc_in_state(state, crtc, crtc_state, i) { }
+             }"
+ 
+             compile_check_conftest "$CODE" "NV_DRM_OLD_ATOMIC_STATE_ITERATORS_PRESENT" | append_conftest "types"
+         ;;
+ 
++
+         drm_mode_object_find_has_file_priv_arg)
+             #
+             # Determine if drm_mode_object_find() has 'file_priv' arguments.
+@@ -3941,7 +3944,7 @@
              CODE="
              #include <drm/drm_atomic_helper.h>
              void conftest_drm_atomic_helper_swap_state_has_stall_arg(
@@ -77,7 +85,7 @@
                      bool stall) {
                  (void)drm_atomic_helper_swap_state(state, stall);
              }"
-@@ -3960,7 +3968,7 @@
+@@ -3960,7 +3963,7 @@
              CODE="
              #include <drm/drm_atomic_helper.h>
              int conftest_drm_atomic_helper_swap_state_return_int(
@@ -86,7 +94,7 @@
                      bool stall) {
                  return drm_atomic_helper_swap_state(state, stall);
              }"
-@@ -4413,10 +4421,10 @@
+@@ -4413,10 +4416,10 @@
              compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS" "" "types"
          ;;
  
@@ -99,7 +107,7 @@
              #
              # The commit 29b77ad7b9ca ("drm/atomic: Pass the full state to CRTC
              # atomic_check") passed the full atomic state to
-@@ -4432,10 +4440,10 @@
+@@ -4432,10 +4435,10 @@
              #include <drm/drm_modeset_helper_vtables.h>
  
              static const struct drm_crtc_helper_funcs *funcs;
@@ -113,7 +121,7 @@
                  return 0;
              }" > conftest$$.c
  
-@@ -4444,9 +4452,9 @@
+@@ -4444,9 +4447,9 @@
  
              if [ -f conftest$$.o ]; then
                  rm -f conftest$$.o
@@ -125,7 +133,7 @@
              fi
          ;;
  
-@@ -4487,10 +4495,10 @@
+@@ -4487,10 +4490,10 @@
              compile_check_conftest "$CODE" "NV_FOLLOW_PFN_PRESENT" "" "functions"
          ;;
  
@@ -138,7 +146,7 @@
              #
              # The commit 7c11b99a8e58 ("drm/atomic: Pass the full state to
              # planes atomic_check") passed the full atomic state to
-@@ -4506,10 +4514,10 @@
+@@ -4506,10 +4509,10 @@
              #include <drm/drm_modeset_helper_vtables.h>
  
              static const struct drm_plane_helper_funcs *funcs;
@@ -152,7 +160,7 @@
                  return 0;
              }" > conftest$$.c
  
-@@ -4518,9 +4526,9 @@
+@@ -4518,9 +4521,9 @@
  
              if [ -f conftest$$.o ]; then
                  rm -f conftest$$.o
