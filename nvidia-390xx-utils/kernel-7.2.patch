@@ -1,6 +1,5 @@
-diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conftest.sh
---- nvidia-390.157-base/conftest.sh	2026-08-11 19:16:34.750000000 +0200
-+++ nvidia-390.157-7.2/conftest.sh	2026-08-19 15:22:46.041105470 +0200
+--- nvidia-390.157-base/conftest.sh 2026-08-11 19:16:34.750000000 +0200
++++ nvidia-390.157-7.2/conftest.sh  2026-08-19 19:04:52.389801850 +0200
 @@ -2345,7 +2345,7 @@
              #
              # Determine if the DRM atomic modesetting subsystem is usable
@@ -76,25 +75,39 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
          drm_mode_object_find_has_file_priv_arg)
              #
              # Determine if drm_mode_object_find() has 'file_priv' arguments.
-@@ -3941,7 +3944,7 @@
+@@ -3940,8 +3943,14 @@
+             #
              CODE="
              #include <drm/drm_atomic_helper.h>
++            #include <linux/version.h>
++
++            #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
++            #define drm_atomic_commit drm_atomic_state
++            #endif
++
              void conftest_drm_atomic_helper_swap_state_has_stall_arg(
 -                    struct drm_atomic_state *state,
 +                    struct drm_atomic_commit *state,
                      bool stall) {
                  (void)drm_atomic_helper_swap_state(state, stall);
              }"
-@@ -3960,7 +3963,7 @@
+@@ -3959,8 +3968,14 @@
+             #
              CODE="
              #include <drm/drm_atomic_helper.h>
++            #include <linux/version.h>
++
++            #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
++            #define drm_atomic_commit drm_atomic_state
++            #endif
++
              int conftest_drm_atomic_helper_swap_state_return_int(
 -                    struct drm_atomic_state *state,
 +                    struct drm_atomic_commit *state,
                      bool stall) {
                  return drm_atomic_helper_swap_state(state, stall);
              }"
-@@ -4413,10 +4416,10 @@
+@@ -4413,10 +4428,10 @@
              compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS" "" "types"
          ;;
  
@@ -107,8 +120,15 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
              #
              # The commit 29b77ad7b9ca ("drm/atomic: Pass the full state to CRTC
              # atomic_check") passed the full atomic state to
-@@ -4432,10 +4435,10 @@
+@@ -4430,12 +4445,17 @@
+             #
+             echo "$CONFTEST_PREAMBLE
              #include <drm/drm_modeset_helper_vtables.h>
++            #include <linux/version.h>
++
++            #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
++            #define drm_atomic_commit drm_atomic_state
++            #endif
  
              static const struct drm_crtc_helper_funcs *funcs;
 -            typeof(*funcs->atomic_check) conftest_drm_crtc_atomic_check_has_atomic_state_arg;
@@ -121,7 +141,7 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
                  return 0;
              }" > conftest$$.c
  
-@@ -4444,9 +4447,9 @@
+@@ -4444,9 +4464,9 @@
  
              if [ -f conftest$$.o ]; then
                  rm -f conftest$$.o
@@ -133,7 +153,7 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
              fi
          ;;
  
-@@ -4487,10 +4490,10 @@
+@@ -4487,10 +4507,10 @@
              compile_check_conftest "$CODE" "NV_FOLLOW_PFN_PRESENT" "" "functions"
          ;;
  
@@ -146,8 +166,15 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
              #
              # The commit 7c11b99a8e58 ("drm/atomic: Pass the full state to
              # planes atomic_check") passed the full atomic state to
-@@ -4506,10 +4509,10 @@
+@@ -4504,12 +4524,17 @@
+             #
+             echo "$CONFTEST_PREAMBLE
              #include <drm/drm_modeset_helper_vtables.h>
++            #include <linux/version.h>
++
++            #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 2, 0)
++            #define drm_atomic_commit drm_atomic_state
++            #endif
  
              static const struct drm_plane_helper_funcs *funcs;
 -            typeof(*funcs->atomic_check) conftest_drm_plane_atomic_check_has_atomic_state_arg;
@@ -160,7 +187,7 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
                  return 0;
              }" > conftest$$.c
  
-@@ -4518,9 +4521,9 @@
+@@ -4518,9 +4543,9 @@
  
              if [ -f conftest$$.o ]; then
                  rm -f conftest$$.o
@@ -173,8 +200,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/conftest.sh nvidia-390.157-7.2/conf
          ;;
  
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia/nv-gpu-numa.c nvidia-390.157-7.2/nvidia/nv-gpu-numa.c
---- nvidia-390.157-base/nvidia/nv-gpu-numa.c	2026-08-11 19:16:34.750000000 +0200
-+++ nvidia-390.157-7.2/nvidia/nv-gpu-numa.c	2026-08-12 10:45:51.938985834 +0200
+--- nvidia-390.157-base/nvidia/nv-gpu-numa.c    2026-08-11 19:16:34.750000000 +0200
++++ nvidia-390.157-7.2/nvidia/nv-gpu-numa.c 2026-08-12 10:45:51.938985834 +0200
 @@ -158,8 +158,7 @@
      if (name_len + 1 > BUF_SIZE)
          return -ERANGE;
@@ -186,8 +213,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia/nv-gpu-numa.c nvidia-390.157
      // Convert the memory block ID into an integer
      if (kstrtoull(name_copy + strlen(MEMBLOCK_PREFIX), 0, &memblock_id) != 0) 
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia/os-interface.c nvidia-390.157-7.2/nvidia/os-interface.c
---- nvidia-390.157-base/nvidia/os-interface.c	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia/os-interface.c	2026-08-12 10:35:59.997705356 +0200
+--- nvidia-390.157-base/nvidia/os-interface.c   2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia/os-interface.c    2026-08-12 10:35:59.997705356 +0200
 @@ -655,8 +655,7 @@
  void NV_API_CALL os_get_current_process_name(char *buf, NvU32 len)
  {
@@ -199,8 +226,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia/os-interface.c nvidia-390.15
  }
  
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c nvidia-390.157-7.2/nvidia-drm/nvidia-drm-crtc.c
---- nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-crtc.c	2026-08-12 10:29:12.840408529 +0200
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c    2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-crtc.c 2026-08-12 10:29:12.840408529 +0200
 @@ -130,15 +130,15 @@
          old_config.dstHeight != req_config->config.dstHeight;
  }
@@ -240,8 +267,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-crtc.c nvidia
          drm_atomic_get_new_crtc_state(state, crtc);
  #endif
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild nvidia-390.157-7.2/nvidia-drm/nvidia-drm.Kbuild
---- nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm.Kbuild	2026-08-12 10:29:12.839971671 +0200
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild    2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm.Kbuild 2026-08-12 10:29:12.839971671 +0200
 @@ -57,7 +57,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_user_pages_remote
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_user_pages
@@ -264,8 +291,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm.Kbuild nvidia
  NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_add_fence
  NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_reserve_fences
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.c
---- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.c	2026-08-19 13:30:55.745568123 +0200
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c 2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.c  2026-08-19 18:51:55.305951192 +0200
 @@ -42,23 +42,23 @@
  #include <drm/drm_atomic_helper.h>
  #include <drm/drm_crtc.h>
@@ -354,7 +381,7 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c nvi
                           bool nonblock)
  {
      int ret = -EBUSY;
-@@ -333,13 +333,14 @@
+@@ -333,13 +333,13 @@
          }
      }
  
@@ -364,7 +391,6 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c nvi
       * If ref counting is present, state will be freed when the caller
       * drops its reference after we return.
       */
-+    drm_atomic_commit_put(state);
  #else
 -    drm_atomic_state_free(state);
 +    drm_atomic_commit_free(state);
@@ -372,8 +398,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.c nvi
  
      return 0;
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.h
---- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.h	2026-08-12 10:29:12.925838598 +0200
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h 2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-modeset.h  2026-08-12 10:29:12.925838598 +0200
 @@ -30,17 +30,17 @@
  #include "nvkms-kapi.h"
  
@@ -399,8 +425,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-modeset.h nvi
  
  void nv_drm_handle_flip_occurred(struct nv_drm_device *nv_dev,
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h nvidia-390.157-7.2/nvidia-drm/nvidia-drm-priv.h
---- nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h	2026-08-11 19:16:34.770000000 +0200
-+++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-priv.h	2026-08-12 10:58:49.970562148 +0200
+--- nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h    2026-08-11 19:16:34.770000000 +0200
++++ nvidia-390.157-7.2/nvidia-drm/nvidia-drm-priv.h 2026-08-12 10:58:49.970562148 +0200
 @@ -23,6 +23,19 @@
  #ifndef __NVIDIA_DRM_PRIV_H__
  #define __NVIDIA_DRM_PRIV_H__
@@ -422,8 +448,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-drm/nvidia-drm-priv.h nvidia
  
  #if defined(NV_DRM_AVAILABLE)
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux.c nvidia-390.157-7.2/nvidia-modeset/nvidia-modeset-linux.c
---- nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux.c	2026-08-11 19:16:34.780000000 +0200
-+++ nvidia-390.157-7.2/nvidia-modeset/nvidia-modeset-linux.c	2026-08-12 10:44:26.007810107 +0200
+--- nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux.c   2026-08-11 19:16:34.780000000 +0200
++++ nvidia-390.157-7.2/nvidia-modeset/nvidia-modeset-linux.c    2026-08-12 10:44:26.007810107 +0200
 @@ -181,7 +181,16 @@
  
  char* NVKMS_API_CALL nvkms_strncpy(char *dest, const char *src, size_t n)
@@ -442,8 +468,8 @@ diff '--color=auto' -ruN nvidia-390.157-base/nvidia-modeset/nvidia-modeset-linux
  
  void NVKMS_API_CALL nvkms_usleep(NvU64 usec)
 diff '--color=auto' -ruN nvidia-390.157-base/nvidia-uvm/uvm8_pmm_gpu.c nvidia-390.157-7.2/nvidia-uvm/uvm8_pmm_gpu.c
---- nvidia-390.157-base/nvidia-uvm/uvm8_pmm_gpu.c	2026-08-11 19:16:34.790000000 +0200
-+++ nvidia-390.157-7.2/nvidia-uvm/uvm8_pmm_gpu.c	2026-08-12 10:39:04.082913916 +0200
+--- nvidia-390.157-base/nvidia-uvm/uvm8_pmm_gpu.c   2026-08-11 19:16:34.790000000 +0200
++++ nvidia-390.157-7.2/nvidia-uvm/uvm8_pmm_gpu.c    2026-08-12 10:39:04.082913916 +0200
 @@ -2794,7 +2794,7 @@
              size_t size;
              size_t align;
