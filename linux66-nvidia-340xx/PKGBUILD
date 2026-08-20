@@ -23,7 +23,8 @@ build() {
     # Csak RT kerneleknél tedd be ezt a sort:
     # export IGNORE_PREEMPT_RT_PRESENCE=1
 
-    fakeroot dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
+sudo dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
+#    fakeroot dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
 }
 
 package() {
