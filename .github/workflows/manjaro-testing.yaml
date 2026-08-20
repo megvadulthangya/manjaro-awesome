@@ -391,6 +391,24 @@ jobs:
 
           echo "✅ Builder user setup complete."
 
+          # ========== YAY CONFIGURATION (NON-INTERACTIVE) ==========
+          echo "SETUP: Configuring yay to avoid interactive prompts..."
+          mkdir -p /home/builder/.config/yay
+          cat > /home/builder/.config/yay/config.json <<'EOF'
+          {
+              "answerclean": "None",
+              "answerdiff": "None",
+              "answeredit": "None",
+              "answerupgrade": "None",
+              "askremovemake": false,
+              "cleanmenu": false,
+              "diffmenu": false,
+              "editmenu": false,
+              "upgrademenu": false
+          }
+          EOF
+          chown -R builder:builder /home/builder/.config
+
           # 4. WORKSPACE: Ensure GITHUB_WORKSPACE is owned by builder
           echo "WORKSPACE: Setting ownership of GITHUB_WORKSPACE ($(pwd))..."
           chown -R builder:builder "$(pwd)"
