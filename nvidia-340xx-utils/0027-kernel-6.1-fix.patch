@@ -1,0 +1,36 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-linux.h	2026-08-14 11:45:31.238271721 +0200
++++ work/kernel-6.1-fix/nv-linux.h	2026-08-20 11:09:10.502166512 +0200
+@@ -2314,6 +2314,19 @@
+ #endif
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
++// Rel. commit "mm: introduce vma->vm_flags wrapper functions" (Suren Baghdasaryan, 26 Jan 2023)
++static inline void vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
++{
++    vma->vm_flags |= flags;
++}
++
++static inline void vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags)
++{
++    vma->vm_flags &= ~flags;
++}
++#endif
++
+ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
+ {
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+@@ -2340,13 +2353,5 @@
+ #endif
+ }
+ 
+-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
+-// Rel. commit "treewide: Switch/rename to timer_delete[_sync]()" (Thomas Gleixner, 5 Apr 2025)
+-// This provides a shim for ancient kernels before timer_delete_sync was introduced
+-static inline int timer_delete_sync(struct timer_list *timer)
+-{
+-    return del_timer_sync(timer);
+-}
+-#endif
+ 
+ #endif  /* _NV_LINUX_H_ */
