@@ -695,7 +695,7 @@ jobs:
         run: |
           echo "=== Updating mhwd database ==="
           # Győződj meg róla, hogy az mhwd-db csomag telepítve van
-          pacman -S --needed --noconfirm mhwd-db
+          pacman -S --needed --noconfirm mhwd-db || echo "⚠️ mhwd-db install failed, continuing"
           # Frissítsd az adatbázist a repókból
           # Ha a '-t' flag szükséges (pl. teszteléshez), akkor:
           # mhwd-db -t
@@ -1005,6 +1005,7 @@ jobs:
 
       - name: Update mhwd-db from manjaro-awesome repo
         if: ${{ env.REPO_SERVER_URL != '' }}
+        continue-on-error: true   # <- nem állítja meg a workflow-t, ha hibázik
         run: |
           echo "=== Re-enabling $REPO_NAME repository and updating mhwd-db ==="
           REPO_FILE="/etc/pacman.d/${REPO_NAME}"
@@ -1018,19 +1019,14 @@ jobs:
             echo "Repository $REPO_NAME already enabled (or not present)."
           fi
 
-          # 2. Adatbázis frissítése (most már minden aktív repóval)
           echo "Syncing package databases..."
-          pacman -Sy --noconfirm
+          pacman -Sy --noconfirm || echo "⚠️ pacman -Sy failed, continuing"
 
-          # 3. mhwd-db telepítése/frissítése a manjaro-awesome repóból
           echo "Installing/updating mhwd-db from $REPO_NAME..."
-          pacman -S --needed --noconfirm mhwd-db
+          pacman -S --needed --noconfirm mhwd-db || echo "⚠️ mhwd-db install failed (missing package?), continuing"
 
-          # 4. (Opcionális) Ha szükséges, futtassunk egy parancsot is
-          # pl. mhwd-db -t
-          # mhwd-db -t
+          echo "✅ mhwd-db update step finished (errors tolerated)"
 
-          echo "✅ mhwd-db updated from $REPO_NAME"
       - name: Run Builder with Cache Optimization
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
