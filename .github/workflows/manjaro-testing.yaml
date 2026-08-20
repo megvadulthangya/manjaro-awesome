@@ -456,6 +456,7 @@ jobs:
           echo "✅ SSH setup for VPS complete"
 
       - name: Configure Pacman Repository (with GPG key)
+        continue-on-error: true   # Tolerálja, ha a repo adatbázisa hiányzik (404)
         run: |
           echo "=== Configuring Repository $REPO_NAME with GPG key ==="
 
@@ -506,9 +507,9 @@ jobs:
 
           # Adatbázis frissítése
           echo "🔄 Syncing package databases"
-          pacman -Sy
+          pacman -Sy || echo "⚠️ pacman -Sy failed, repository database may be missing - continuing"
 
-          echo "✅ Repository $REPO_NAME configured successfully"
+          echo "✅ Repository $REPO_NAME configured successfully (errors tolerated)"
 
       - name: Rsync Connection Test
         run: |
