@@ -22,12 +22,26 @@ build() {
 
     # Csak RT kerneleknél tedd be ezt a sort:
     # export IGNORE_PREEMPT_RT_PRESENCE=1
-# --no-sign letiltja a Secure Boot aláírást, mert a csomagépítésnél nem szükséges
-     sudo dkms build --no-sign --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
 
-#    fakeroot dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
+    # DKMS aláírás letiltása:
+    # - sign_tool legyen /bin/true (nem csinál semmit)
+    # - kulcs és tanúsítvány dummy fájlokra mutasson
+    sudo cp /etc/dkms/framework.conf /etc/dkms/framework.conf.bak 2>/dev/null || true
+    sudo tee /etc/dkms/framework.conf > /dev/null <<'EOF'
+sign_tool="/bin/true"
+mok_signing_key="/dev/null"
+mok_certificate="/dev/null"
+EOF
 
+    # Valódi root jog kell a chroot detektáláshoz (/proc/1/root elérés)
+    sudo dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
 
+    # Eredeti konfiguráció visszaállítása
+    if [ -f /etc/dkms/framework.conf.bak ]; then
+        sudo mv /etc/dkms/framework.conf.bak /etc/dkms/framework.conf
+    else
+        sudo rm -f /etc/dkms/framework.conf
+    fi
 }
 
 package() {
