@@ -1,6 +1,6 @@
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
 
-pkgbase=linux-extramodules-meta
+#pkgbase=linux-extramodules-meta
 pkgname=(
   'linux-acpi_call-meta'
   'linux-bbswitch-meta'

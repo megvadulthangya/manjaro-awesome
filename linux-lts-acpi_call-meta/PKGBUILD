@@ -1,13 +1,13 @@
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
 
-pkgbase=linux-lts-extramodules-meta
+#pkgbase=linux-lts-extramodules-meta
 pkgname=(
   'linux-lts-acpi_call-meta'
   'linux-lts-bbswitch-meta'
   'linux-lts-broadcom-wl-meta'
   'linux-lts-nvidia-meta'
   'linux-lts-nvidia-open-meta'
-#  'linux-lts-nvidia-340xx-meta'
+  'linux-lts-nvidia-340xx-meta'
   'linux-lts-nvidia-390xx-meta'
   'linux-lts-nvidia-470xx-meta'
   'linux-lts-nvidia-580xx-meta'

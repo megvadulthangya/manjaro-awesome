@@ -2,7 +2,7 @@
 # Contributor: Bernhard Landauer <bernhard[at]manjaro[dot]org>
 # Contributor: Thomas Baechler <thomas@archlinux.org>
 
-_linuxprefix=linux612-rt   # <-- EZT cseréld a kívánt kernelre
+_linuxprefix=linux61   # <-- EZT cseréld a kívánt kernelre
 
 pkgname="${_linuxprefix}-nvidia-340xx"
 pkgver=340.108
