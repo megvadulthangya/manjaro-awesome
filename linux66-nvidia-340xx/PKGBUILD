@@ -22,13 +22,20 @@ build() {
     _src="${srcdir}/nvidia-${pkgver}"
     _moddir="${srcdir}/modules"
 
+    # GCC mismatch ellenőrzés letiltása
+    export IGNORE_CC_MISMATCH=1
+
+    # Csak RT kerneleknél tedd be ezt a sort:
+    # export IGNORE_PREEMPT_RT_PRESENCE=1
+
     # Forrás átmásolása a DKMS csomagból (már patchelt)
     cp -r /usr/src/nvidia-${pkgver} "${_src}"
 
     cd "${_src}"
 
-    # Kernel modul építés ALÁÍRÁS NÉLKÜL
+    # Kernel modul építés ALÁÍRÁS NÉLKÜL, a megfelelő kernel forrással
     make -j$(nproc) \
+         SYSSRC="/usr/lib/modules/${_kernver}/build" \
          KERNELRELEASE=${_kernver} \
          KERNEL_UNAME=${_kernver} \
          CONFIG_MODULE_SIG=n \
@@ -37,6 +44,7 @@ build() {
 
     # UVM modul építése
     make -C uvm -j$(nproc) \
+         SYSSRC="/usr/lib/modules/${_kernver}/build" \
          KERNELRELEASE=${_kernver} \
          KERNEL_UNAME=${_kernver} \
          CONFIG_MODULE_SIG=n \
