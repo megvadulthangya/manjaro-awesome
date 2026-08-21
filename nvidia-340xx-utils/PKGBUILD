@@ -17,7 +17,7 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'mhwd-nvidia'
         'nvidia-drm-outputclass.conf'
         'nvidia-340xx-utils.install'
-	'nvidia-utils.sysusers'
+    'nvidia-utils.sysusers'
         '20-nvidia.conf'
         'nvidia-340xx.rules'
         '0001-kernel-5.7.patch'
@@ -117,6 +117,9 @@ prepare() {
     sed -i "s/__JOBS/`nproc`/" dkms.conf
     # Modernize deprecated DKMS directive names (CLEAN -> clean)
     sed -i -E 's/^([[:space:]]*)CLEAN/\1clean/' dkms.conf
+    # Allow building on PREEMPT_RT kernels
+    sed -i 's/^MAKE\[0\]="/MAKE[0]="IGNORE_PREEMPT_RT_PRESENCE=1 /' dkms.conf
+    sed -i 's/^MAKE\[1\]="/MAKE[1]="IGNORE_PREEMPT_RT_PRESENCE=1 /' dkms.conf
     cd ..
 }
 
