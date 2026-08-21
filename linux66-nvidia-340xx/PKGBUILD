@@ -24,9 +24,8 @@ build() {
 
     # GCC mismatch ellenőrzés letiltása
     export IGNORE_CC_MISMATCH=1
-
-    # Csak RT kerneleknél tedd be ezt a sort:
-    # export IGNORE_PREEMPT_RT_PRESENCE=1
+    # PREEMPT_RT kernelen is épüljön
+    export IGNORE_PREEMPT_RT_PRESENCE=1
 
     # Forrás átmásolása a DKMS csomagból (már patchelt)
     cp -r /usr/src/nvidia-${pkgver} "${_src}"
