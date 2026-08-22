@@ -1,0 +1,70 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Mark Wagie <mark@manjaro.org>
+# Contributor: Jonathon Fernyhough <jonathon+m2x+dev>
+# Contributor: Alonso Rodriguez <alonsorodi20 (at) gmail (dot) com>
+# Contributor: Sven-Hendrik Haase <svenstaro@gmail.com>
+
+pkgbase=nvidia-340xx-settings
+pkgname=('nvidia-340xx-settings' 'libxnvctrl-340xx')
+pkgver=340.108
+pkgrel=1
+pkgdesc='Tool for configuring the NVIDIA graphics driver, 340xx legacy branch'
+url='https://github.com/NVIDIA/nvidia-settings'
+arch=('x86_64')
+license=('GPL2')
+makedepends=('inetutils' 'gtk2' 'jansson' 'libxv' 'libvdpau' "nvidia-340xx-utils=${pkgver}" 'libxext')
+options=('staticlibs')
+source=(nvidia-settings-${pkgver}.tar.gz::https://github.com/NVIDIA/nvidia-settings/archive/${pkgver}.tar.gz
+        0001-vdpau-static-and-shared-libxnvctrl.patch)
+sha512sums=('9b940382eeea6658bb9adcf8cc9abc7cfe73a69644092cd2c48e1443e2ab95ec65b53623bf7baf09a1193edd50ec25dc7ccdc5e74f0bb4b1beb4ab49ed936cb1'
+            'ad52d3bd186a71da7c76bc40bdbac37b1570e92c78af9b242d1623536c32caaf21115f06c6a1e54f3e0faabf94352be9ba15430eb08ed57deb3455174a27c021')
+
+prepare() {
+  cd nvidia-settings-${pkgver}
+  patch -p1 < "${srcdir}/0001-vdpau-static-and-shared-libxnvctrl.patch"
+}
+
+build() {
+  cd nvidia-settings-${pkgver}
+  export PREFIX=/usr
+  export NV_USE_BUNDLED_LIBJANSSON=0
+  # Ha LTO-t használsz, add hozzá: export CFLAGS+=" -ffat-lto-objects"
+  make
+  make -C src/libXNVCtrl
+}
+
+package_nvidia-340xx-settings() {
+  depends=('jansson' 'gtk2' 'libxv' 'libvdpau' "nvidia-340xx-utils=${pkgver}" "libxnvctrl-340xx=${pkgver}")
+  provides=("nvidia-settings=${pkgver}")
+  conflicts=('nvidia-settings')
+
+  cd nvidia-settings-${pkgver}
+  make DESTDIR="${pkgdir}" install
+
+  install -D -m644 doc/nvidia-settings.desktop "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
+  install -D -m644 doc/nvidia-settings.png "${pkgdir}/usr/share/pixmaps/nvidia-settings.png"
+  sed \
+    -e 's:__UTILS_PATH__:/usr/bin:' \
+    -e 's:__PIXMAP_PATH__:/usr/share/pixmaps:' \
+    -e 's/__NVIDIA_SETTINGS_DESKTOP_CATEGORIES__/Settings;HardwareSettings;/' \
+    -e 's/Icon=.*/Icon=nvidia-settings/' \
+    -i "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
+}
+
+package_libxnvctrl-340xx() {
+  depends=('libxext')
+  pkgdesc='NVIDIA NV-CONTROL X extension, 340xx legacy branch'
+  provides=('libXNVCtrl.so' "libxnvctrl=${pkgver}")
+  conflicts=('libxnvctrl')
+
+  cd nvidia-settings-${pkgver}
+  install -Dm 644 doc/{NV-CONTROL-API.txt,FRAMELOCK.txt} -t "${pkgdir}/usr/share/doc/${pkgname}"
+  install -Dm 644 samples/{Makefile,README,*.c,*.h,*.mk} -t "${pkgdir}/usr/share/doc/${pkgname}/samples"
+
+  cd src/libXNVCtrl
+  install -Dm 644 *.h -t "${pkgdir}/usr/include/NVCtrl"
+  install -Dm 644 libXNVCtrl.a -t "${pkgdir}/usr/lib"
+  install -Dm 755 libXNVCtrl.so.0.0.0 -t "${pkgdir}/usr/lib"
+  ln -s libXNVCtrl.so.0.0.0 "${pkgdir}/usr/lib/libXNVCtrl.so.0"
+  ln -s libXNVCtrl.so.0 "${pkgdir}/usr/lib/libXNVCtrl.so"
+}

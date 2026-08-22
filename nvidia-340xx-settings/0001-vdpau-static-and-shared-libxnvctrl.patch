@@ -1,0 +1,127 @@
+--- nvidia-settings-340.108/src/gtk+-2.x/ctkvdpau.c	2020-05-19 01:07:12.000000000 +0200
++++ work/nvidia-settings-340.108-vdpau_static/src/gtk+-2.x/ctkvdpau.c	2026-08-22 16:41:41.794251274 +0200
+@@ -103,6 +103,29 @@
+ const gchar* __video_mixer_attribute_help =
+ "This shows the video mixer attributes and any applicable ranges.";
+ 
++static struct VDPAUDeviceImpl {
++
++    VdpGetErrorString *GetErrorString;
++    VdpGetProcAddress *GetProcAddress;
++    VdpGetApiVersion *GetApiVersion;
++    VdpGetInformationString *GetInformationString;
++    VdpVideoSurfaceQueryCapabilities *VideoSurfaceQueryCapabilities;
++    VdpVideoSurfaceQueryGetPutBitsYCbCrCapabilities
++        *VideoSurfaceQueryGetPutBitsYCbCrCapabilities;
++    VdpOutputSurfaceQueryCapabilities *OutputSurfaceQueryCapabilities;
++    VdpOutputSurfaceQueryGetPutBitsNativeCapabilities
++        *OutputSurfaceQueryGetPutBitsNativeCapabilities;
++    VdpOutputSurfaceQueryPutBitsYCbCrCapabilities
++        *OutputSurfaceQueryPutBitsYCbCrCapabilities;
++    VdpBitmapSurfaceQueryCapabilities *BitmapSurfaceQueryCapabilities;
++    VdpDecoderQueryCapabilities *DecoderQueryCapabilities;
++    VdpVideoMixerQueryFeatureSupport *VideoMixerQueryFeatureSupport;
++    VdpVideoMixerQueryParameterSupport *VideoMixerQueryParameterSupport;
++    VdpVideoMixerQueryAttributeSupport *VideoMixerQueryAttributeSupport;
++    VdpVideoMixerQueryParameterValueRange *VideoMixerQueryParameterValueRange;
++    VdpVideoMixerQueryAttributeValueRange *VideoMixerQueryAttributeValueRange;
++} VDPAUDeviceFunctions;
++
+ static int queryOutputSurface(CtkVDPAU *ctk_vdpau, VdpDevice device,
+                               VdpGetProcAddress *getProcAddress);
+ 
+diff '--color=auto' -Naur nvidia-settings-340.108/src/gtk+-2.x/ctkvdpau.h work/nvidia-settings-340.108-vdpau_static/src/gtk+-2.x/ctkvdpau.h
+--- nvidia-settings-340.108/src/gtk+-2.x/ctkvdpau.h	2020-05-19 01:07:12.000000000 +0200
++++ work/nvidia-settings-340.108-vdpau_static/src/gtk+-2.x/ctkvdpau.h	2026-08-22 16:31:35.251077155 +0200
+@@ -46,29 +46,6 @@
+     (G_TYPE_INSTANCE_GET_CLASS ((obj), CTK_TYPE_VDPAU, CtkVDPAUClass))
+ 
+ 
+-struct VDPAUDeviceImpl {
+-
+-    VdpGetErrorString *GetErrorString;
+-    VdpGetProcAddress *GetProcAddress;
+-    VdpGetApiVersion *GetApiVersion;
+-    VdpGetInformationString *GetInformationString;
+-    VdpVideoSurfaceQueryCapabilities *VideoSurfaceQueryCapabilities;
+-    VdpVideoSurfaceQueryGetPutBitsYCbCrCapabilities
+-        *VideoSurfaceQueryGetPutBitsYCbCrCapabilities;
+-    VdpOutputSurfaceQueryCapabilities *OutputSurfaceQueryCapabilities;
+-    VdpOutputSurfaceQueryGetPutBitsNativeCapabilities
+-        *OutputSurfaceQueryGetPutBitsNativeCapabilities;
+-    VdpOutputSurfaceQueryPutBitsYCbCrCapabilities
+-        *OutputSurfaceQueryPutBitsYCbCrCapabilities;
+-    VdpBitmapSurfaceQueryCapabilities *BitmapSurfaceQueryCapabilities;
+-    VdpDecoderQueryCapabilities *DecoderQueryCapabilities;
+-    VdpVideoMixerQueryFeatureSupport *VideoMixerQueryFeatureSupport;
+-    VdpVideoMixerQueryParameterSupport *VideoMixerQueryParameterSupport;
+-    VdpVideoMixerQueryAttributeSupport *VideoMixerQueryAttributeSupport;
+-    VdpVideoMixerQueryParameterValueRange *VideoMixerQueryParameterValueRange;
+-    VdpVideoMixerQueryAttributeValueRange *VideoMixerQueryAttributeValueRange;
+-} VDPAUDeviceFunctions;
+-
+ /* Generic description structure */
+ typedef struct
+ {
+diff '--color=auto' -Naur nvidia-settings-340.108/src/libXNVCtrl/Makefile work/nvidia-settings-340.108-vdpau_static/src/libXNVCtrl/Makefile
+--- nvidia-settings-340.108/src/libXNVCtrl/Makefile	2020-05-19 01:07:12.000000000 +0200
++++ work/nvidia-settings-340.108-vdpau_static/src/libXNVCtrl/Makefile	2026-08-22 17:13:18.098045116 +0200
+@@ -54,11 +54,17 @@
+ 
+ .PHONY: clean
+ 
+-all: $(LIBXNVCTRL)
++all: $(LIBXNVCTRL) libXNVCtrl.so
+ 
+ $(LIBXNVCTRL) : $(OBJS)
+ 	$(AR) ru $@ $(OBJS)
+ 
++libXNVCtrl.so: $(OBJS)
++	$(RM) $@ $@.*
++	$(CC) -shared -Wl,-soname=$@.0 -o $@.0.0.0 $(LDFLAGS) $^ -lXext -lX11
++	ln -s $@.0.0.0 $@.0
++	ln -s $@.0 $@
++
+ # define the rule to build each object file
+ $(foreach src,$(SRC),$(eval $(call DEFINE_OBJECT_RULE,TARGET,$(src))))
+ 
+@@ -68,3 +74,4 @@
+ clean:
+ 	rm -rf $(LIBXNVCTRL) *~ $(STAMP_C) \
+ 		$(OUTPUTDIR)/*.o $(OUTPUTDIR)/*.d
++	rm -f libXNVCtrl.so libXNVCtrl.so.*
+diff '--color=auto' -Naur nvidia-settings-340.108/src/Makefile work/nvidia-settings-340.108-vdpau_static/src/Makefile
+--- nvidia-settings-340.108/src/Makefile	2020-05-19 01:07:12.000000000 +0200
++++ work/nvidia-settings-340.108-vdpau_static/src/Makefile	2026-08-22 16:57:28.751229333 +0200
+@@ -84,6 +84,8 @@
+ XNVCTRL_DIR             ?= libXNVCtrl
+ XNVCTRL_MAKEFILE        ?= Makefile
+ XNVCTRL_ARCHIVE         ?= $(XNVCTRL_DIR)/libXNVCtrl.a
++XNVCTRL_SHARED          ?= $(XNVCTRL_DIR)/libXNVCtrl.so.0
++XNVCTRL_LIB             ?= $(XNVCTRL_SHARED)
+ XCONFIG_PARSER_DIR      ?= XF86Config-parser
+ COMMON_UTILS_DIR        ?= common-utils
+ COMMON_UNIX_DIR         ?= common-unix
+@@ -203,9 +205,9 @@
+ 	$(MKDIR) $(BINDIR)
+ 	$(INSTALL) $(INSTALL_BIN_ARGS) $< $(BINDIR)/$(notdir $<)
+ 
+-$(NVIDIA_SETTINGS): $(OBJS) $(XNVCTRL_ARCHIVE)
++$(NVIDIA_SETTINGS): $(OBJS) $(XNVCTRL_LIB)
+ 	$(call quiet_cmd,LINK) $(CFLAGS) $(LDFLAGS) $(BIN_LDFLAGS) -o $@ $(OBJS) \
+-	    $(XNVCTRL_ARCHIVE) $(LIBS)
++	    $(XNVCTRL_LIB) $(LIBS)
+ 	$(call quiet_cmd,STRIP_CMD) $@
+ 
+ # define the rule to build each object file
+@@ -214,8 +216,8 @@
+ # define the rule to generate $(STAMP_C)
+ $(eval $(call DEFINE_STAMP_C_RULE, $(OBJS),$(NVIDIA_SETTINGS_PROGRAM_NAME)))
+ 
+-# define the rule to build $(XNVCTRL_ARCHIVE)
+-$(XNVCTRL_ARCHIVE): build-xnvctrl
++# define the rule to build $(XNVCTRL_ARCHIVE) and shared library
++$(XNVCTRL_ARCHIVE) $(XNVCTRL_SHARED): build-xnvctrl
+ 
+ build-xnvctrl:
+ 	@$(MAKE) -C $(XNVCTRL_DIR) -f $(XNVCTRL_MAKEFILE)
