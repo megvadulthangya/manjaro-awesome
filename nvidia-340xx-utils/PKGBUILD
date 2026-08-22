@@ -159,7 +159,7 @@ package_nvidia-340xx-dkms() {
 package_nvidia-340xx-utils() {
     pkgdesc="NVIDIA drivers utilities"
     depends=('xorg-server' 'mesa' 'mhwd')
-    optdepends=('gtk2: nvidia-settings'
+    optdepends=('nvidia-340xx-settings: GUI for NVIDIA settings'
                 'xorg-server-devel: nvidia-xconfig'
                 'opencl-nvidia-340xx: OpenCL support')
     conflicts=('nvidia-utils' 'nvidia-304xx-utils' 'nvidia-340xx-libgl')
@@ -211,13 +211,6 @@ package_nvidia-340xx-utils() {
     # nvidia-xconfig
     install -Dm755 nvidia-xconfig "${pkgdir}/usr/bin/nvidia-xconfig"
     install -Dm644 nvidia-xconfig.1.gz "${pkgdir}/usr/share/man/man1/nvidia-xconfig.1.gz"
-
-    # nvidia-settings
-    install -Dm755 nvidia-settings "${pkgdir}/usr/bin/nvidia-settings"
-    install -Dm644 nvidia-settings.1.gz "${pkgdir}/usr/share/man/man1/nvidia-settings.1.gz"
-    install -Dm644 nvidia-settings.desktop "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
-    install -Dm644 nvidia-settings.png "${pkgdir}/usr/share/pixmaps/nvidia-settings.png"
-    sed -e 's:__UTILS_PATH__:/usr/bin:' -e 's:__PIXMAP_PATH__:/usr/share/pixmaps:' -i "${pkgdir}/usr/share/applications/nvidia-settings.desktop"
 
     # gsync support
     install -Dm444 pci.ids "${pkgdir}/usr/share/nvidia/pci.ids"
