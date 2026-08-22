@@ -86,6 +86,7 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "libinput-gestures",
+    "libcanberra-gtk2",
     "lua-lgi-git",
     "gvc-git",
 #    "picom-pijulius-next-git",
