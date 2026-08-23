@@ -594,7 +594,7 @@ jobs:
             arch-install-scripts \
             ldc po4a dconf \
             lib32-zlib lib32-gcc-libs lib32-mesa \
-            xorg-macros lib32-libxv lib32-libxext lib32-libx11
+            xorg-util-macros lib32-libxv lib32-libxext lib32-libx11
 
           # Install yay for AUR dependencies (only if not cached)
           echo "=== Checking yay installation ==="
