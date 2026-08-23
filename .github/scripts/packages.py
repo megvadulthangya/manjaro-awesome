@@ -5,6 +5,7 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
+    "lib32-libxvmc",
     "nvidia-340xx-utils",
     "nvidia-340xx-settings",
     "nvidia-390xx-utils",
@@ -87,7 +88,6 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "libinput-gestures",
-    "lib32-libxvmc",
     "lua-lgi-git",
     "gvc-git",
 #    "picom-pijulius-next-git",
