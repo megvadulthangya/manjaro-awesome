@@ -74,7 +74,9 @@ device_ids() {
       printf "$id "
     done <"$readme_list"
     # fix Geforce mobile
-    printf "1140\n"
+    printf "1140" <"$readme_list"
+
+    ret=0
   fi
 
   rm -f "$symbols" "$readme_list" "$object_list" "$diff"

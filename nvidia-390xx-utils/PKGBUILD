@@ -35,7 +35,6 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'kernel-6.8.patch'
         'gcc-14.patch'
         'gcc-15.patch'
-        'CFLAGS-Set-std-gnu17-for-all-compilation-flags.patch'
         'kernel-6.10.patch'
         'clang.patch'
         'kernel-6.12.patch'
@@ -46,10 +45,11 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'kernel-6.19.patch'
         'kernel-7.0.patch'
         'kernel-7.2.patch'
+        'kernel-6.19-5.10.patch'
         'make-modesetting-default.patch'
         'kernel-6.18-nv_workqueue_flush.patch')
 sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
-            'b9ce71eff22210ccd14757c8b078f229b53d4542b8af8367e2b78a9cee1752c2'
+            '11176f1c070bbdbfaa01a3743ec065fe71ff867b9f72f1dce0de0339b5873bb5'
             '089d6dc247c9091b320c418b0d91ae6adda65e170934d178cdd4e9bd0785b182'
             'd8d1caa5d72c71c6430c2a0d9ce1a674787e9272ccce28b9d5898ca24e60a167'
             '0e54249a7754b668b436f0f7aa7e95fff68edbb12a93dbee4660e09a8c695f84'
@@ -64,17 +64,17 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             '4add71eff4d4c7970a518faa4c6fbf83879c6237b082a37eb6427de4f1b95bfe'
             'c6ef988c7b3d379b62bd0000285464c85342100a4822678df174fc60597d4281'
             '5fd6cf3265e771f7ae0f3ccaebaf39a5354dd9ed184cc2c512ae15da6f755ff5'
-            '38af201f559c49fa59d1d4d264ffb568ec2dd988d92aa9ba4e86a62a49ede53c'
             '11585c97eca50f163e929ede4d010ba454a7efa8d119e283f3aad0f79eece084'
             '4720a28debfec358b9f4f8abd36c05215bcba99b0eae241ea99ee16f046f9a29'
             'dd38b6e66e6294917b83e1a1d3bb94a507de4e52c71872a3f80cb0a94538725e'
             'd05256023b9ef2b43b72f3b5102d5c57f6e08d61cf3480b10feaa2f505980a95'
             'e859f83365e5dfe9e8261358bdbec703b7b8b65dbece326ce7eed8088a06432a'
-            'fc7c0bd963ec6340465aa25707029a898c5839a46e304329f0dacb2cea0f24bf'
+            '710009619b9638ef8969438c84e5e253ab32d57dcbd4c2e7bbe0e4eb0b4107dc'
             'f9c37768b3dfb9f7ebcb60cd5441d8fce14f1f9a29836fd9cfe1a205bc46d72a'
-            '5610cb347e6290a3b54f1056dcc6723d10bae7d28db90165c3913b63114aa968'
+            '4c17a28b9491fc4672bb2e6775b827eb83be6bde2d6ba892c40d7919d3638d86'
             '7255f73688a8ebc0899316d69c36d4bc38cb4f66a60fbf429ded01047bdd7d41'
             '6b4d3fa68e8e139ee49da6b0c146d6fd4f17594f52f797e043191185ead0e2e2'
+            '34730c8cd8fafd5a31f4f4f57a11d48bb4d4f820e230019a0c82b1859a563b8a'
             '994675c116840e4d1eecf457f67c468f973424f3ef6657c6b72bee88ebbb982e'
             'e1bba1a8b4081730998cc747beeb85f70f152cae5993048619833f24d3c9f56b')
 
@@ -109,7 +109,6 @@ prepare() {
     patch -Np1 -i ../kernel-6.8.patch
     patch -Np1 -i ../gcc-14.patch
     patch -Np1 -i ../gcc-15.patch
-    patch -Np1 -i ../CFLAGS-Set-std-gnu17-for-all-compilation-flags.patch
     patch -Np1 -i ../kernel-6.10.patch
     patch -Np1 -i ../clang.patch
     patch -Np1 -i ../kernel-6.12.patch
@@ -120,10 +119,11 @@ prepare() {
     patch -Np1 -d kernel -i "${srcdir}"/kernel-6.17.patch
     patch -Np1 -i ../kernel-6.19.patch
     patch -Np1 -i ../kernel-7.0.patch
+    patch -Np1 -i ../kernel-6.19-5.10.patch
 
     # https://bbs.archlinux.org/viewtopic.php?id=312658
     patch -Np1 -i ../kernel-6.18-nv_workqueue_flush.patch
-
+    
     # Linux 7.2 support (drm_atomic_state → drm_atomic_commit, strncpy removal)
     patch -Np1 -d kernel -i "${srcdir}/kernel-7.2.patch"
 
@@ -302,7 +302,7 @@ package_nvidia-390xx-utils() {
     create_links
 }
 
-package_mhwd-nvidia-390xx() {
+    package_mhwd-nvidia-390xx() {
     pkgdesc="MHWD module-ids for nvidia ${pkgver}"
     arch=('any')
     depends=('mhwd')
