@@ -13,7 +13,7 @@
 pkgbase=nvidia-390xx-utils
 pkgname=('nvidia-390xx-utils' 'opencl-nvidia-390xx' 'nvidia-390xx-dkms' 'mhwd-nvidia-390xx')
 pkgver=390.157
-pkgrel=29
+pkgrel=33
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
