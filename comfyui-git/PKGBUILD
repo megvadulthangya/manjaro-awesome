@@ -2,7 +2,7 @@
 
 _pkgname="ComfyUI"
 pkgname="comfyui-git"
-pkgver=r5843.3216c62e
+pkgver=r5849.4e024cb1
 pkgrel=1
 pkgdesc="ComfyUI GUI - Git version"
 arch=('x86_64')
