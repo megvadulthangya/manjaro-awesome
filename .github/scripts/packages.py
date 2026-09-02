@@ -8,7 +8,7 @@ LOCAL_PACKAGES = [
     "lib32-libxvmc",
     "nvidia-340xx-utils",
     "nvidia-340xx-settings",
-    "nvidia-390xx-utils",
+#    "nvidia-390xx-utils",
     "mhwd-db",
     "lib32-nvidia-340xx-utils",
     "linux61-nvidia-340xx",
