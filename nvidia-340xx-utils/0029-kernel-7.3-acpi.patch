@@ -1,0 +1,11 @@
+--- NVIDIA-Linux-x86_64-340.108-no-compat32-patched/kernel/nv-acpi.c	2026-08-13 14:08:03.808327939 +0200
++++ work/kernel-7.3-acpi/nv-acpi.c	2026-09-03 14:17:43.563910261 +0200
+@@ -15,7 +15,7 @@
+ #include "nv-linux.h"
+ #include "nv-reg.h"
+ 
+-#if defined(NV_LINUX_ACPI_EVENTS_SUPPORTED)
++#if defined(NV_LINUX_ACPI_EVENTS_SUPPORTED) && LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+ static RM_STATUS   nv_acpi_extract_integer (const union acpi_object *, void *, NvU32, NvU32 *);
+ static RM_STATUS   nv_acpi_extract_buffer  (const union acpi_object *, void *, NvU32, NvU32 *);
+ static RM_STATUS   nv_acpi_extract_package (const union acpi_object *, void *, NvU32, NvU32 *);

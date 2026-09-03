@@ -1,0 +1,69 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dot]org>
+# Contributor: Bernhard Landauer <bernhard[at]manjaro[dot]org>
+# Contributor: Thomas Baechler <thomas@archlinux.org>
+
+_linuxprefix=linux73   # <-- EZT cseréld a kívánt kernelre
+
+pkgname="${_linuxprefix}-nvidia-340xx"
+pkgver=340.108
+pkgrel=1
+pkgdesc="NVIDIA kernel modules for ${_linuxprefix}"
+arch=('x86_64')
+url="https://www.nvidia.com/"
+license=('custom')
+groups=("${_linuxprefix}-extramodules")
+depends=("${_linuxprefix}" "nvidia-340xx-utils=${pkgver}")
+makedepends=("${_linuxprefix}-headers" "nvidia-340xx-dkms=${pkgver}")
+provides=("nvidia-340xx=${pkgver}" 'NVIDIA-MODULE')
+options=(!strip)
+
+build() {
+    _kernver="$(cat /usr/src/${_linuxprefix}/version)"
+    _src="${srcdir}/nvidia-${pkgver}"
+    _moddir="${srcdir}/modules"
+
+    # GCC mismatch ellenőrzés letiltása
+    export IGNORE_CC_MISMATCH=1
+    # PREEMPT_RT kernelen is épüljön
+    export IGNORE_PREEMPT_RT_PRESENCE=1
+
+    # Forrás átmásolása a DKMS csomagból (már patchelt)
+    cp -r /usr/src/nvidia-${pkgver} "${_src}"
+
+    cd "${_src}"
+
+    # Kernel modul építés ALÁÍRÁS NÉLKÜL, a megfelelő kernel forrással
+    make -j$(nproc) \
+         SYSSRC="/usr/lib/modules/${_kernver}/build" \
+         KERNELRELEASE=${_kernver} \
+         KERNEL_UNAME=${_kernver} \
+         CONFIG_MODULE_SIG=n \
+         CONFIG_MODULE_SIG_ALL=n \
+         module
+
+    # UVM modul építése
+    make -C uvm -j$(nproc) \
+         SYSSRC="/usr/lib/modules/${_kernver}/build" \
+         KERNELRELEASE=${_kernver} \
+         KERNEL_UNAME=${_kernver} \
+         CONFIG_MODULE_SIG=n \
+         CONFIG_MODULE_SIG_ALL=n \
+         KBUILD_EXTMOD="${_src}/uvm" \
+         module
+
+    # A kész .ko fájlok összegyűjtése
+    mkdir -p "${_moddir}"
+    find . -name '*.ko' -exec cp {} "${_moddir}/" \;
+}
+
+package() {
+    _kernver="$(cat /usr/src/${_linuxprefix}/version)"
+    _moddir="${srcdir}/modules"
+
+    install -Dt "${pkgdir}/usr/lib/modules/${_kernver}/extramodules" -m644 "${_moddir}"/*.ko
+
+    # Minden modult egyenként tömörítünk
+    find "$pkgdir" -name '*.ko' -exec zstd --rm -19 {} +
+
+    install -Dm644 /usr/share/licenses/nvidia-340xx-dkms/LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
