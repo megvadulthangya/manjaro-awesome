@@ -17,7 +17,7 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'mhwd-nvidia'
         'nvidia-drm-outputclass.conf'
         'nvidia-340xx-utils.install'
-	'nvidia-utils.sysusers'
+    'nvidia-utils.sysusers'
         '20-nvidia.conf'
         'nvidia-340xx.rules'
         '0001-kernel-5.7.patch'
@@ -249,7 +249,7 @@ package_nvidia-340xx-utils() {
 
     # distro specific files
     install -Dm644 "${srcdir}/nvidia-drm-outputclass.conf" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia-drm-outputclass.conf"
-    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/usr/share/nvidia-340xx/20-nvidia.conf"
+    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/etc/X11/xorg.conf.d/20-nvidia.conf"
 
     install -Dm644 "${srcdir}/nvidia-340xx.rules" "${pkgdir}/usr/lib/udev/rules.d/60-nvidia-340xx.rules"
 
@@ -259,6 +259,9 @@ package_nvidia-340xx-utils() {
     echo "nvidia-uvm" | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modules-load.d/${pkgname}.conf"
 
     create_links
+
+    install -dm 755 "${pkgdir}"/etc/ld.so.conf.d
+    echo -e '/usr/lib/nvidia/' > "${pkgdir}"/etc/ld.so.conf.d/00-nvidia.conf
 }
 
 package_mhwd-nvidia-340xx() {
