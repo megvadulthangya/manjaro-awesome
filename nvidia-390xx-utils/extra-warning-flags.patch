@@ -1,0 +1,11 @@
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -57,7 +57,7 @@
+ ccflags-y += -std=gnu17
+ ccflags-y += -I$(src)/common/inc
+ ccflags-y += -I$(src)
+-ccflags-y += -Wall -MD $(DEFINES) $(INCLUDES) -Wno-cast-qual -Wno-error -Wno-format-extra-args
++ccflags-y += -Wall -MD -Wno-deprecated-non-prototype -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types $(DEFINES) $(INCLUDES) -Wsign-compare -Wno-cast-qual -Wno-error -Wno-format-extra-args
+ ccflags-y += -D__KERNEL__ -DMODULE -DNVRM -DNV_VERSION_STRING=\"390.157\" -Wno-unused-function -Wuninitialized -fno-strict-aliasing -mno-red-zone -mcmodel=kernel -DNV_UVM_ENABLE
+ ccflags-y += $(call cc-option,-Werror=undef,)
+ ccflags-y += -DNV_SPECTRE_V2=$(NV_SPECTRE_V2)
