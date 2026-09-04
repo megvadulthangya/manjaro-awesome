@@ -78,7 +78,7 @@ GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY")
 SIGN_PACKAGES = True  # Default toggle for individual package signing
 
 # Default behavior: install runtime depends during build in CI (nvidia-340xx-utils need to be false)
-INSTALL_RUNTIME_DEPS_IN_CI = False 
+INSTALL_RUNTIME_DEPS_IN_CI = True
 
 # Conflict resolution allowlist
 # Format: {"package-being-installed": ["conflicting-package-to-remove"]}
