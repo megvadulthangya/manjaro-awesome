@@ -18,9 +18,10 @@ depends=(
 )
 makedepends=(
   'git'
-  'ldc'
   'meson'
   'po4a'
+  'curl'
+  'tar'
 )
 checkdepends=(
   'appstream'
@@ -34,11 +35,15 @@ conflicts=("${pkgname%-git}")
 source=('git+https://github.com/gnunn1/tilix.git')
 sha256sums=('SKIP')
 
+# Hordozható LDC 1.43.0 letöltése
+_ldc_version="1.43.0"
+_ldc_tarball="ldc2-${_ldc_version}-linux-x86_64.tar.xz"
+_ldc_url="https://github.com/ldc-developers/ldc/releases/download/v${_ldc_version}/${_ldc_tarball}"
+
 pkgver() {
   cd "${pkgname%-git}"
   git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
 }
-
 
 prepare() {
   cd "${pkgname%-git}"
@@ -49,20 +54,50 @@ prepare() {
 }
 
 build() {
+  cd "$srcdir"
 
-  # Build with LDC
-  export DC=ldc
-  export LDFLAGS="$(echo -ne $LDFLAGS | sed -e 's/-flto=auto//')"
-  export DFLAGS="--flto=full --allinst"
+  # LDC bináris letöltése és kicsomagolása
+  mkdir -p "$srcdir/ldc"
+  cd "$srcdir/ldc"
+  if [[ ! -f "$_ldc_tarball" ]]; then
+    curl -L -O "$_ldc_url"
+  fi
+  tar xf "$_ldc_tarball"
+
+  # Vissza a forráskönyvtárba
+  cd "$srcdir"
+
+  # Hordozható LDC környezet beállítása
+  LDC_DIR="$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
+  export PATH="$LDC_DIR/bin:$PATH"
+  export DC="$LDC_DIR/bin/ldc2"
+  export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
+
+  # Távolítsuk el az LDC által nem ismert linker kapcsolókat
+  export LDFLAGS="$(echo "$LDFLAGS" | sed -e 's/-flto=auto//g' -e 's/-Wl,[^ ]*//g')"
+
+  # D futásidejű könyvtárak: dinamikus linkelés
+  export DFLAGS="--flto=full --allinst -link-defaultlib-shared"
 
   arch-meson "${pkgname%-git}" build
   meson compile -C build
 }
 
 check() {
+  # A hordozható LDC környezet beállítása a tesztekhez is szükséges
+  LDC_DIR="$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
+  export PATH="$LDC_DIR/bin:$PATH"
+  export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
+
+  # Tesztek futtatása
   meson test -C build --no-rebuild --print-errorlogs
 }
 
 package() {
   meson install -C build --no-rebuild --destdir "$pkgdir"
+
+  # A szükséges D futásidejű könyvtárak szimbolikus linkjeinek létrehozása
+  mkdir -p "$pkgdir/usr/lib"
+  ln -s libphobos2-ldc-shared.so.113 "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
+  ln -s libdruntime-ldc-shared.so.113 "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
 }
