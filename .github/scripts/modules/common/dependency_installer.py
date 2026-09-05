@@ -283,6 +283,8 @@ class DependencyInstaller:
         failure_reason = self._detect_failure_reason(combined_output)
         
         logger.warning(f"DEP_INSTALL_PACMAN_FAIL=1 reason={failure_reason} exitcode={result.returncode}")
+        logger.error(f"STDOUT:\n{result.stdout}")
+        logger.error(f"STDERR:\n{result.stderr}")
         
         # Don't fallback to yay if AUR not allowed
         if not allow_aur:
@@ -314,6 +316,8 @@ class DependencyInstaller:
         yay_failure_reason = self._detect_failure_reason(yay_output)
         
         logger.error(f"DEP_INSTALL_YAY_FAIL=1 reason={yay_failure_reason} exitcode={result.returncode}")
+        logger.error(f"STDOUT:\n{result.stdout}")
+        logger.error(f"STDERR:\n{result.stderr}")
         return False
     
     def extract_dependencies(self, pkg_dir: Path) -> Tuple[List[str], List[str], List[str]]:
