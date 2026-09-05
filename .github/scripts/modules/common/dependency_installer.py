@@ -264,7 +264,7 @@ class DependencyInstaller:
         
         # --- FIRST ATTEMPT: Try pacman ---
         logger.info(f"DEP_INSTALL_ATTEMPT=1 manager=pacman")
-        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm --ask=4 {pkgs_str}"
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm {pkgs_str}"
         
         result = self.shell_executor.run_command(
             cmd,
