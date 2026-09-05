@@ -5,6 +5,7 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
+    "gtkd",
     "lib32-libxvmc",
     "nvidia-340xx-utils",
     "nvidia-340xx-settings",
@@ -92,7 +93,7 @@ AUR_PACKAGES = [
     "lua-lgi-git",
     "gvc-git",
 #    "picom-pijulius-next-git",
-    "gtkd",
+#    "gtkd",
     "qt5-styleplugins",
     "papirus-folders-nordic",
     "urxvt-resize-font-git",
