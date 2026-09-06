@@ -3,7 +3,7 @@
 # Contributor: Davi da Silva Böger <dsboger at gmail dot com>
 pkgname=tilix-git
 pkgver=1.9.6.r72.g46b6a7c
-pkgrel=2
+pkgrel=3
 pkgdesc="A tiling terminal emulator for Linux using GTK+ 3"
 arch=('x86_64')
 url="https://gnunn1.github.io/tilix-web"
@@ -22,6 +22,7 @@ makedepends=(
   'po4a'
   'curl'
   'tar'
+  'binutils'
 )
 checkdepends=(
   'appstream'
@@ -39,6 +40,11 @@ sha256sums=('SKIP')
 _ldc_version="1.43.0"
 _ldc_tarball="ldc2-${_ldc_version}-linux-x86_64.tar.xz"
 _ldc_url="https://github.com/ldc-developers/ldc/releases/download/v${_ldc_version}/${_ldc_tarball}"
+
+# Segédfüggvény az LDC könyvtár elérési útjának lekéréséhez
+_ldc_dir() {
+  echo "$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
+}
 
 pkgver() {
   cd "${pkgname%-git}"
@@ -67,8 +73,9 @@ build() {
   # Vissza a forráskönyvtárba
   cd "$srcdir"
 
+  LDC_DIR=$(_ldc_dir)
+
   # Hordozható LDC környezet beállítása
-  LDC_DIR="$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
   export PATH="$LDC_DIR/bin:$PATH"
   export DC="$LDC_DIR/bin/ldc2"
   export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
@@ -84,8 +91,9 @@ build() {
 }
 
 check() {
+  LDC_DIR=$(_ldc_dir)
+
   # A hordozható LDC környezet beállítása a tesztekhez is szükséges
-  LDC_DIR="$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
   export PATH="$LDC_DIR/bin:$PATH"
   export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
 
@@ -96,8 +104,75 @@ check() {
 package() {
   meson install -C build --no-rebuild --destdir "$pkgdir"
 
+  LDC_DIR=$(_ldc_dir)
+
   # A szükséges D futásidejű könyvtárak szimbolikus linkjeinek létrehozása
   mkdir -p "$pkgdir/usr/lib"
-  ln -s libphobos2-ldc-shared.so.113 "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
-  ln -s libdruntime-ldc-shared.so.113 "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
+
+  # A fő bináris elérési útjának meghatározása
+  local tilix_bin="$pkgdir/usr/bin/tilix"
+  if [[ ! -f "$tilix_bin" ]]; then
+    # Ha a bináris nem a várt helyen van, keressük meg
+    tilix_bin=$(find "$pkgdir/usr/bin" -type f -executable -name 'tilix*' | head -n1)
+  fi
+
+  if [[ -n "$tilix_bin" && -x "$tilix_bin" ]]; then
+    # A bináris által igényelt D futásidejű könyvtárak soname-jeinek kinyerése
+    local needed_libs
+    needed_libs=$(readelf -d "$tilix_bin" 2>/dev/null | \
+                  grep 'NEEDED' | \
+                  grep -E 'libphobos2-ldc-shared|libdruntime-ldc-shared' | \
+                  awk '{print $5}' | \
+                  sed 's/\[//;s/\]//')
+
+    # Ha találtunk szükséges könyvtárakat, hozzuk létre a szükséges symlinkeket,
+    # de csak akkor, ha a rendszerben nincs már ilyen nevű fájl (elkerülve az ütközést a liblphobos-szal)
+    if [[ -n "$needed_libs" ]]; then
+      for needed_soname in $needed_libs; do
+        # Ha a szükséges soname már létezik a rendszerben (pl. liblphobos biztosítja),
+        # akkor nem hozunk létre semmit, mert a futtatáskor megtalálja.
+        if [[ ! -e "/usr/lib/$needed_soname" ]]; then
+          # Az alap név meghatározása (pl. libphobos2-ldc-shared.so)
+          local base_name="${needed_soname%.so.*}"
+          # A tényleges könyvtárfájl megkeresése az LDC lib könyvtárában
+          local actual_lib
+          actual_lib=$(ls "$LDC_DIR/lib/${base_name}.so."* 2>/dev/null | \
+                       sort -V | tail -n1)
+          if [[ -n "$actual_lib" ]]; then
+            ln -s "$(basename "$actual_lib")" "$pkgdir/usr/lib/$needed_soname"
+          fi
+        fi
+      done
+    else
+      # Fallback: ha nem sikerült kinyerni, használjuk a korábbi ismert verziót (.112 -> .113)
+      warning "Nem sikerült meghatározni a szükséges D futásidejű könyvtárakat, a korábbi .112-es verziót használom."
+      if [[ ! -e "/usr/lib/libphobos2-ldc-shared.so.112" ]]; then
+        local phobos_actual=$(ls "$LDC_DIR/lib/libphobos2-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
+        if [[ -n "$phobos_actual" ]]; then
+          ln -s "$(basename "$phobos_actual")" "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
+        fi
+      fi
+      if [[ ! -e "/usr/lib/libdruntime-ldc-shared.so.112" ]]; then
+        local druntime_actual=$(ls "$LDC_DIR/lib/libdruntime-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
+        if [[ -n "$druntime_actual" ]]; then
+          ln -s "$(basename "$druntime_actual")" "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
+        fi
+      fi
+    fi
+  else
+    # Ha nincs bináris, akkor is próbáljuk meg a régi módszert (fallback)
+    warning "Nem található a tilix bináris, a korábbi .112-es verziót használom."
+    if [[ ! -e "/usr/lib/libphobos2-ldc-shared.so.112" ]]; then
+      local phobos_actual=$(ls "$LDC_DIR/lib/libphobos2-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
+      if [[ -n "$phobos_actual" ]]; then
+        ln -s "$(basename "$phobos_actual")" "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
+      fi
+    fi
+    if [[ ! -e "/usr/lib/libdruntime-ldc-shared.so.112" ]]; then
+      local druntime_actual=$(ls "$LDC_DIR/lib/libdruntime-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
+      if [[ -n "$druntime_actual" ]]; then
+        ln -s "$(basename "$druntime_actual")" "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
+      fi
+    fi
+  fi
 }
