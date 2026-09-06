@@ -264,8 +264,9 @@ class DependencyInstaller:
         
         # --- FIRST ATTEMPT: Try pacman ---
         logger.info(f"DEP_INSTALL_ATTEMPT=1 manager=pacman")
+        cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm --ask=4 {pkgs_str}"
         #cmd = f"sudo LC_ALL=C pacman -Sy --needed --noconfirm --ask=1 {pkgs_str}"
-        cmd = f"yes | sudo LC_ALL=C pacman -Sy --needed {pkgs_str}"
+        #cmd = f"yes | sudo LC_ALL=C pacman -Sy --needed {pkgs_str}"
         
         result = self.shell_executor.run_command(
             cmd,
@@ -295,9 +296,9 @@ class DependencyInstaller:
         logger.info(f"DEP_INSTALL_ATTEMPT=2 manager=yay")
         
         # Use yay with --noconfirm to avoid prompts
-        #cmd = f"LC_ALL=C yay -S --needed --noconfirm {pkgs_str}"
+        cmd = f"LC_ALL=C yay -S --needed --noconfirm {pkgs_str}"
         #cmd = f"LC_ALL=C yay -S --needed --noconfirm --ask=1 {pkgs_str}"
-        cmd = f"yes | LC_ALL=C yay -S --needed {pkgs_str}"
+        #cmd = f"yes | LC_ALL=C yay -S --needed {pkgs_str}"
         
         result = self.shell_executor.run_command(
             cmd,
