@@ -25,7 +25,17 @@ makedepends=(
   'git'
 )
 install="$pkgname.install"
-source=("git+https://github.com/megvadulthangya/mhwd-db.git#branch=develop")
+
+# Ide írd be a kívánt commit hash-t, vagy hagyd üresen a legfrissebbhez (develop branch)
+_commit="7c8d8937226ce8af814a49aade5e90a5f232ffb5"
+
+# A source attól függ, hogy van-e megadva commit
+if [[ -n "$_commit" ]]; then
+  source=("git+https://github.com/megvadulthangya/mhwd-db.git#commit=$_commit")
+else
+  source=("git+https://github.com/megvadulthangya/mhwd-db.git#branch=develop")
+fi
+
 sha256sums=('SKIP')
 
 pkgver() {
