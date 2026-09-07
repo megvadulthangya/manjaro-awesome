@@ -27,7 +27,8 @@ makedepends=(
 install="$pkgname.install"
 
 # Ide írd be a kívánt commit hash-t, vagy hagyd üresen a legfrissebbhez (develop branch)
-_commit="7c8d8937226ce8af814a49aade5e90a5f232ffb5"
+#_commit="7c8d8937226ce8af814a49aade5e90a5f232ffb5" #--->régi-hiányos
+_commit=""
 
 # A source attól függ, hogy van-e megadva commit
 if [[ -n "$_commit" ]]; then
