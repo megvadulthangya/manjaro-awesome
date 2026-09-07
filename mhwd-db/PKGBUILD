@@ -4,7 +4,7 @@
 # Contributor: megvadulthangya (340xx fork)
 
 pkgname=mhwd-db
-pkgver=20260817
+pkgver=20260823
 pkgrel=1
 pkgdesc="Manjaro Linux Hardware Detection Database"
 arch=('any')
