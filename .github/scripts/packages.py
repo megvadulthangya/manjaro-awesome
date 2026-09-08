@@ -76,7 +76,7 @@ LOCAL_PACKAGES = [
     "awesome54-git",
     "awesome-welcome",
     "awesome-welcome-ai",
-    "tilix-git",
+#    "tilix-git",
     "nordic-backgrounds",
     "awesome-copycats-manjaro",
     "i3lock-fancy-git",
@@ -89,6 +89,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "tilix-git",
     "libinput-gestures",
     "lua-lgi-git",
     "gvc-git",

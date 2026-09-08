@@ -1,4 +1,4 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Maintainer: Mark Wagie <mark dot wagie at proton dot me>
 # Contributor: Igor <f2404@yandex.ru>
 # Contributor: Davi da Silva Böger <dsboger at gmail dot com>
 pkgname=tilix-git
@@ -18,11 +18,9 @@ depends=(
 )
 makedepends=(
   'git'
+  'ldc'
   'meson'
   'po4a'
-  'curl'
-  'tar'
-  'binutils'
 )
 checkdepends=(
   'appstream'
@@ -36,16 +34,6 @@ conflicts=("${pkgname%-git}")
 source=('git+https://github.com/gnunn1/tilix.git')
 sha256sums=('SKIP')
 
-# Hordozható LDC 1.43.0 letöltése
-_ldc_version="1.43.0"
-_ldc_tarball="ldc2-${_ldc_version}-linux-x86_64.tar.xz"
-_ldc_url="https://github.com/ldc-developers/ldc/releases/download/v${_ldc_version}/${_ldc_tarball}"
-
-# Segédfüggvény az LDC könyvtár elérési útjának lekéréséhez
-_ldc_dir() {
-  echo "$srcdir/ldc/ldc2-${_ldc_version}-linux-x86_64"
-}
-
 pkgver() {
   cd "${pkgname%-git}"
   git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
@@ -54,125 +42,28 @@ pkgver() {
 prepare() {
   cd "${pkgname%-git}"
 
-  # Patch Align to GtkAlign, due to conflicting symbols
+  # Headcheck: ezek a sed parancsok szándékosan itt vannak.
+  # Ha a fenti minták nem találhatók (mert a forráskód változott),
+  # a build meghiúsul, jelezve, hogy frissíteni kell a PKGBUILD-ot.
   sed -i 's/(Align\./(GtkAlign./g' source/gx/tilix/prefeditor/prefdialog.d
   sed -i 's/(Align\./(GtkAlign./g' source/gx/tilix/terminal/terminal.d
 }
 
 build() {
-  cd "$srcdir"
 
-  # LDC bináris letöltése és kicsomagolása
-  mkdir -p "$srcdir/ldc"
-  cd "$srcdir/ldc"
-  if [[ ! -f "$_ldc_tarball" ]]; then
-    curl -L -O "$_ldc_url"
-  fi
-  tar xf "$_ldc_tarball"
-
-  # Vissza a forráskönyvtárba
-  cd "$srcdir"
-
-  LDC_DIR=$(_ldc_dir)
-
-  # Hordozható LDC környezet beállítása
-  export PATH="$LDC_DIR/bin:$PATH"
-  export DC="$LDC_DIR/bin/ldc2"
-  export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
-
-  # Távolítsuk el az LDC által nem ismert linker kapcsolókat
-  export LDFLAGS="$(echo "$LDFLAGS" | sed -e 's/-flto=auto//g' -e 's/-Wl,[^ ]*//g')"
-
-  # D futásidejű könyvtárak: dinamikus linkelés
-  export DFLAGS="--flto=full --allinst -link-defaultlib-shared"
+  # Build with LDC
+  export DC=ldc
+  export LDFLAGS="$(echo -ne $LDFLAGS | sed -e 's/-flto=auto//;s/-Wl,-z,/-L=-z/;s/-Wl,/-L=/g')"
+  export DFLAGS="--flto=full --allinst"
 
   arch-meson "${pkgname%-git}" build
   meson compile -C build
 }
 
 check() {
-  LDC_DIR=$(_ldc_dir)
-
-  # A hordozható LDC környezet beállítása a tesztekhez is szükséges
-  export PATH="$LDC_DIR/bin:$PATH"
-  export LD_LIBRARY_PATH="$LDC_DIR/lib:$LD_LIBRARY_PATH"
-
-  # Tesztek futtatása
   meson test -C build --no-rebuild --print-errorlogs
 }
 
 package() {
   meson install -C build --no-rebuild --destdir "$pkgdir"
-
-  LDC_DIR=$(_ldc_dir)
-
-  # A szükséges D futásidejű könyvtárak szimbolikus linkjeinek létrehozása
-  mkdir -p "$pkgdir/usr/lib"
-
-  # A fő bináris elérési útjának meghatározása
-  local tilix_bin="$pkgdir/usr/bin/tilix"
-  if [[ ! -f "$tilix_bin" ]]; then
-    # Ha a bináris nem a várt helyen van, keressük meg
-    tilix_bin=$(find "$pkgdir/usr/bin" -type f -executable -name 'tilix*' | head -n1)
-  fi
-
-  if [[ -n "$tilix_bin" && -x "$tilix_bin" ]]; then
-    # A bináris által igényelt D futásidejű könyvtárak soname-jeinek kinyerése
-    local needed_libs
-    needed_libs=$(readelf -d "$tilix_bin" 2>/dev/null | \
-                  grep 'NEEDED' | \
-                  grep -E 'libphobos2-ldc-shared|libdruntime-ldc-shared' | \
-                  awk '{print $5}' | \
-                  sed 's/\[//;s/\]//')
-
-    # Ha találtunk szükséges könyvtárakat, hozzuk létre a szükséges symlinkeket,
-    # de csak akkor, ha a rendszerben nincs már ilyen nevű fájl (elkerülve az ütközést a liblphobos-szal)
-    if [[ -n "$needed_libs" ]]; then
-      for needed_soname in $needed_libs; do
-        # Ha a szükséges soname már létezik a rendszerben (pl. liblphobos biztosítja),
-        # akkor nem hozunk létre semmit, mert a futtatáskor megtalálja.
-        if [[ ! -e "/usr/lib/$needed_soname" ]]; then
-          # Az alap név meghatározása (pl. libphobos2-ldc-shared.so)
-          local base_name="${needed_soname%.so.*}"
-          # A tényleges könyvtárfájl megkeresése az LDC lib könyvtárában
-          local actual_lib
-          actual_lib=$(ls "$LDC_DIR/lib/${base_name}.so."* 2>/dev/null | \
-                       sort -V | tail -n1)
-          if [[ -n "$actual_lib" ]]; then
-            ln -s "$(basename "$actual_lib")" "$pkgdir/usr/lib/$needed_soname"
-          fi
-        fi
-      done
-    else
-      # Fallback: ha nem sikerült kinyerni, használjuk a korábbi ismert verziót (.112 -> .113)
-      warning "Nem sikerült meghatározni a szükséges D futásidejű könyvtárakat, a korábbi .112-es verziót használom."
-      if [[ ! -e "/usr/lib/libphobos2-ldc-shared.so.112" ]]; then
-        local phobos_actual=$(ls "$LDC_DIR/lib/libphobos2-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
-        if [[ -n "$phobos_actual" ]]; then
-          ln -s "$(basename "$phobos_actual")" "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
-        fi
-      fi
-      if [[ ! -e "/usr/lib/libdruntime-ldc-shared.so.112" ]]; then
-        local druntime_actual=$(ls "$LDC_DIR/lib/libdruntime-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
-        if [[ -n "$druntime_actual" ]]; then
-          ln -s "$(basename "$druntime_actual")" "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
-        fi
-      fi
-    fi
-  else
-    # Ha nincs bináris, akkor is próbáljuk meg a régi módszert (fallback)
-    warning "Nem található a tilix bináris, a korábbi .112-es verziót használom."
-    if [[ ! -e "/usr/lib/libphobos2-ldc-shared.so.112" ]]; then
-      local phobos_actual=$(ls "$LDC_DIR/lib/libphobos2-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
-      if [[ -n "$phobos_actual" ]]; then
-        ln -s "$(basename "$phobos_actual")" "$pkgdir/usr/lib/libphobos2-ldc-shared.so.112"
-      fi
-    fi
-    if [[ ! -e "/usr/lib/libdruntime-ldc-shared.so.112" ]]; then
-      local druntime_actual=$(ls "$LDC_DIR/lib/libdruntime-ldc-shared.so."* 2>/dev/null | sort -V | tail -n1)
-      if [[ -n "$druntime_actual" ]]; then
-        ln -s "$(basename "$druntime_actual")" "$pkgdir/usr/lib/libdruntime-ldc-shared.so.112"
-      fi
-    fi
-  fi
 }
