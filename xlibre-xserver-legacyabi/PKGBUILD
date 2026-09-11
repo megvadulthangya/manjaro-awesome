@@ -69,7 +69,7 @@ build() {
     -D xkb_dir=/usr/share/X11/xkb \
     -D xkb_output_dir=/var/lib/xkb \
     -D libunwind=true \
-    -D legacy_nvidia_padding=true
+    -D legacy_nvidia_padding=true \
     -D legacy_nvidia_340x=true
 
   # Print config
