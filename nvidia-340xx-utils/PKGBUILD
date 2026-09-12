@@ -7,7 +7,7 @@
 pkgbase=nvidia-340xx-utils
 pkgname=('nvidia-340xx-utils' 'opencl-nvidia-340xx' 'nvidia-340xx-dkms' 'mhwd-nvidia-340xx')
 pkgver=340.108
-pkgrel=2
+pkgrel=1
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
@@ -18,8 +18,13 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'nvidia-340xx-utils.install'
         'nvidia-utils.sysusers'
         'nvidia-340xx.rules'
-        '10-nvidia.conf.in'
-        '10-nvidia-modules.conf.in'
+        # NOTE: Ezeket az XLibre már szállítja azonos tartalommal.
+        # Ha mégis vissza szeretnéd tenni, csak kommenteld ki az alábbi két sort,
+        # és a hozzájuk tartozó sha256sums sorokat, valamint a prepare() és
+        # package_nvidia-340xx-utils() függvényekben a megfelelő részeket.
+        #'10-nvidia.conf.in'
+        #'10-nvidia-modules.conf.in'
+        '20-nvidia.conf'
         '0001-kernel-5.7.patch'
         '0002-kernel-5.8.patch'
         '0003-kernel-5.9.patch'
@@ -51,11 +56,12 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         '0029-kernel-7.3-acpi.patch')
 sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '9513f636c27d6ac06a3dd41f7761d2cf4fe8f1c91bb177fce3f333dd2b072713'
-            'da91d297dab211622e5d025582c3a997865ab6fda3d63d343787c4148f9f15be'
+            '58cd86a93d72ffc017b2a2b92ff5a04ae5077499359507cb9917c7fc4bffcfef'
             'd8d1caa5d72c71c6430c2a0d9ce1a674787e9272ccce28b9d5898ca24e60a167'
             '19b61cce21c440bf86bde883ce8384dc1032ff30ca6785f03a02cfa0de425fbf'
-            '5e6d27f1f872fd47aca29cae9fb91ea6223f9f1346a7da51c0acc98295189dc9'
-            'ce536db11dcd4a28a6de914e5f4d07f431051296aeda257d6ab8722e0fe6940d'
+            #'5e6d27f1f872fd47aca29cae9fb91ea6223f9f1346a7da51c0acc98295189dc9'
+            #'ce536db11dcd4a28a6de914e5f4d07f431051296aeda257d6ab8722e0fe6940d'
+            '89c45a114a3420afc0de53a3d7e4182fe317f16e9a7e559c144c5e69d16e246e'
             'c8bda5fb238fbebc5bf6ae4b7646e48b30a96b9060ced20d93c53c14ac3161f6'
             '10b91c8dbc269ff1d8e3e8a1866926c309ff3912d191a05cd5724a3139776f32'
             'e06af37ffa2203698594e0f58816b809feced9b2374927e13b85fd5c18fa3114'
@@ -85,6 +91,7 @@ sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             'a763da9701dacca48c447fb4e2d9daea9f41674fb5a198407c9a8aa3a8ff7a00'
             '283ea2c95de4f0bd865c76e0b3c39edf889a25e4681421f1ae67b72df23c4113'
             'ac2d7d2647c519a03d750e3a6bf92bd0202c4d7519f5a001fb65ca06c1f74637')
+
 create_links() {
     find "$pkgdir" -type f -name '*.so*' ! -path '*xorg/*' -print0 | while read -d $'\0' _lib; do
         _soname=$(dirname "${_lib}")/$(readelf -d "${_lib}" | grep -Po 'SONAME.*: \[\K[^]]*' || true)
@@ -101,8 +108,10 @@ prepare() {
     cd "${_pkg}"
 
     # Prepare the Xorg config templates
-    sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia.conf.in"
-    sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia-modules.conf.in"
+    # NOTE: Kikommentelve, mert az XLibre már szállítja ezeket a fájlokat.
+    # Ha vissza szeretnéd tenni, csak kommenteld ki:
+    #sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia.conf.in"
+    #sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia-modules.conf.in"
 
     # Apply main patches (0001-0029) from the source root
     for src in "${source[@]}"; do
@@ -248,8 +257,14 @@ package_nvidia-340xx-utils() {
     ln -s nvidia "${pkgdir}/usr/share/doc/nvidia-utils"
 
     # Xorg configuration files (new, OutputClass-based)
-    install -Dm644 "${srcdir}/10-nvidia.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia.conf"
-    install -Dm644 "${srcdir}/10-nvidia-modules.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf"
+    # NOTE: A 10-nvidia.conf és 10-nvidia-modules.conf fájlokat az XLibre már
+    # szállítja azonos tartalommal, ezért nem telepítjük őket, elkerülve a
+    # pacman fájl-ütközést. Ha mégis szükség lenne rájuk, csak kommenteld ki:
+    #install -Dm644 "${srcdir}/10-nvidia.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia.conf"
+    #install -Dm644 "${srcdir}/10-nvidia-modules.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf"
+
+    # Xorg configuration file for manual placement (referenced by the .install file)
+    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/usr/share/nvidia-340xx/20-nvidia.conf"
 
     # Udev rules and sysusers
     install -Dm644 "${srcdir}/nvidia-340xx.rules" "${pkgdir}/usr/lib/udev/rules.d/60-nvidia-340xx.rules"

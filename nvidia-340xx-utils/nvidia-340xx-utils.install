@@ -7,6 +7,10 @@ post_install() {
     Minimal config example provided in /usr/share/nvidia-340xx/20-nvidia.conf
     which you should manually place in /etc/X11/xorg.conf.d/
 
+>>> If you use XLibre, you have nothing to do, because the necessary
+    configuration files (10-nvidia.conf and 10-nvidia-modules.conf) are
+    already provided and installed by XLibre itself.
+
 EOF
 }
 

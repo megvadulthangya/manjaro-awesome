@@ -15,7 +15,7 @@ pkgver=20260731
 pkgrel=1
 pkgdesc="Manjaro Linux live session"
 arch=('any')
-url="https://gitlab.manjaro.org/tools/development-tools/manjaro-tools-livecd"
+url="https://github.com/megvadulthangya/manjaro-tools-livecd"
 license=('GPL-3.0-or-later')
 makedepends=('git')
 source=("git+https://github.com/megvadulthangya/manjaro-tools-livecd.git#branch=workingon")
