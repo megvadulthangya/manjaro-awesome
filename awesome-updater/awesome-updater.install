@@ -1,0 +1,227 @@
+#!/bin/bash
+# awesome-updater.install
+#
+# Package lifecycle scriptlet for awesome-updater.
+#
+# The periodic updater runs as a systemd system timer that is enabled for
+# the invoking normal user. The package never modifies the user crontab.
+
+# ---------------------------------------------------------------------------
+# User discovery
+# ---------------------------------------------------------------------------
+
+# Print the invoking normal user on stdout, or return non-zero if no
+# unambiguous normal user can be determined.
+#
+# Priority:
+#   SUDO_USER    (sudo pacman -U ...)
+#   PKEXEC_UID   (pkexec ...)
+#   DOAS_USER    (doas ...)
+#
+# Rules:
+#   - never select root
+#   - never scan /etc/passwd and pick an arbitrary user
+#   - never default to root
+#   - require a real user with a valid home directory
+_discover_user() {
+    local candidate=""
+    local home=""
+
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        candidate="$SUDO_USER"
+    elif [ -n "${PKEXEC_UID:-}" ]; then
+        candidate="$(getent passwd "$PKEXEC_UID" 2>/dev/null | cut -d: -f1)"
+    elif [ -n "${DOAS_USER:-}" ] && [ "$DOAS_USER" != "root" ]; then
+        candidate="$DOAS_USER"
+    fi
+
+    if [ -z "$candidate" ] || [ "$candidate" = "root" ]; then
+        return 1
+    fi
+
+    home="$(getent passwd "$candidate" 2>/dev/null | cut -d: -f6)"
+    if [ -z "$home" ] || [ ! -d "$home" ]; then
+        return 1
+    fi
+
+    printf '%s' "$candidate"
+    return 0
+}
+
+_enable_timer_for_user() {
+    local user="$1"
+    if [ -z "$user" ]; then
+        return 1
+    fi
+    if ! command -v systemctl >/dev/null 2>&1; then
+        return 1
+    fi
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now "awesome-updater@${user}.timer"
+}
+
+_print_manual_activation() {
+    cat <<'EOF'
+::
+:: Automatic scheduler activation was skipped because the invoking normal
+:: user could not be determined unambiguously.
+::
+:: To enable the periodic updater manually, run (as root):
+::
+::     systemctl enable --now awesome-updater@<username>.timer
+::
+:: Replace <username> with the intended normal user. Do not use "root".
+::
+:: To inspect the timer:
+::
+::     systemctl list-timers 'awesome-updater@*'
+EOF
+}
+
+_print_migration_hint() {
+    cat <<'EOF'
+::
+:: Legacy manual installations may still leave files behind:
+::
+::     /usr/local/bin/system-update
+::     /usr/local/bin/system-update-notify
+::     /etc/profile.d/99-system-update.sh
+::     /etc/system-update/config.conf
+::     a user crontab entry referencing the updater
+::
+:: The package does not delete any of these automatically. Remove them by
+:: hand when you are ready.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+post_install() {
+    local user=""
+    local enabled=0
+
+    if user="$(_discover_user)"; then
+        if _enable_timer_for_user "$user"; then
+            enabled=1
+            echo ":: awesome-updater: periodic updater enabled for '$user'."
+            echo "   Timer: awesome-updater@${user}.timer"
+            echo "   Cadence: 00:00, 06:00, 12:00, 18:00 (local time)"
+            echo "   Inspect: systemctl list-timers 'awesome-updater@${user}.timer'"
+            echo "   Override schedule: systemctl edit awesome-updater@${user}.timer"
+        else
+            echo ":: awesome-updater: failed to enable the periodic updater automatically."
+            _print_manual_activation
+        fi
+    else
+        echo ":: awesome-updater: could not determine the invoking normal user."
+        _print_manual_activation
+    fi
+
+    cat <<'EOF'
+
+:: awesome-updater has been installed.
+
+The periodic updater is a systemd timer, not a cron job. The package does
+NOT modify the user crontab.
+
+Configuration is optional; the defaults work out of the box:
+
+    /etc/system-update/config.conf          system-wide defaults
+    ~/.config/system-update/config.conf     per-user overrides
+
+AUR updates are disabled by default. To enable them, set:
+
+    AUR_ENABLED=true
+
+in the configuration file.
+
+Logs:
+    ~/logs/latest_update.log
+
+Runtime state:
+    /var/lib/system-update/
+
+EOF
+
+    _print_migration_hint
+
+    if [ "$enabled" -eq 1 ]; then
+        return 0
+    fi
+    return 0
+}
+
+post_upgrade() {
+    local existing=""
+    local user=""
+
+    # Make sure systemd has picked up the freshly installed unit files
+    # before querying the unit file list.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+
+        existing="$(
+            systemctl list-unit-files --type=timer --no-legend 2>/dev/null |
+            awk '$1 ~ /^awesome-updater@.*\.timer$/ && $2 == "enabled" {print $1}' |
+            head -n1
+        )"
+    fi
+
+    if [ -n "$existing" ]; then
+        echo ":: awesome-updater: existing timer instance preserved: $existing"
+        echo "   No duplicate instance was created."
+        return 0
+    fi
+
+    if user="$(_discover_user)"; then
+        if _enable_timer_for_user "$user"; then
+            echo ":: awesome-updater: periodic updater enabled for '$user'."
+            echo "   Timer: awesome-updater@${user}.timer"
+            return 0
+        fi
+        echo ":: awesome-updater: failed to enable the periodic updater automatically."
+    else
+        echo ":: awesome-updater: no enabled timer instance was found."
+    fi
+
+    _print_manual_activation
+    return 0
+}
+
+pre_remove() {
+    local timers=""
+
+    if command -v systemctl >/dev/null 2>&1; then
+        timers="$(
+            systemctl list-unit-files --type=timer --no-legend 2>/dev/null |
+            awk '$1 ~ /^awesome-updater@.*\.timer$/ && $2 == "enabled" {print $1}'
+        )"
+    fi
+
+    if [ -n "$timers" ]; then
+        # shellcheck disable=SC2086
+        systemctl disable --now $timers 2>/dev/null || true
+        echo ":: awesome-updater: disabled package-managed timer instance(s)."
+    fi
+
+    cat <<'EOF'
+:: Removing awesome-updater.
+
+The following are intentionally preserved:
+
+    /var/lib/system-update/       runtime state
+    ~/.config/system-update/      user configuration
+    ~/logs/                       user logs
+
+To remove them manually:
+
+    sudo rm -rf /var/lib/system-update
+    rm -rf ~/.config/system-update
+    rm -rf ~/logs
+
+EOF
+
+    _print_migration_hint
+}
