@@ -1,6 +1,6 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=awesome-updater
-pkgver=0.1.0
+pkgver=r15.e11cdf10
 pkgrel=1
 pkgdesc="Manjaro-focused unattended system updater with kernel reboot handling"
 arch=('any')
