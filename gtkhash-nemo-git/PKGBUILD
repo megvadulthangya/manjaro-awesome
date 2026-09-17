@@ -55,7 +55,7 @@ build() {
     -Dglib-checksums=true \
     -Dlinux-crypto=true \
     -Dnettle=true \
-    -Dmbedtls=true \
+    -Dmbedtls=false \
     -Dlibcrypto=true \
     -Dbuild-caja=false \
     -Dbuild-nautilus=false \
