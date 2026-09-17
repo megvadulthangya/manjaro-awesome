@@ -195,6 +195,7 @@ package_xlibre-xserver-devel-legacyabi() {
   rm -f fakeinstall/etc/X11/xorg.conf.d/10-nvidia-modules.conf.debian
   rm -f fakeinstall/etc/X11/xorg.conf.d/10-nvidia.conf.debian
   rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf
+  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia.conf
 
   _install fakeinstall/usr/include/xorg/*
   _install fakeinstall/usr/lib/pkgconfig/xlibre-server.pc
