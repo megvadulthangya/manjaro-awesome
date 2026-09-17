@@ -13,7 +13,7 @@ depends=(
     'libb2'
     'libgcrypt'
     'nettle'
-    'mbedtls'
+    'mbedtls3'
     'nemo'                     # Nemo fájlkezelő (tartalmazza a fejlesztői header-eket is)
 )
 makedepends=(

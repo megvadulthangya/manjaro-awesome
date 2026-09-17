@@ -14,7 +14,7 @@ depends=(
     'libb2'
     'libgcrypt'
     'nettle'
-    'mbedtls'
+    'mbedtls3'
 )
 makedepends=(
     'appstream-glib'

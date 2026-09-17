@@ -13,7 +13,7 @@ depends=(
     'libb2'
     'libgcrypt'
     'nettle'
-    'mbedtls'
+    'mbedtls3'
     'caja'                     # Caja fájlkezelő (tartalmazza a fejlesztői header-eket is)
 )
 makedepends=(
