@@ -118,10 +118,13 @@ package_xlibre-xserver-legacyabi() {
   conflicts=('xlibre-xserver-beta' 'xorg-server' 'xlibre-xserver' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
   replaces=('glamor-egl' 'xf86-video-modesetting')
 
+  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia.conf
+  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf
+
   _install fakeinstall/usr/bin/{X,Xorg,gtf,Xfbdev}
   _install fakeinstall/usr/lib/Xorg{,.wrap}
   _install fakeinstall/usr/lib/xorg/modules/*
-  _install fakeinstall/usr/share/X11/xorg.conf.d/10-{nvidia,quirks}.conf
+  _install fakeinstall/usr/share/X11/xorg.conf.d/10-quirks.conf
   _install fakeinstall/usr/share/man/man1/{Xorg,Xorg.wrap,gtf,Xfbdev}.1
   _install fakeinstall/usr/share/man/man4/{exa,fbdevhw,inputtestdrv,modesetting}.4
   _install fakeinstall/usr/share/man/man5/{Xwrapper.config,xorg.conf,xorg.conf.d}.5
@@ -191,11 +194,6 @@ package_xlibre-xserver-devel-legacyabi() {
            'xorg-util-macros')
   provides=('xorg-server-devel' 'xlibre-xserver-devel')
   conflicts=('xlibre-xserver-devel-beta' 'xorg-server-devel' 'xlibre-xserver-devel')
-
-  rm -f fakeinstall/etc/X11/xorg.conf.d/10-nvidia-modules.conf.debian
-  rm -f fakeinstall/etc/X11/xorg.conf.d/10-nvidia.conf.debian
-  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf
-  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia.conf
 
   _install fakeinstall/usr/include/xorg/*
   _install fakeinstall/usr/lib/pkgconfig/xlibre-server.pc
