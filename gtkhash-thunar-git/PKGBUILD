@@ -25,7 +25,7 @@ makedepends=(
     'librsvg'
     'meson'
     'xdg-utils'
-    'mbedtls'
+    'mbedtls3'
 )
 provides=("${pkgname%-git}" 'gtkhash')
 conflicts=("${pkgname%-git}" 'gtkhash' 'gtkhash-caja' 'gtkhash-nautilus' 'gtkhash-nemo')

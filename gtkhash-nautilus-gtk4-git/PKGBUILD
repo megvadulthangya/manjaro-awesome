@@ -23,7 +23,7 @@ makedepends=(
     'librsvg'
     'meson'
     'xdg-utils'
-    'mbedtls'
+    'mbedtls3'
 )
 provides=("gtkhash")
 conflicts=('gtkhash' 'gtkhash-thunar-git' 'gtkhash-caja' 'gtkhash-nemo')

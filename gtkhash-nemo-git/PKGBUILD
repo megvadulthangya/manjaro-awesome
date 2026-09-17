@@ -23,7 +23,7 @@ makedepends=(
     'librsvg'
     'meson'
     'xdg-utils'
-    'mbedtls'
+    'mbedtls3'
     'nemo'                     # build-időben is kell a fejlécek miatt
 )
 provides=("${pkgname%-git}" 'gtkhash')
