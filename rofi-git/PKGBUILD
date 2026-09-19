@@ -7,7 +7,7 @@
 # Contributor: SanskritFritz (gmail)
 
 pkgname=rofi-git
-pkgver=2.0.0.r74.ga6baa2ae   # Ezt a pkgver() felülírja, csak placeholder
+pkgver=r4351.7575b709
 pkgrel=1
 pkgdesc='A window switcher, run dialog and dmenu replacement'
 arch=('x86_64' 'aarch64')
