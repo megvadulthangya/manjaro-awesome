@@ -110,20 +110,16 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'nvidia-utils.sysusers'
         'nvidia-340xx.rules'
         'series.resolved'
-        '10-nvidia.conf.in'
-        '10-nvidia-modules.conf.in'
         '20-nvidia.conf'
         "${_debian_patches[@]}"
 )
 
 sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '9513f636c27d6ac06a3dd41f7761d2cf4fe8f1c91bb177fce3f333dd2b072713'
-            '58cd86a93d72ffc017b2a2b92ff5a04ae5077499359507cb9917c7fc4bffcfef'
+            '327469a3803bd08c79c6295c94c050b3112e821c20dff2d36991474b90c24ff1'
             'd8d1caa5d72c71c6430c2a0d9ce1a674787e9272ccce28b9d5898ca24e60a167'
-            '19b61cce21c440bf86bde883ce8384dc1032ff30ca6785f03a02cfa0de425fbf'
+            '0e54249a7754b668b436f0f7aa7e95fff68edbb12a93dbee4660e09a8c695f84'
             '47e4e806f3ce99138ef51ef916f59908203f732aaf11278bcb3eea3d6377eae4'
-            '9225323fe0ed6d2e4c46d5b3287810d6cc82cc771b20bdf929fed352905c6baf'
-            'ce536db11dcd4a28a6de914e5f4d07f431051296aeda257d6ab8722e0fe6940d'
             '89c45a114a3420afc0de53a3d7e4182fe317f16e9a7e559c144c5e69d16e246e'
             '53db3bbf450dbacc6257194002535c5f8a6e6359d4c4fde5ec29603b2e085eb5'
             '36b5094922db3c925aa370ecc6fbd2d36980ff7147f64fadf81ac401503f5f1d'
@@ -221,9 +217,6 @@ prepare() {
     sh "${_pkg}.run" --extract-only
 
     cd "${_pkg}"
-
-    sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia.conf.in"
-    sed -i 's|/usr/libLIBDIRSUFFIX|/usr/lib|g' "${srcdir}/10-nvidia-modules.conf.in"
 
     cd kernel
 
@@ -449,10 +442,7 @@ package_nvidia-340xx-utils() {
     install -Dm644 NVIDIA_Changelog "${pkgdir}/usr/share/doc/nvidia/NVIDIA_Changelog"
     ln -s nvidia "${pkgdir}/usr/share/doc/nvidia-utils"
 
-    install -Dm644 "${srcdir}/10-nvidia.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia.conf"
-    install -Dm644 "${srcdir}/10-nvidia-modules.conf.in" "${pkgdir}/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf"
-
-    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/usr/share/nvidia-340xx/20-nvidia.conf"
+    install -Dm644 "${srcdir}/20-nvidia.conf" "${pkgdir}/usr/share/X11/xorg.conf.d/20-nvidia-340xx.conf"
 
     install -Dm644 "${srcdir}/nvidia-340xx.rules" "${pkgdir}/usr/lib/udev/rules.d/60-nvidia-340xx.rules"
     install -Dm644 "${srcdir}/nvidia-utils.sysusers" "${pkgdir}/usr/lib/sysusers.d/nvidia-340xx-utils.conf"

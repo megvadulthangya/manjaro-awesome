@@ -118,7 +118,7 @@ package_xlibre-xserver-legacyabi() {
   conflicts=('xlibre-xserver-beta' 'xorg-server' 'xlibre-xserver' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
   replaces=('glamor-egl' 'xf86-video-modesetting')
 
-  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia.conf
+#  rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia.conf
   rm -f fakeinstall/usr/share/X11/xorg.conf.d/10-nvidia-modules.conf
 
   _install fakeinstall/usr/bin/{X,Xorg,gtf,Xfbdev}
