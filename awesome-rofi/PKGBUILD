@@ -1,25 +1,35 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 pkgname=awesome-rofi
 pkgver=r157.83dee18
-pkgrel=1
+pkgrel=2
 pkgdesc="A huge collection of Rofi-based custom Applets, Launchers & Powermenus, fully compatible with Awesome WM."
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-rofi"
 license=('GPL3')
 depends=('rofi')
-makedepends=('git') # Szükséges a verziózáshoz
-# A source-t git-re cseréltem, hogy lássa a verziókat
-source=("git+https://github.com/megvadulthangya/awesome-rofi.git#branch=my-awesome-config")
-sha256sums=('SKIP')
+makedepends=('git')
+
+# MÓDOSÍTVA: hozzáadva a patch fájl
+source=("git+https://github.com/megvadulthangya/awesome-rofi.git#branch=my-awesome-config"
+        "awesome-rofi-type3-fix.patch")
+
+# MÓDOSÍTVA: a patch fájl sha256sum-ja. Első buildnél használhatod a 'SKIP'-et is,
+# de utána érdemes kiszámolni: sha256sum awesome-rofi-type3-fix.patch
+sha256sums=('SKIP'
+            'SKIP')
 
 pkgver() {
   cd "$srcdir/awesome-rofi"
-  # Formátum: r<commits>.<hash> (pl: r161.7c7070e)
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+# ÚJ FÜGGVÉNY: a patch alkalmazása a build előtt
+prepare() {
+  cd "$srcdir/awesome-rofi"
+  patch -Np1 -i "$srcdir/awesome-rofi-type3-fix.patch"
+}
+
 package() {
-  # Git forrásnál a mappa neve a repo neve (nincs -branch utótag)
   cd "$srcdir/awesome-rofi"
   
   # Fonts
