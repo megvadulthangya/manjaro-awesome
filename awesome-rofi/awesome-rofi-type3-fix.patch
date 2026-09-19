@@ -1,0 +1,11 @@
+--- a/files/launchers/type-3/style-2.rasi   2026-09-19 11:57:34.265872590 +0200
++++ b/files/launchers/type-3/style-2.rasi   2026-09-19 11:53:32.623269229 +0200
+@@ -36,7 +36,7 @@
+     border:                      0px solid;
+     border-radius:               0px;
+     border-color:                @selected;
+-    background-color:            black / 10%;
++    background-color:             @background;
+     cursor:                      "default";
+ }
+ 
