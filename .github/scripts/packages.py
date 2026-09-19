@@ -5,6 +5,7 @@ Package definitions for Manjaro Package Builder
 # LOCAL packages (from our repository)
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
+    "rofi",
     "rofi-git",
     "awesome-updater",
     "xlibre-xserver-legacyabi",

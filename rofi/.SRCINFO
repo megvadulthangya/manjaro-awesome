@@ -1,0 +1,37 @@
+pkgbase = rofi
+	pkgdesc = A window switcher, application launcher and dmenu replacement
+	pkgver = 1.7.9.1
+	pkgrel = 1
+	url = https://davatorium.github.io/rofi
+	arch = x86_64
+	license = MIT
+	makedepends = check
+	makedepends = git
+	makedepends = meson
+	makedepends = pandoc
+	depends = bash
+	depends = cairo
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = hicolor-icon-theme
+	depends = libxcb
+	depends = libxkbcommon
+	depends = libxkbcommon-x11
+	depends = pango
+	depends = startup-notification
+	depends = xcb-imdkit
+	depends = xcb-util
+	depends = xcb-util-cursor
+	depends = xcb-util-keysyms
+	depends = xcb-util-wm
+	source = git+https://github.com/davatorium/rofi.git#tag=1.7.9.1
+	source = git+https://github.com/sardemff7/libgwater.git
+	source = git+https://github.com/sardemff7/libnkutils.git
+	source = fix_xfce4-terminal_binary_name.patch
+	sha256sums = 068f0644da4c9a786ddc318733560c73239db6660d5c0df25f371a12e9ba5ebe
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = 2e49b4b5785cc6245c9eb9d8036b166b217051826609350d67fa2deeb5728564
+
+pkgname = rofi
