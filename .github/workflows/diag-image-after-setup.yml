@@ -1,0 +1,161 @@
+name: Diagnostic - Manjaro Build Image AFTER Testing+CachyOS Upgrade
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect-after-setup:
+    name: Inspect image state after testing switch + CachyOS repos
+    runs-on: ubuntu-latest
+
+    container:
+      image: manjarolinux/build:latest
+
+    steps:
+      # ============================================================
+      # 0. Baseline a módosítás előtt
+      # ============================================================
+      - name: Baseline (before changes)
+        run: |
+          echo "=== BEFORE: os-release ==="
+          cat /etc/os-release || true
+          echo ""
+          echo "=== BEFORE: branch ==="
+          pacman-mirrors -G 2>/dev/null || echo "(nincs pacman-mirrors)"
+          echo ""
+          echo "=== BEFORE: linux-api-headers ==="
+          pacman -Qi linux-api-headers 2>/dev/null | grep -E '^(Name|Version)' || echo "(nincs)"
+          echo ""
+          echo "=== BEFORE: scc.h ==="
+          [ -f /usr/include/linux/scc.h ] && echo "✅ MEGVAN" || echo "❌ HIÁNYZIK"
+          echo "=== BEFORE: cyclades.h ==="
+          [ -f /usr/include/linux/cyclades.h ] && echo "✅ MEGVAN" || echo "❌ HIÁNYZIK"
+
+      # ============================================================
+      # 1. Branch váltás testing-re (mint az éles workflow)
+      # ============================================================
+      - name: Switch to testing branch
+        run: |
+          pacman-mirrors --api -B testing -R || true
+          echo "=== Branch most ==="
+          pacman-mirrors -G 2>/dev/null || true
+          pacman -Syy --noconfirm || true
+
+      # ============================================================
+      # 2. Teljes rendszerfrissítés (mint az éles workflow)
+      # ============================================================
+      - name: Full system upgrade
+        run: |
+          # SigLevel lazítás, hogy ne akadjon meg a keyring miatt (mint élesben)
+          cp /etc/pacman.conf /etc/pacman.conf.bak
+          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
+
+          pacman -Sy --noconfirm archlinux-keyring manjaro-keyring || true
+          pacman-key --init || true
+          pacman-key --populate archlinux manjaro || true
+
+          pacman -Syu --noconfirm --needed || true
+
+          mv /etc/pacman.conf.bak /etc/pacman.conf
+
+      # ============================================================
+      # 3. CachyOS repo hozzáadása (mint az éles workflow, v3 tier)
+      # ============================================================
+      - name: Add CachyOS repos (v3 tier)
+        run: |
+          CACHYOS_KEYID="F3B607488DB35A47"
+
+          pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CACHYOS_KEYID}" || true
+          pacman-key --lsign-key "${CACHYOS_KEYID}" || true
+
+          cat >> /etc/pacman.conf <<'EOF'
+
+          [cachyos-v3]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/x86_64_v3/cachyos-v3/
+
+          [cachyos-core-v3]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/x86_64_v3/cachyos-core-v3/
+
+          [cachyos-extra-v3]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/x86_64_v3/cachyos-extra-v3/
+
+          [cachyos]
+          SigLevel = Required
+          Server = https://mirror.cachyos.org/repo/x86_64/cachyos/
+          EOF
+
+          pacman -Sy --noconfirm || true
+
+      # ============================================================
+      # 4. Upgrade CachyOS-ból is (hogy a linux-api-headers frissüljön)
+      # ============================================================
+      - name: Upgrade from CachyOS repos
+        run: |
+          # Itt jön be az, ami a gcc49 build előtt is lefut:
+          # a CachyOS felülírja a Manjaro testing csomagokat
+          pacman -Syu --noconfirm --needed || true
+
+      # ============================================================
+      # 5. A LÉNYEG: mi történt a headerrel?
+      # ============================================================
+      - name: AFTER - linux-api-headers and headers
+        run: |
+          echo "=========================================="
+          echo " AFTER: linux-api-headers"
+          echo "=========================================="
+          pacman -Qi linux-api-headers 2>/dev/null || echo "(nincs)"
+
+          echo ""
+          echo "=========================================="
+          echo " AFTER: honnan jön a linux-api-headers?"
+          echo "=========================================="
+          pacman -Si linux-api-headers 2>/dev/null | grep -E '^(Repository|Name|Version)' || true
+
+          echo ""
+          echo "=========================================="
+          echo " AFTER: scc.h"
+          echo "=========================================="
+          [ -f /usr/include/linux/scc.h ] && { echo "✅ MEGVAN"; ls -la /usr/include/linux/scc.h; } || echo "❌ HIÁNYZIK"
+
+          echo ""
+          echo "=========================================="
+          echo " AFTER: cyclades.h"
+          echo "=========================================="
+          [ -f /usr/include/linux/cyclades.h ] && { echo "✅ MEGVAN"; ls -la /usr/include/linux/cyclades.h; } || echo "❌ HIÁNYZIK"
+
+          echo ""
+          echo "=========================================="
+          echo " AFTER: /usr/include/linux fájlszám"
+          echo "=========================================="
+          ls /usr/include/linux 2>/dev/null | wc -l
+
+          echo ""
+          echo "=========================================="
+          echo " AFTER: pacman -Qo /usr/include/linux"
+          echo "=========================================="
+          pacman -Qo /usr/include/linux 2>/dev/null || echo "(nincs gazda)"
+
+      # ============================================================
+      # 6. Összefoglaló BEFORE vs AFTER
+      # ============================================================
+      - name: Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo " 📋 ÖSSZEFOGLALÓ"
+          echo "=========================================="
+          echo "Branch most      : $(pacman-mirrors -G 2>/dev/null || echo '?')"
+          echo "linux-api-headers: $(pacman -Q linux-api-headers 2>/dev/null | awk '{print $2}' || echo 'NINCS')"
+          echo "Forrás repo      : $(pacman -Si linux-api-headers 2>/dev/null | awk -F': ' '/^Repository/{print $2}' || echo '?')"
+          echo ""
+          echo "linux/scc.h      : $([ -f /usr/include/linux/scc.h ] && echo '✅ MEGVAN' || echo '❌ HIÁNYZIK')"
+          echo "linux/cyclades.h : $([ -f /usr/include/linux/cyclades.h ] && echo '✅ MEGVAN' || echo '❌ HIÁNYZIK')"
+          echo ""
+          echo "👉 Ha a scc.h HIÁNYZIK, akkor ez az oka a gcc49 build hibájának."
+          echo "👉 A megoldás: PKGBUILD prepare() szakaszában törölni a"
+          echo "   libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp"
+          echo "   fájlból a '#include <linux/scc.h>' sort, VAGY"
+          echo "   --disable-libsanitizer a configure kapcsolók között."

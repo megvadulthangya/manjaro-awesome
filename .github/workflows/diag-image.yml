@@ -1,0 +1,259 @@
+name: Diagnostic - Manjaro Build Image Inspection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect-image:
+    name: Inspect manjarolinux/build:latest (read-only)
+    runs-on: ubuntu-latest
+
+    container:
+      image: manjarolinux/build:latest
+
+    steps:
+      # ============================================================
+      # 1. Alap OS / release információ
+      # ============================================================
+      - name: OS Release Info
+        run: |
+          echo "=========================================="
+          echo " /etc/os-release"
+          echo "=========================================="
+          cat /etc/os-release || true
+
+          echo ""
+          echo "=========================================="
+          echo " /etc/lsb-release (ha van)"
+          echo "=========================================="
+          cat /etc/lsb-release 2>/dev/null || echo "(nincs)"
+
+          echo ""
+          echo "=========================================="
+          echo " Manjaro branch"
+          echo "=========================================="
+          if command -v pacman-mirrors >/dev/null 2>&1; then
+            pacman-mirrors -G 2>/dev/null || echo "(pacman-mirrors -G hibat adott)"
+          else
+            echo "(pacman-mirrors nincs telepítve)"
+          fi
+
+      # ============================================================
+      # 2. Kernel információk (host kernel + konténer nézet)
+      # ============================================================
+      - name: Kernel Info
+        run: |
+          echo "=========================================="
+          echo " uname -a"
+          echo "=========================================="
+          uname -a
+
+          echo ""
+          echo "=========================================="
+          echo " /proc/version"
+          echo "=========================================="
+          cat /proc/version
+
+          echo ""
+          echo "=========================================="
+          echo " Telepített kernel csomagok (pacman -Qs)"
+          echo "=========================================="
+          pacman -Qs '^linux$' 2>/dev/null || echo "(linux csomag nincs a konténerben)"
+          pacman -Qs '^linux[0-9]' 2>/dev/null || true
+
+          echo ""
+          echo "=========================================="
+          echo " /boot tartalma (ha mountolva van)"
+          echo "=========================================="
+          ls -la /boot 2>/dev/null || echo "(nincs /boot)"
+
+      # ============================================================
+      # 3. Kernel headers / API headers csomagok
+      # ============================================================
+      - name: Kernel Header Packages
+        run: |
+          echo "=========================================="
+          echo " linux-api-headers csomag"
+          echo "=========================================="
+          pacman -Qi linux-api-headers 2>/dev/null || echo "(linux-api-headers NINCS telepítve)"
+
+          echo ""
+          echo "=========================================="
+          echo " linux-headers csomag"
+          echo "=========================================="
+          pacman -Qi linux-headers 2>/dev/null || echo "(linux-headers nincs telepítve - ez normális konténerben)"
+
+          echo ""
+          echo "=========================================="
+          echo " Minden *-headers és linux-* csomag"
+          echo "=========================================="
+          pacman -Q 2>/dev/null | grep -Ei 'header|^linux' || echo "(egy sem)"
+
+      # ============================================================
+      # 4. /usr/include/linux tartalma
+      # ============================================================
+      - name: /usr/include/linux Contents
+        run: |
+          echo "=========================================="
+          echo " /usr/include/linux létezik?"
+          echo "=========================================="
+          ls -ld /usr/include/linux 2>/dev/null || echo "❌ /usr/include/linux NEM LÉTEZIK"
+
+          echo ""
+          echo "=========================================="
+          echo " /usr/include/linux fájlok száma"
+          echo "=========================================="
+          ls /usr/include/linux 2>/dev/null | wc -l || echo "0"
+
+          echo ""
+          echo "=========================================="
+          echo " /usr/include/linux első 60 fájlja"
+          echo "=========================================="
+          ls /usr/include/linux 2>/dev/null | head -60 || true
+
+      # ============================================================
+      # 5. A KONKRÉT problémás fájlok keresése
+      # ============================================================
+      - name: Search For Problematic Headers (scc.h, cyclades.h)
+        run: |
+          echo "=========================================="
+          echo " 🔎 linux/scc.h keresése (ez a gcc49 build hibája)"
+          echo "=========================================="
+          if [ -f /usr/include/linux/scc.h ]; then
+            echo "✅ MEGVAN: /usr/include/linux/scc.h"
+            ls -la /usr/include/linux/scc.h
+            echo "--- első 30 sor ---"
+            head -30 /usr/include/linux/scc.h
+          else
+            echo "❌ HIÁNYZIK: /usr/include/linux/scc.h"
+          fi
+
+          echo ""
+          echo "Rendszerszintű keresés (find):"
+          find /usr/include /usr/src -name 'scc.h' 2>/dev/null || echo "(sehol sem található)"
+
+          echo ""
+          echo "=========================================="
+          echo " 🔎 linux/cyclades.h keresése (warning forrása)"
+          echo "=========================================="
+          if [ -f /usr/include/linux/cyclades.h ]; then
+            echo "✅ MEGVAN: /usr/include/linux/cyclades.h"
+            ls -la /usr/include/linux/cyclades.h
+            echo "--- első 15 sor ---"
+            head -15 /usr/include/linux/cyclades.h
+          else
+            echo "❌ HIÁNYZIK: /usr/include/linux/cyclades.h"
+          fi
+
+      # ============================================================
+      # 6. Melyik csomag szállítja a linux/ fejléceket?
+      # ============================================================
+      - name: Which Package Owns /usr/include/linux/scc.h (or the directory)
+        run: |
+          echo "=========================================="
+          echo " pacman -Qo /usr/include/linux (melyik csomagé a könyvtár)"
+          echo "=========================================="
+          pacman -Qo /usr/include/linux 2>/dev/null || echo "(nem található gazda)"
+
+          echo ""
+          echo "=========================================="
+          echo " pacman -Qo /usr/include/linux/cyclades.h"
+          echo "=========================================="
+          pacman -Qo /usr/include/linux/cyclades.h 2>/dev/null || echo "(fájl nincs / nincs gazda)"
+
+          echo ""
+          echo "=========================================="
+          echo " pacman -Ql linux-api-headers | grep scc"
+          echo "=========================================="
+          pacman -Ql linux-api-headers 2>/dev/null | grep -i 'scc' || echo "(linux-api-headers nem tartalmaz scc.h-t)"
+
+          echo ""
+          echo "=========================================="
+          echo " pacman -Ql linux-api-headers | grep cyclades"
+          echo "=========================================="
+          pacman -Ql linux-api-headers 2>/dev/null | grep -i 'cyclades' || echo "(linux-api-headers nem tartalmaz cyclades.h-t)"
+
+      # ============================================================
+      # 7. Verzió-összehasonlítás: mennyire új a header?
+      # ============================================================
+      - name: Header Version Info
+        run: |
+          echo "=========================================="
+          echo " linux-api-headers verzió"
+          echo "=========================================="
+          pacman -Q linux-api-headers 2>/dev/null || echo "(nincs)"
+
+          echo ""
+          echo "=========================================="
+          echo " /usr/include/linux/version.h (ha van)"
+          echo "=========================================="
+          cat /usr/include/linux/version.h 2>/dev/null || echo "(nincs version.h)"
+
+          echo ""
+          echo "=========================================="
+          echo " LINUX_VERSION_CODE / KERNEL_VERSION makrók"
+          echo "=========================================="
+          grep -R "LINUX_VERSION_CODE\|KERNEL_VERSION(" /usr/include/linux/version.h 2>/dev/null || echo "(nem található)"
+
+      # ============================================================
+      # 8. Pacman konfiguráció (branch + repók)
+      # ============================================================
+      - name: Pacman Configuration
+        run: |
+          echo "=========================================="
+          echo " Engedélyezett repók"
+          echo "=========================================="
+          grep -E '^\[.*\]' /etc/pacman.conf || true
+
+          echo ""
+          echo "=========================================="
+          echo " SigLevel sorok"
+          echo "=========================================="
+          grep -E '^SigLevel' /etc/pacman.conf || true
+
+          echo ""
+          echo "=========================================="
+          echo " Mirrorlist branch (első pár sor)"
+          echo "=========================================="
+          head -20 /etc/pacman.d/mirrorlist 2>/dev/null || echo "(nincs mirrorlist)"
+
+      # ============================================================
+      # 9. Build tool lánc baseline
+      # ============================================================
+      - name: Toolchain Baseline
+        run: |
+          echo "=========================================="
+          echo " gcc / binutils / glibc / make verziók"
+          echo "=========================================="
+          gcc --version 2>/dev/null | head -1 || echo "gcc nincs"
+          g++ --version 2>/dev/null | head -1 || echo "g++ nincs"
+          ld --version 2>/dev/null | head -1 || echo "ld nincs"
+          make --version 2>/dev/null | head -1 || echo "make nincs"
+          ldd --version 2>/dev/null | head -1 || echo "glibc info nincs"
+          pacman -Q glibc gcc binutils make 2>/dev/null || true
+
+      # ============================================================
+      # 10. Összefoglaló
+      # ============================================================
+      - name: Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo " 📋 DIAGNOSZTIKAI ÖSSZEFOGLALÓ"
+          echo "=========================================="
+          echo "Konténer image : manjarolinux/build:latest"
+          echo "Kernel (host)  : $(uname -r)"
+          echo "OS             : $(grep '^PRETTY_NAME' /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '\"')"
+          echo "linux-api-headers: $(pacman -Q linux-api-headers 2>/dev/null | awk '{print $2}' || echo 'NINCS')"
+          echo ""
+          echo "linux/scc.h       : $([ -f /usr/include/linux/scc.h ] && echo '✅ jelen van' || echo '❌ HIÁNYZIK')"
+          echo "linux/cyclades.h  : $([ -f /usr/include/linux/cyclades.h ] && echo '✅ jelen van' || echo '❌ HIÁNYZIK')"
+          echo ""
+          echo "👉 Ha a linux/scc.h HIÁNYZIK, akkor a gcc49 build a libsanitizer"
+          echo "   miatt el fog hasalni a következő hibával:"
+          echo "   fatal error: linux/scc.h: No such file or directory"
+          echo ""
+          echo "👉 Megoldás: PKGBUILD prepare() szakaszában törölni kell a"
+          echo "   libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp"
+          echo "   fájlból a '#include <linux/scc.h>' sort, VAGY a configure-hoz"
+          echo "   hozzáadni a --disable-libsanitizer kapcsolót."
