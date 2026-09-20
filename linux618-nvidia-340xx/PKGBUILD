@@ -49,7 +49,7 @@ build() {
          CONFIG_MODULE_SIG=n \
          CONFIG_MODULE_SIG_ALL=n \
          KBUILD_EXTMOD="${_src}/uvm" \
-         module
+         modules
 
     # A kész .ko fájlok összegyűjtése
     mkdir -p "${_moddir}"
