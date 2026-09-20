@@ -42,12 +42,13 @@ build() {
          module
 
     # UVM modul építése
-        # UVM modul építése
     make -C uvm -j$(nproc) \
          SYSSRC="/usr/lib/modules/${_kernver}/build" \
+         KERNELRELEASE=${_kernver} \
          KERNEL_UNAME=${_kernver} \
          CONFIG_MODULE_SIG=n \
          CONFIG_MODULE_SIG_ALL=n \
+         KBUILD_EXTMOD="${_src}/uvm" \
          modules
 
     # A kész .ko fájlok összegyűjtése
