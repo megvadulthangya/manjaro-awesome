@@ -1,8 +1,8 @@
+# Maintainer: Bernhard Landauer <bernhard[at]manjaro[dot]org>
 # Maintainer: Philip Müller <philm[at]manjaro[dot]org>
-# Contributor: Bernhard Landauer <bernhard[at]manjaro[dot]org>
 # Contributor: Thomas Baechler <thomas@archlinux.org>
 
-_linuxprefix=linux61   # <-- EZT cseréld a kívánt kernelre
+_linuxprefix=linux61-rt
 
 pkgname="${_linuxprefix}-nvidia-340xx"
 pkgver=340.108
@@ -20,9 +20,7 @@ options=(!strip)
 build() {
     _kernver="$(cat /usr/src/${_linuxprefix}/version)"
 
-    # Csak RT kerneleknél tedd be ezt a sort:
-     export IGNORE_PREEMPT_RT_PRESENCE=1
-
+    export IGNORE_PREEMPT_RT_PRESENCE=1
     fakeroot dkms build --dkmstree "${srcdir}" -m nvidia/${pkgver} -k ${_kernver}
 }
 
