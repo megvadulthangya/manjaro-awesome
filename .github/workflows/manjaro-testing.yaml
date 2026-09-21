@@ -920,16 +920,34 @@ jobs:
 
           echo "CACHYOS: IMPORT_KEY"
           ok=0
-          for attempt in 1 2; do
-            echo "CACHYOS: recv-keys attempt=${attempt}"
-            if pacman-key --keyserver keyserver.ubuntu.com --recv-keys "${CACHYOS_KEYID}"; then
-              ok=1
-              break
-            fi
-            sleep 2
+          CACHYOS_KEYSERVERS=(
+            "keyserver.ubuntu.com"
+            "hkps://keyserver.ubuntu.com"
+            "pgp.mit.edu"
+            "keys.openpgp.org"
+          )
+          for ks in "${CACHYOS_KEYSERVERS[@]}"; do
+            for attempt in 1 2 3; do
+              echo "CACHYOS: recv-keys keyserver=${ks} attempt=${attempt}"
+              if timeout 30 pacman-key --keyserver "${ks}" --recv-keys "${CACHYOS_KEYID}" 2>/dev/null; then
+                ok=1
+                break 2
+              fi
+              sleep $((attempt * 3))
+            done
           done
+
           if [ "$ok" -ne 1 ]; then
-            echo "CACHYOS: FAIL recv-keys"
+            echo "CACHYOS: KEYSERVER_FALLBACK=1 downloading key via HTTPS"
+            if curl -fsSL --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 3 \
+              "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${CACHYOS_KEYID}" \
+              | pacman-key --add -; then
+              ok=1
+            fi
+          fi
+
+          if [ "$ok" -ne 1 ]; then
+            echo "CACHYOS: FAIL recv-keys all keyservers exhausted"
             exit 1
           fi
 
