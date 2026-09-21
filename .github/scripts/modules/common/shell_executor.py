@@ -36,7 +36,11 @@ class ShellExecutor:
         """
         if retry_errors is None:
             retry_errors = ["500 Internal Server Error", "remote: Internal Server Error", 
-                           "fatal: the remote end hung up unexpectedly", "connection timed out"]
+                           "fatal: the remote end hung up unexpectedly", "connection timed out",
+                           "transfer closed with", "Connection reset by peer", "Recv failure",
+                           "Operation too slow", "GnuTLS recv error", "OpenSSL SSL_read",
+                           "HTTP/2 stream", "unexpected EOF", "error: failed retrieving file",
+                           "==> ERROR: Failure while downloading", "failed to download sources"]
         
         last_exception = None
         delay = initial_delay
@@ -82,6 +86,9 @@ class ShellExecutor:
                     return result
                 
                 logger.warning(f"SRC_RETRY_REASON attempt={attempt} reason={retry_reason}")
+                
+                if attempt == max_retries - 1:
+                    return result
                 
             except subprocess.CalledProcessError as e:
                 # Check if this is a retryable error

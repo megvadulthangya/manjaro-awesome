@@ -147,6 +147,17 @@ jobs:
             ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-
             ${{ runner.os }}-built-packages-cache-
 
+      # ================== CACHE: SRCDEST (Makepkg Sources) ==================
+      # Cache for makepkg source tarballs (e.g. gcc-4.9.4.tar.bz2) to avoid re-downloading
+      - name: Restore SRCDEST Cache
+        uses: actions/cache@v6
+        with:
+          path: /mnt/srcdest
+          key: ${{ runner.os }}-srcdest-${{ hashFiles('packages.py', '**/PKGBUILD') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-srcdest-${{ hashFiles('packages.py', '**/PKGBUILD') }}-
+            ${{ runner.os }}-srcdest-
+
       - name: Initialize Modular Cache with Symlinks
         run: |
           echo "=== Initializing Modular Cache with Symlinks ==="
@@ -155,6 +166,7 @@ jobs:
           mkdir -p /mnt/yay_cache
           mkdir -p /mnt/vps_cache
           mkdir -p /mnt/build_artifacts
+          mkdir -p /mnt/srcdest
 
           chmod 777 /mnt/pacman_cache
 
@@ -430,6 +442,28 @@ jobs:
           sed -i '/^OPTIONS=/ s/ debug/ !debug/' /etc/makepkg.conf
           sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 --ultra -20 -)/" /etc/makepkg.conf
           sed -i "s/^BUILDENV=.*/BUILDENV=(!distcc color !ccache check !sign)/" /etc/makepkg.conf
+
+          # Robust download agents: install aria2c and override makepkg DLAGENTS
+          echo "Installing aria2 for resumable, multi-connection source downloads..."
+          pacman -S --noconfirm --needed aria2
+
+          cat >> /etc/makepkg.conf <<'EOF'
+
+          # Override DLAGENTS to use aria2c (robust multi-connection, resume-capable, retry-on-partial)
+          DLAGENTS=('file::/usr/bin/aria2c -c -o %o %u'
+                    'ftp::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
+                    'http::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
+                    'https::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
+                    'rsync::/usr/bin/rsync -z %u %o'
+                    'scp::/usr/bin/scp -C %u %o')
+          EOF
+
+          # Persistent source cache directory (idempotent)
+          if grep -q '^SRCDEST=' /etc/makepkg.conf; then
+            sed -i 's|^SRCDEST=.*|SRCDEST=/mnt/srcdest|' /etc/makepkg.conf
+          else
+            echo 'SRCDEST=/mnt/srcdest' >> /etc/makepkg.conf
+          fi
 
           echo "✅ Environment preparation complete"
 
@@ -1125,6 +1159,8 @@ jobs:
           echo ""
           echo "=== Running Builder Script with Cache Support ==="
 
+          bash -c 'source /etc/makepkg.conf; printf "%s\n" "${DLAGENTS[@]}" | grep -q aria2 && echo "DLAGENT_OK=aria2c" || echo "DLAGENT_FAIL=still_curl"'
+
           # Run as builder user with PYTHONPATH set for modular imports
           #su builder -c "cd '$PWD' && PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
           su -m builder -c "cd '$PWD' && env PACKAGER_ENV='$PACKAGER_ENV' PYTHONPATH='$PYTHONPATH' python3 .github/scripts/builder.py 2>&1" | tee build_output.log
@@ -1177,6 +1213,13 @@ jobs:
             build_aur
           key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD') }}-${{ github.run_id }}
           #key: ${{ runner.os }}-built-packages-cache-${{ hashFiles('packages.py', 'config.py', '**/PKGBUILD', '!packages_bckp/**', '!pkgbuilder_bckp/**') }}-${{ github.run_id }}
+
+      - name: Save SRCDEST Cache
+        uses: actions/cache/save@v6
+        if: always()
+        with:
+          path: /mnt/srcdest
+          key: ${{ runner.os }}-srcdest-${{ hashFiles('packages.py', '**/PKGBUILD') }}-${{ github.run_id }}
 
       - name: Upload Build Artifacts
         if: always()
