@@ -16,8 +16,8 @@
 set -u
 _pkgver='4.8'
 pkgname="gcc${_pkgver//\./}"
-pkgver="${_pkgver}.5"
-pkgrel='1'
+pkgver=4.8.5
+pkgrel=1
 pkgdesc="The GNU Compiler Collection - C, C++ and Fortran frontends (${_pkgver}.x)"
 arch=('x86_64')
 url='http://gcc.gnu.org'
