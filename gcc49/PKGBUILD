@@ -5,10 +5,10 @@
 set -u
 _pkgver='4.9'
 pkgname="gcc${_pkgver//\./}"
-pkgver="${_pkgver}.4"
+pkgver=4.9.4
 _islver='0.12.2'
 _cloogver='0.18.1'
-pkgrel='3'
+pkgrel=3
 pkgdesc="The GNU Compiler Collection (${_pkgver}.x)"
 arch=('i686' 'x86_64')
 url='https://gcc.gnu.org'
