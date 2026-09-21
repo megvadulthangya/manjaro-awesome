@@ -7,6 +7,7 @@ LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
     "cuda65",
+    "gcc48",
     "gcc49",
     "rofi-git",
     "awesome-updater",
@@ -95,7 +96,6 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "gcc48",
     "tilix-git",
     "libinput-gestures",
     "lua-lgi-git",
