@@ -6,6 +6,8 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
+    "cuda65",
+    "gcc49",
     "rofi-git",
     "awesome-updater",
     "xlibre-xserver-legacyabi",
@@ -93,7 +95,6 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "gcc49",
     "tilix-git",
     "libinput-gestures",
     "lua-lgi-git",
