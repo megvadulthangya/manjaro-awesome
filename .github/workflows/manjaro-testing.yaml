@@ -450,12 +450,14 @@ jobs:
           cat >> /etc/makepkg.conf <<'EOF'
 
           # Override DLAGENTS to use aria2c (robust multi-connection, resume-capable, retry-on-partial)
-          DLAGENTS=('file::/usr/bin/aria2c -c -o %o %u'
-                    'ftp::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
-                    'http::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
-                    'https::/usr/bin/aria2c -x 16 -s 16 -k 1M -c --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 -o %o %u'
-                    'rsync::/usr/bin/rsync -z %u %o'
-                    'scp::/usr/bin/scp -C %u %o')
+          DLAGENTS=(
+            'file::/usr/bin/aria2c -c -o %o %u'
+            'ftp::/usr/bin/aria2c --no-conf -x 16 -s 16 -k 1M -c --auto-file-renaming=false --allow-overwrite=true --conditional-get=false --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 --console-log-level=warn --show-console-readout=false --download-result=hide -o %o %u'
+            'http::/usr/bin/aria2c --no-conf -x 16 -s 16 -k 1M -c --auto-file-renaming=false --allow-overwrite=true --conditional-get=false --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 --console-log-level=warn --show-console-readout=false --download-result=hide -o %o %u'
+            'https::/usr/bin/aria2c --no-conf -x 16 -s 16 -k 1M -c --auto-file-renaming=false --allow-overwrite=true --conditional-get=false --max-tries=10 --retry-wait=3 --connect-timeout=30 --timeout=120 --file-allocation=none --summary-interval=0 --console-log-level=warn --show-console-readout=false --download-result=hide -o %o %u'
+            'rsync::/usr/bin/rsync -z %u %o'
+            'scp::/usr/bin/scp -C %u %o'
+          )
           EOF
 
           # Persistent source cache directory (idempotent)
