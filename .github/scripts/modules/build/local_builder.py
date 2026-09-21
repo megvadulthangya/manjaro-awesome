@@ -97,7 +97,11 @@ class LocalBuilder:
             )
             
             if download_result.returncode != 0:
-                logger.error(f"❌ Failed to download sources: {download_result.stderr[:500]}")
+                logger.error(f"❌ Failed to download sources (exit={download_result.returncode}, cwd={pkg_dir})")
+                logger.error("--- makepkg stdout (full) ---")
+                logger.error(download_result.stdout if download_result.stdout else "<empty>")
+                logger.error("--- makepkg stderr (full) ---")
+                logger.error(download_result.stderr if download_result.stderr else "<empty>")
                 raise subprocess.CalledProcessError(download_result.returncode, "makepkg -od",
                                                    download_result.stdout, download_result.stderr)
             
