@@ -95,6 +95,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "gcc48",
     "tilix-git",
     "libinput-gestures",
     "lua-lgi-git",
