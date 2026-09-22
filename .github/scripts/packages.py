@@ -7,6 +7,7 @@ LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
     "cuda65",
+    "cuda60",
     "gcc48",
     "gcc49",
     "rofi-git",
