@@ -43,7 +43,7 @@ class LocalBuilder:
         Returns:
             True if successful, False otherwise
         """
-        pkg_name = os.path.basename(pkg_dir)
+        pkg_name = os.path.basename(os.path.normpath(pkg_dir))
         if pkg_names is None:
             pkg_names = [pkg_name]
         
