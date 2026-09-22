@@ -203,7 +203,7 @@ class PackageBuilder:
         
         # Log runtime depends - they may be installed depending on config
         if runtime_depends:
-            logger.info(f"📦 Runtime depends (will be installed if config flag is True): {runtime_depends}")
+            logger.info(f"📦 Runtime depends (will be installed only if {pkg_dir.name} is in INSTALL_RUNTIME_DEPS): {runtime_depends}")
         
         # Start dependency session for this package
         dep_installer.begin_session(pkg_dir.name)
@@ -214,7 +214,8 @@ class PackageBuilder:
                 str(pkg_dir),
                 makedepends,
                 checkdepends,
-                runtime_depends
+                runtime_depends,
+                pkg_names=pkg_names
             ):
                 logger.error(f"❌ Failed to install dependencies for {pkg_dir.name}")
                 return False, source_version, None, None
@@ -411,7 +412,7 @@ class PackageBuilder:
                 # Step 5: Build package (dependencies are installed inside build_aur_package)
                 logger.info(f"🔨 Building AUR {aur_package_name} ({source_version})...")
                 logger.info("AUR_BUILDER_USED=1")
-                built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version)
+                built_files, build_output = self._build_aur_package(temp_path, aur_package_name, source_version, pkg_names=pkg_names)
                 
                 if built_files:
                     # Step 6: Extract ACTUAL artifact versions from built files
@@ -647,7 +648,7 @@ class PackageBuilder:
             logger.error(f"❌ Error building {pkg_dir.name}: {e}")
             return [], ""
     
-    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str) -> Tuple[List[str], str]:
+    def _build_aur_package(self, pkg_dir: Path, pkg_name: str, version: str, pkg_names: List[str] = None) -> Tuple[List[str], str]:
         """Build AUR package using AURBuilder and return list of built files and output."""
         try:
             # Clean workspace using ArtifactManager
@@ -666,7 +667,8 @@ class PackageBuilder:
                 target_dir=pkg_dir,
                 packager_id=self.packager_id,
                 build_flags="-d --noconfirm --clean --nocheck",
-                timeout=3600
+                timeout=3600,
+                pkg_names=pkg_names
             )
             
             build_output = ""  # AURBuilder doesn't return output, would need to modify

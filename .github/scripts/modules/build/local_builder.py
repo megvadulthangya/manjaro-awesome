@@ -26,28 +26,41 @@ class LocalBuilder:
                                   pkg_dir: str,
                                   makedepends: List[str],
                                   checkdepends: List[str],
-                                  runtime_depends: List[str]) -> bool:
+                                  runtime_depends: List[str],
+                                  pkg_names: List[str] = None) -> bool:
         """
         Install dependencies for local package.
-        - Default: install makedepends + checkdepends + depends (runtime)
-        - Configurable via INSTALL_RUNTIME_DEPS_IN_CI flag.
+        - Default: install makedepends + checkdepends only.
+        - Runtime depends are installed only when the package directory name is
+          listed in config.INSTALL_RUNTIME_DEPS.
+        - Self-referencing runtime depends are always filtered out.
         
         Args:
-            pkg_dir: Package directory path (for logging only)
+            pkg_dir: Package directory path
             makedepends: List of makedepends packages
             checkdepends: List of checkdepends packages
             runtime_depends: List of runtime depends packages
+            pkg_names: Optional list of package names produced by this PKGBUILD
             
         Returns:
             True if successful, False otherwise
         """
+        pkg_name = os.path.basename(os.path.normpath(pkg_dir))
+        if pkg_names is None:
+            pkg_names = [pkg_name]
+        
+        runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
+        
+        install_runtime = pkg_name in getattr(config, 'INSTALL_RUNTIME_DEPS', [])
+        logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=INSTALL_RUNTIME_DEPS")
+        
         # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
-        if config.INSTALL_RUNTIME_DEPS_IN_CI:
+        if install_runtime:
             build_deps += runtime_depends
-            logger.info("Runtime depends are INCLUDED in build deps (INSTALL_RUNTIME_DEPS_IN_CI=True)")
+            logger.info("Runtime depends are INCLUDED in build deps (pkg in INSTALL_RUNTIME_DEPS)")
         else:
-            logger.info("Runtime depends are EXCLUDED from build deps (INSTALL_RUNTIME_DEPS_IN_CI=False)")
+            logger.info("Runtime depends are EXCLUDED from build deps (pkg not in INSTALL_RUNTIME_DEPS)")
         
         if not build_deps:
             return True
@@ -56,7 +69,7 @@ class LocalBuilder:
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
         if runtime_depends:
-            logger.info(f"Runtime depends: {runtime_depends} (will be installed)")
+            logger.info(f"Runtime depends: {runtime_depends} (install_runtime={install_runtime})")
         
         return self.dependency_installer.install_packages(
             packages=build_deps,

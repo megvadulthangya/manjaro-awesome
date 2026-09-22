@@ -77,8 +77,13 @@ GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY")
 # Package signing configuration
 SIGN_PACKAGES = True  # Default toggle for individual package signing
 
-# Default behavior: install runtime depends during build in CI (nvidia-340xx-utils need to be false)
-INSTALL_RUNTIME_DEPS_IN_CI = True
+# Per-package runtime dependency installation policy.
+# Packages listed here will have runtime depends (depends=) installed during build,
+# in addition to makedepends and checkdepends. Packages not listed will only get
+# makedepends and checkdepends. This replaces the old global
+# INSTALL_RUNTIME_DEPS_IN_CI boolean. Default: empty list (no package gets
+# runtime depends installed during build).
+INSTALL_RUNTIME_DEPS = []
 
 # Conflict resolution allowlist
 # Format: {"package-being-installed": ["conflicting-package-to-remove"]}

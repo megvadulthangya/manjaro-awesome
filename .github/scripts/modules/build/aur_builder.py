@@ -54,27 +54,41 @@ class AURBuilder:
     def install_dependencies(self,
                             makedepends: List[str],
                             checkdepends: List[str],
-                            runtime_depends: List[str]) -> bool:
+                            runtime_depends: List[str],
+                            pkg_name: str = None,
+                            pkg_names: List[str] = None) -> bool:
         """
         CI-safe dependency resolution:
-        - Default: install makedepends + checkdepends + depends (runtime)
-        - Configurable via INSTALL_RUNTIME_DEPS_IN_CI flag.
+        - Default: install makedepends + checkdepends only.
+        - Runtime depends are installed only when pkg_name is listed in
+          config.INSTALL_RUNTIME_DEPS.
+        - Self-referencing runtime depends are always filtered out.
         
         Args:
             makedepends: List of makedepends packages
             checkdepends: List of checkdepends packages
             runtime_depends: List of runtime depends packages
+            pkg_name: Optional AUR package name for policy lookup
+            pkg_names: Optional list of package names produced by this PKGBUILD
             
         Returns:
             True if installation successful, False otherwise
         """
+        if pkg_names is None:
+            pkg_names = [pkg_name] if pkg_name else []
+        
+        runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
+        
+        install_runtime = bool(pkg_name) and (pkg_name in getattr(config, 'INSTALL_RUNTIME_DEPS', []))
+        logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=INSTALL_RUNTIME_DEPS")
+        
         # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
-        if config.INSTALL_RUNTIME_DEPS_IN_CI:
+        if install_runtime:
             build_deps += runtime_depends
-            logger.info("Runtime depends are INCLUDED in build deps (INSTALL_RUNTIME_DEPS_IN_CI=True)")
+            logger.info("Runtime depends are INCLUDED in build deps (pkg in INSTALL_RUNTIME_DEPS)")
         else:
-            logger.info("Runtime depends are EXCLUDED from build deps (INSTALL_RUNTIME_DEPS_IN_CI=False)")
+            logger.info("Runtime depends are EXCLUDED from build deps (pkg not in INSTALL_RUNTIME_DEPS)")
         
         if not build_deps:
             return True
@@ -83,7 +97,7 @@ class AURBuilder:
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
         if runtime_depends:
-            logger.info(f"Runtime depends: {runtime_depends} (will be installed)")
+            logger.info(f"Runtime depends: {runtime_depends} (install_runtime={install_runtime})")
         
         # REQUIRED PRECONDITION: Initialize pacman database FIRST
         if not self._initialize_pacman_database():
@@ -107,7 +121,8 @@ class AURBuilder:
     
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str,
                           build_flags: str = "-d --noconfirm --clean --nocheck",
-                          timeout: int = 3600) -> List[str]:
+                          timeout: int = 3600,
+                          pkg_names: List[str] = None) -> List[str]:
         """
         Build AUR package including dependency installation.
         Per-package dependency session is managed by the caller (PackageBuilder).
@@ -118,6 +133,7 @@ class AURBuilder:
             packager_id: Packager identity string
             build_flags: makepkg flags
             timeout: Build timeout in seconds
+            pkg_names: Optional list of package names produced by this PKGBUILD
             
         Returns:
             List of built package filenames
@@ -131,7 +147,7 @@ class AURBuilder:
         # Install dependencies (with configurable runtime depends)
         if makedepends or checkdepends or runtime_depends:
             logger.info(f"📦 Found {len(makedepends) + len(checkdepends) + len(runtime_depends)} total dependencies for {pkg_name}")
-            if not self.install_dependencies(makedepends, checkdepends, runtime_depends):
+            if not self.install_dependencies(makedepends, checkdepends, runtime_depends, pkg_name=pkg_name, pkg_names=pkg_names):
                 logger.error(f"❌ Failed to install dependencies for {pkg_name}")
                 return []
         else:

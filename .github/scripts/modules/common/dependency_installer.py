@@ -9,7 +9,7 @@ import logging
 from typing import List, Tuple, Optional, Dict, Set
 from pathlib import Path
 
-import config  # for INSTALL_RUNTIME_DEPS_IN_CI and CONFLICT_REMOVE_ALLOWLIST
+import config  # for CONFLICT_REMOVE_ALLOWLIST
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,30 @@ class DependencyInstaller:
                 unique_deps.append(dep)
         
         return unique_deps
+    
+    def filter_self_references(self, deps: List[str], pkg_names: List[str]) -> List[str]:
+        """
+        Filter out runtime dependencies that refer to packages produced by this
+        same PKGBUILD (self-references in split packages).
+        """
+        if not deps or not pkg_names:
+            return deps
+        
+        pkg_name_set = set(pkg_names)
+        filtered = []
+        skipped = []
+        
+        for dep in deps:
+            dep_clean = re.sub(r'[<=>].*', '', dep).strip()
+            if dep_clean in pkg_name_set:
+                skipped.append(dep)
+            else:
+                filtered.append(dep)
+        
+        if skipped:
+            logger.info(f"DEP_SELF_REFERENCE_SKIP pkg_names={pkg_names} skipped={skipped}")
+        
+        return filtered
     
     def _handle_conflicts(self, packages: List[str]) -> bool:
         """
