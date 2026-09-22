@@ -123,7 +123,7 @@ class AURBuilder:
         )
     
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str,
-                          build_flags: str = "-d --noconfirm --clean --nocheck",
+                          build_flags: str = "-d --noconfirm --cleanbuild --clean --nocheck",
                           timeout: int = 3600,
                           pkg_names: List[str] = None) -> List[str]:
         """

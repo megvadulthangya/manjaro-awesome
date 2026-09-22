@@ -80,7 +80,7 @@ class LocalBuilder:
             mode="build"
         )
     
-    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-d --noconfirm --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
+    def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-d --noconfirm --cleanbuild --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
         """Run makepkg command with specified flags, with retry for missing yasm"""
         cmd = f"makepkg {flags}"
         
