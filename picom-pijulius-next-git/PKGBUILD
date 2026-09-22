@@ -1,7 +1,7 @@
 pkgname=picom-pijulius-next-git
 _gitname=picom
-pkgver=2938.g8f83eb54
-pkgrel=2
+pkgver=2942.ga719ef3a
+pkgrel=1
 pkgdesc="X compositor (fork of yshui-picom) (git-version), enhanced animation fork"
 arch=(i686 x86_64)
 url="https://github.com/pijulius/${_gitname}"
