@@ -203,7 +203,7 @@ class PackageBuilder:
         
         # Log runtime depends - they may be installed depending on config
         if runtime_depends:
-            logger.info(f"📦 Runtime depends (will be installed only if {pkg_dir.name} is in INSTALL_RUNTIME_DEPS): {runtime_depends}")
+            logger.info(f"📦 Runtime depends (will be installed if config flag is True): {runtime_depends}")
         
         # Start dependency session for this package
         dep_installer.begin_session(pkg_dir.name)

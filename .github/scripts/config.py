@@ -77,13 +77,13 @@ GPG_PRIVATE_KEY = os.getenv("GPG_PRIVATE_KEY")
 # Package signing configuration
 SIGN_PACKAGES = True  # Default toggle for individual package signing
 
-# Per-package runtime dependency installation policy.
-# Packages listed here will have runtime depends (depends=) installed during build,
-# in addition to makedepends and checkdepends. Packages not listed will only get
-# makedepends and checkdepends. This replaces the old global
-# INSTALL_RUNTIME_DEPS_IN_CI boolean. Default: empty list (no package gets
-# runtime depends installed during build).
-INSTALL_RUNTIME_DEPS = []
+# Opt-out list for runtime dependency installation during build.
+# Packages listed here (by PKGBUILD directory name as in packages.py) will NOT have their
+# runtime depends (depends=) installed during build. Only makedepends and checkdepends
+# will be installed for these packages. This replaces the old global
+# INSTALL_RUNTIME_DEPS_IN_CI flag. Packages not listed will have runtime depends installed,
+# preserving the previous default behavior (INSTALL_RUNTIME_DEPS_IN_CI = True).
+DONT_INSTALL_RUNTIME_DEPS = []
 
 # Conflict resolution allowlist
 # Format: {"package-being-installed": ["conflicting-package-to-remove"]}

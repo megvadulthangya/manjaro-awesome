@@ -59,17 +59,15 @@ class AURBuilder:
                             pkg_names: List[str] = None) -> bool:
         """
         CI-safe dependency resolution:
-        - Default: install makedepends + checkdepends only.
-        - Runtime depends are installed only when pkg_name is listed in
-          config.INSTALL_RUNTIME_DEPS.
-        - Self-referencing runtime depends are always filtered out.
+        - Default: install makedepends + checkdepends + depends (runtime)
+        - Configurable via DONT_INSTALL_RUNTIME_DEPS opt-out list.
         
         Args:
             makedepends: List of makedepends packages
             checkdepends: List of checkdepends packages
             runtime_depends: List of runtime depends packages
-            pkg_name: Optional AUR package name for policy lookup
-            pkg_names: Optional list of package names produced by this PKGBUILD
+            pkg_name: Name of the package being built (for policy lookup)
+            pkg_names: List of package names produced by the PKGBUILD (for self-reference filtering)
             
         Returns:
             True if installation successful, False otherwise
@@ -77,18 +75,20 @@ class AURBuilder:
         if pkg_names is None:
             pkg_names = [pkg_name] if pkg_name else []
         
-        runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
-        
-        install_runtime = bool(pkg_name) and (pkg_name in getattr(config, 'INSTALL_RUNTIME_DEPS', []))
-        logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=INSTALL_RUNTIME_DEPS")
+        # Filter self-references from runtime depends
+        filtered_runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
         
         # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
+        
+        install_runtime = (pkg_name is None) or (pkg_name not in getattr(config, 'DONT_INSTALL_RUNTIME_DEPS', []))
+        logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=DONT_INSTALL_RUNTIME_DEPS")
+        
         if install_runtime:
-            build_deps += runtime_depends
-            logger.info("Runtime depends are INCLUDED in build deps (pkg in INSTALL_RUNTIME_DEPS)")
+            build_deps += filtered_runtime_depends
+            logger.info("Runtime depends are INCLUDED in build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
         else:
-            logger.info("Runtime depends are EXCLUDED from build deps (pkg not in INSTALL_RUNTIME_DEPS)")
+            logger.info("Runtime depends are EXCLUDED from build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
         
         if not build_deps:
             return True
@@ -96,8 +96,11 @@ class AURBuilder:
         logger.info(f"Installing {len(build_deps)} dependencies...")
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
-        if runtime_depends:
-            logger.info(f"Runtime depends: {runtime_depends} (install_runtime={install_runtime})")
+        if filtered_runtime_depends:
+            logger.info(f"Runtime depends: {filtered_runtime_depends} (will be installed)")
+        if runtime_depends != filtered_runtime_depends:
+            skipped = set(runtime_depends) - set(filtered_runtime_depends)
+            logger.info(f"Runtime depends filtered out as self-references: {skipped}")
         
         # REQUIRED PRECONDITION: Initialize pacman database FIRST
         if not self._initialize_pacman_database():
@@ -133,7 +136,7 @@ class AURBuilder:
             packager_id: Packager identity string
             build_flags: makepkg flags
             timeout: Build timeout in seconds
-            pkg_names: Optional list of package names produced by this PKGBUILD
+            pkg_names: List of package names produced by the PKGBUILD (for self-reference filtering)
             
         Returns:
             List of built package filenames
