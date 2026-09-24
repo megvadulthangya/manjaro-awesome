@@ -1,14 +1,16 @@
-# Maintainer: Francisco Magalhães <franmagneto@gmail.com>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Francisco Magalhães <franmagneto@gmail.com>
 # Contributor: Sven-Hendrik Haase <sh@lutzhaase.com>
 pkgname=cuda65
 _pkgname=cuda
 pkgver=6.5.19
-pkgrel=2
+pkgrel=1
 pkgdesc="NVIDIA's GPU programming toolkit (for compute capability < 2.0)"
 arch=('x86_64')
 url="http://www.nvidia.com/object/cuda_home.html"
 license=('custom:NVIDIA')
 depends=('gcc-libs' 'opencl-nvidia-340xx')
+makedepends=('patchelf')
 replaces=('cuda-toolkit' 'cuda-sdk')
 conflicts=('cuda-toolkit' 'cuda-sdk' 'cuda')
 provides=('cuda-toolkit' 'cuda-sdk' 'cuda')
@@ -17,24 +19,24 @@ options=(!strip staticlibs)
 install=cuda.install
 source=(http://developer.download.nvidia.com/compute/cuda/6_5/rel/installers/cuda_${pkgver}_linux_64.run
         cuda.sh
-        cuda.conf)
+        cuda.conf
+        cuda65-samples-6.5.19-sm11-13-20260923.tar.xz)
 md5sums=('74014042f92d3eade43af0da5f65935e'
          '7e5990e03eea90075f5a500e91a0c3d3'
-         'ffe1e6fb7f97b23da28fd94a5fd7356d')
+         'ffe1e6fb7f97b23da28fd94a5fd7356d'
+         'SKIP')
 
 prepare() {
-#  rm -rf "${srcdir}/tmp"
-  mkdir ${srcdir}/tmp
-  sh cuda_${pkgver}_linux_64.run -extract=${srcdir} -tmpdir ${srcdir}/tmp
+  mkdir -p "${srcdir}/tmp"
+  sh cuda_${pkgver}_linux_64.run -extract="${srcdir}" -tmpdir "${srcdir}/tmp"
 
   ./cuda-linux64-rel-*.run --noexec --keep
   ./cuda-samples-linux-*.run --noexec --keep
 
   # path hacks
-
-  # 1rd sed line: sets right path to install man files
-  # 2rd sed line: hack to lie installer, now detect launch script by root
-  # 3rd sed line: sets right path in .desktop files and other .desktop stuff (warnings by desktop-file-validate)
+  # 1st sed line: sets right path to install man files
+  # 2nd sed line: hack to lie installer, now detect launch script by root
+  # 3rd sed line: sets right path in .desktop files
   sed -e "s|/usr/share|${srcdir}/../pkg/${pkgname}/usr/share|g" \
       -e 's|can_add_for_all_users;|1;|g' \
       -e 's|=\\"$prefix\\\"|=/opt/cuda|g' -e 's|Terminal=No|Terminal=false|g' -e 's|ParallelComputing|ParallelComputing;|g' \
@@ -53,9 +55,9 @@ package() {
   PERL5LIB=. perl install-sdk-linux.pl -cudaprefix="${pkgdir}/opt/cuda" -prefix="${pkgdir}/opt/cuda/samples" -noprompt
 
   # allow gcc 4.9 to work
-  sed -i "/unsupported GNU/d" $pkgdir/opt/cuda/include/host_config.h
+  sed -i "/unsupported GNU/d" "${pkgdir}/opt/cuda/include/host_config.h"
 
-  install -Dm755 "${srcdir}/cuda.sh" "${pkgdir}/etc/profile.d/cuda.sh"
+  install -Dm755 "${srcdir}/cuda.sh"   "${pkgdir}/etc/profile.d/cuda.sh"
   install -Dm644 "${srcdir}/cuda.conf" "${pkgdir}/etc/ld.so.conf.d/cuda.conf"
 
   mkdir -p "${pkgdir}/usr/share/licenses/${_pkgname}"
@@ -64,6 +66,51 @@ package() {
   # remove redundant man and samples
   rm -fr "${pkgdir}/opt/cuda/doc/man"
   rm -fr "${pkgdir}/opt/cuda/cuda-samples"
+
+  # ===== 1. Strip source / build / IDE files from /opt/cuda/samples =====
+  # Keep: readme.txt, doc/, data/, EULA.txt, common/data/, common/lib/
+  find "${pkgdir}/opt/cuda/samples" -type f \( \
+        -name '*.cu'      -o -name '*.cuh'              -o \
+        -name '*.cpp'     -o -name '*.c'                -o \
+        -name '*.h'       -o -name '*.hpp'              -o \
+        -name 'Makefile'  -o -name '*.mk'               -o \
+        -name 'NsightEclipse.xml' -o -name 'settings.nvlink' -o \
+        -name '*.py' \
+      \) -delete
+
+  # Remove the samples uninstaller: it no longer reflects package content
+  rm -f "${pkgdir}/opt/cuda/samples/uninstall_cuda_samples_6.5.pl"
+  rm -f "${pkgdir}/opt/cuda/samples/.uninstall_manifest_do_not_delete.txt"
+
+  # Drop directories that became empty (e.g. common/inc, common/src)
+  find "${pkgdir}/opt/cuda/samples" -type d -empty -delete
+
+  # ===== 2. Place prebuilt binaries into their sample directories =====
+  local _pre="${srcdir}/cuda65-prebuilt-staging"
+  local _bin _name _target
+  while IFS= read -r -d '' _bin; do
+    _name="$(basename "${_bin}")"
+    _target="$(find "${pkgdir}/opt/cuda/samples" -mindepth 1 -type d -name "${_name}" -print -quit)"
+    if [ -n "${_target}" ]; then
+      install -Dm755 "${_bin}" "${_target}/${_name}"
+    fi
+  done < <(find "${_pre}/bin" -type f -executable ! -name '*.so*' -print0)
+
+  # Shared library shipped alongside the cuHook sample
+  install -Dm755 "${_pre}/bin/libcuhook.so.1" \
+        "${pkgdir}/opt/cuda/samples/7_CUDALibraries/cuHook/libcuhook.so.1"
+
+  # ===== 3. patchelf: force libcuda.so.1 into NEEDED =====
+  # Workaround for NVIDIA 340.108 + glibc >= 2.35, where runtime dlopen()
+  # of libcuda.so fails with "cannot enable executable stack".
+  # Adding libcuda.so.1 to the NEEDED list forces the dynamic loader to
+  # map it during process startup (as deviceQueryDrv already does), which
+  # succeeds because the READ_IMPLIES_EXEC personality is set at exec time.
+  while IFS= read -r -d '' _bin; do
+    if ! objdump -p "${_bin}" 2>/dev/null | grep -q 'NEEDED.*libcuda\.so\.1'; then
+      patchelf --add-needed libcuda.so.1 "${_bin}" 2>/dev/null || true
+    fi
+  done < <(find "${pkgdir}/opt/cuda/samples" -type f -executable -print0)
 
   # remove tmpdir
   rm -fr "${srcdir}/tmp"
