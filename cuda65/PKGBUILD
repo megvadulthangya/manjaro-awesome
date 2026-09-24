@@ -5,7 +5,7 @@ pkgname=cuda65
 _pkgname=cuda
 pkgver=6.5.19
 pkgrel=1
-pkgdesc="NVIDIA's GPU programming toolkit (for compute capability < 2.0)"
+pkgdesc="NVIDIA's GPU programming toolkit version 6.5 (Tesla/Fermi/Kepler/Maxwell support)"
 arch=('x86_64')
 url="http://www.nvidia.com/object/cuda_home.html"
 license=('custom:NVIDIA')
@@ -24,7 +24,7 @@ source=(http://developer.download.nvidia.com/compute/cuda/6_5/rel/installers/cud
 md5sums=('74014042f92d3eade43af0da5f65935e'
          '7e5990e03eea90075f5a500e91a0c3d3'
          'ffe1e6fb7f97b23da28fd94a5fd7356d'
-         'SKIP')
+         'e2aac0a929a2c914263c5cc7608f2ec7')
 
 prepare() {
   mkdir -p "${srcdir}/tmp"

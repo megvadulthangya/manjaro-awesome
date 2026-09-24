@@ -1,14 +1,16 @@
-# Maintainer: Francisco Magalhães <franmagneto@gmail.com>
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+# Contributor: Francisco Magalhães <franmagneto@gmail.com>
 # Contributor: Sven-Hendrik Haase <sh@lutzhaase.com>
 pkgname=cuda60
 _pkgname=cuda
 pkgver=6.0.37
 pkgrel=1
-pkgdesc="NVIDIA's GPU programming toolkit (for compute capability < 2.0)"
+pkgdesc="NVIDIA's GPU programming toolkit version 6.0 (Tesla/Fermi/Kepler support)"
 arch=('x86_64')
 url="http://www.nvidia.com/object/cuda_home.html"
 license=('custom:NVIDIA')
 depends=('gcc-libs' 'opencl-nvidia-340xx')
+makedepends=('patchelf')
 replaces=('cuda-toolkit' 'cuda-sdk')
 conflicts=('cuda-toolkit' 'cuda-sdk' 'cuda')
 provides=('cuda-toolkit' 'cuda-sdk' 'cuda')
@@ -17,15 +19,16 @@ options=(!strip staticlibs)
 install=cuda.install
 source=(http://developer.download.nvidia.com/compute/cuda/6_0/rel/installers/cuda_${pkgver}_linux_64.run
         cuda.sh
-        cuda.conf)
+        cuda.conf
+        cuda60-samples-6.0.37-20260923.tar.xz)
 md5sums=('22f50793b6704fe987983302fa7d1707'
          '7e5990e03eea90075f5a500e91a0c3d3'
-         'ffe1e6fb7f97b23da28fd94a5fd7356d')
+         'ffe1e6fb7f97b23da28fd94a5fd7356d'
+         '735356fd647701dd219754fc74d2d110')
 
 prepare() {
-  rm -rf "${srcdir}/tmp"
-  mkdir ${srcdir}/tmp
-  sh cuda_${pkgver}_linux_64.run -extract=${srcdir} -tmpdir ${srcdir}/tmp
+  mkdir -p "${srcdir}/tmp"
+  sh cuda_${pkgver}_linux_64.run -extract="${srcdir}" -tmpdir "${srcdir}/tmp"
 
   ./cuda-linux64-rel-*.run --noexec --keep
   ./cuda-samples-linux-*.run --noexec --keep
@@ -47,9 +50,9 @@ package() {
   PERL5LIB=. perl install-sdk-linux.pl -cudaprefix="${pkgdir}/opt/cuda" -prefix="${pkgdir}/opt/cuda/samples" -noprompt
 
   # allow gcc 4.9 to work
-  sed -i "/unsupported GNU/d" $pkgdir/opt/cuda/include/host_config.h
+  sed -i "/unsupported GNU/d" "${pkgdir}/opt/cuda/include/host_config.h"
 
-  install -Dm755 "${srcdir}/cuda.sh" "${pkgdir}/etc/profile.d/cuda.sh"
+  install -Dm755 "${srcdir}/cuda.sh"   "${pkgdir}/etc/profile.d/cuda.sh"
   install -Dm644 "${srcdir}/cuda.conf" "${pkgdir}/etc/ld.so.conf.d/cuda.conf"
 
   mkdir -p "${pkgdir}/usr/share/licenses/${_pkgname}"
@@ -58,6 +61,61 @@ package() {
   # remove redundant man and samples
   rm -fr "${pkgdir}/opt/cuda/doc/man"
   rm -fr "${pkgdir}/opt/cuda/cuda-samples"
+
+  # ===== 1. Strip source / build / IDE files from /opt/cuda/samples =====
+  # Keep: readme.txt, doc/, data/, License.txt, doc/CUDA_Toolkit_EULA.txt,
+  #       doc/License.*, common/data/, common/lib/
+  find "${pkgdir}/opt/cuda/samples" -type f \( \
+        -name '*.cu'      -o -name '*.cuh'                  -o \
+        -name '*.cpp'     -o -name '*.c'                    -o \
+        -name '*.h'       -o -name '*.hpp'                  -o \
+        -name 'Makefile'  -o -name '*.mk'                   -o \
+        -name 'CMakeLists.txt'                              -o \
+        -name 'NsightEclipse.xml' -o -name 'settings.nvlink' -o \
+        -name '*.py'      -o -name 'build.sh' -o -name 'build.bat' \
+      \) -delete
+
+  # Remove the samples uninstaller: it no longer reflects package content
+  rm -f "${pkgdir}/opt/cuda/samples/uninstall_cuda_samples_6.0.pl"
+  rm -f "${pkgdir}/opt/cuda/samples/uninstall_cuda_samples_6.5.pl"
+  rm -f "${pkgdir}/opt/cuda/samples/.uninstall_manifest_do_not_delete.txt"
+
+  # ===== 2. Remove 32-bit CPU-architecture build-time static libraries =====
+  # i686 (32-bit x86) and armv7l (32-bit ARM) are CPU architectures, NOT
+  # GPU Compute Capabilities. The package is x86_64-only. These .a archives
+  # are link-time only, used when building the samples on those CPU archs.
+  # Keep: x86_64 (.a files under */lib/linux/x86_64/).
+  while IFS= read -r -d '' _d; do
+    rm -rf "${_d}"
+  done < <(find "${pkgdir}/opt/cuda/samples" -type d \
+                \( -name i686 -o -name armv7l \) \
+                -path '*/lib/linux/*' -print0)
+
+  # Drop directories that became empty
+  find "${pkgdir}/opt/cuda/samples" -type d -empty -delete
+
+  # ===== 3. Place prebuilt binaries into their sample directories =====
+  local _pre="${srcdir}/cuda60-prebuilt-staging"
+  local _bin _name _target
+  while IFS= read -r -d '' _bin; do
+    _name="$(basename "${_bin}")"
+    _target="$(find "${pkgdir}/opt/cuda/samples" -mindepth 1 -type d -name "${_name}" -print -quit)"
+    if [ -n "${_target}" ]; then
+      install -Dm755 "${_bin}" "${_target}/${_name}"
+    fi
+  done < <(find "${_pre}/bin" -type f -executable ! -name '*.so*' -print0)
+
+  # NOTE: CUDA 6.0 prebuilt does not ship libcuhook.so.1 (that is 6.5-only).
+
+  # ===== 4. patchelf: force libcuda.so.1 into NEEDED =====
+  # Workaround for NVIDIA 340.108 + glibc >= 2.35, where runtime dlopen()
+  # of libcuda.so fails with "cannot enable executable stack".
+  # This applies to the sample binaries regardless of GPU CC.
+  while IFS= read -r -d '' _bin; do
+    if ! objdump -p "${_bin}" 2>/dev/null | grep -q 'NEEDED.*libcuda\.so\.1'; then
+      patchelf --add-needed libcuda.so.1 "${_bin}" 2>/dev/null || true
+    fi
+  done < <(find "${pkgdir}/opt/cuda/samples" -type f -executable -print0)
 
   # remove tmpdir
   rm -fr "${srcdir}/tmp"
