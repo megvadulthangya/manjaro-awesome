@@ -1,0 +1,52 @@
+--- a/nv.c	2026-09-25 17:12:38.063873328 +0200
++++ b/nv.c	2026-09-25 16:04:31.508087356 +0200
+@@ -1465,7 +1465,12 @@
+ #endif
+ #if !defined(NV_VMWARE) && \
+   (defined(NVCPU_X86) || defined(NVCPU_X86_64))
+-        if (nv->primary_vga && (screen_info.orig_video_isVGA != 0x01))
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++        const struct screen_info *si = &sysfb_primary_display.screen;
++#else
++        const struct screen_info *si = &screen_info;
++#endif
++        if (nv->primary_vga && (si->orig_video_isVGA != 0x01))
+         {
+             if (!nv_fbdev_failure_detected)
+             {
+--- a/nv-linux.h	2026-09-25 17:12:38.133858221 +0200
++++ b/nv-linux.h	2026-09-25 16:04:31.508930762 +0200
+@@ -173,6 +173,9 @@
+ #endif
+ #if defined(NV_LINUX_SCREEN_INFO_H_PRESENT)
+ #include <linux/screen_info.h>      /* screen_info                      */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++#include <linux/sysfb.h>            /* sysfb_primary_display            */
++#endif
+ #else
+ #include <linux/tty.h>              /* screen_info                      */
+ #endif
+--- a/os-interface.c	2026-09-25 17:12:38.082002298 +0200
++++ b/os-interface.c	2026-09-25 16:04:31.509491379 +0200
+@@ -1148,12 +1148,17 @@
+ #if !defined(NV_VMWARE) && (defined(NVCPU_X86) || defined(NVCPU_X86_64))
+     if (NV_EFI_ENABLED())
+     {
+-        *pPhysicalAddress = screen_info.lfb_base;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++        const struct screen_info *si = &sysfb_primary_display.screen;
++#else
++        const struct screen_info *si = &screen_info;
++#endif
++        *pPhysicalAddress = si->lfb_base;
+ #if defined(VIDEO_CAPABILITY_64BIT_BASE)
+-        *pPhysicalAddress |= (NvU64)screen_info.ext_lfb_base << 32;
++        *pPhysicalAddress |= (NvU64)si->ext_lfb_base << 32;
+ #endif
+-        *pHeight = screen_info.lfb_height;
+-        *pPitch = screen_info.lfb_linelength;
++        *pHeight = si->lfb_height;
++        *pPitch = si->lfb_linelength;
+         return RM_OK;
+     }
+ #endif

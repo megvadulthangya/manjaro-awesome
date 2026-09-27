@@ -79,3 +79,7 @@ conftest-include-guard.patch
 ignore_xen_on_arm.patch
 arm-outer-sync.patch
 armhf-on-arm64-kernel.patch
+kernel-6.18-workqueue-flush.patch
+kernel-7.0-screen_info.patch
+vma-lock-7.0-plus.patch
+kernel-7.3-acpi.patch

@@ -1,0 +1,16 @@
+--- a/nv-linux.h	2026-09-25 16:04:31.508930762 +0200
++++ b/nv-linux.h	2026-09-25 18:25:54.419208033 +0200
+@@ -1705,8 +1705,13 @@
+ } nv_work_t;
+ 
+ #define NV_TASKQUEUE_SCHEDULE(work) schedule_work(work)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++#define NV_TASKQUEUE_FLUSH()                           \
++    flush_workqueue(system_wq);
++#else
+ #define NV_TASKQUEUE_FLUSH()                           \
+     flush_scheduled_work();
++#endif
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_TASKQUEUE_INIT(tq,handler,data)             \
+     {                                                  \

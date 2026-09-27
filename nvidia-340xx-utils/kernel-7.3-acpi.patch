@@ -1,0 +1,59 @@
+--- a/nv-acpi.c	2026-09-25 17:12:38.029139261 +0200
++++ b/nv-acpi.c	2026-09-25 15:04:53.444972560 +0200
+@@ -56,13 +56,16 @@
+ };
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+ static struct acpi_driver *nv_acpi_driver;
++#endif
+ static acpi_handle nvif_handle = NULL;
+ static acpi_handle nvif_parent_gpu_handle  = NULL;
+ static acpi_handle wmmx_handle = NULL;
+ static acpi_handle mxmi_handle = NULL;
+ static acpi_handle mxms_handle = NULL;
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+ static const struct acpi_driver nv_acpi_driver_template = {
+     .name = "NVIDIA ACPI Video Driver",
+     .class = "video",
+@@ -81,6 +84,7 @@
+ #endif
+     },
+ };
++#endif
+ 
+ static int nv_acpi_get_device_handle(nv_state_t *nv, acpi_handle *dev_handle)
+ {
+@@ -97,6 +101,7 @@
+ #endif
+ }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+ int nv_acpi_init(void)
+ {
+     /*
+@@ -176,6 +181,23 @@
+     return 0;
+ }
+ 
++#else
++// Rel. commit "ACPI: bus: Eliminate struct acpi_driver" (Rafael J. Wysocki, 1 Jul 2026)
++// The old API (struct acpi_driver, acpi_bus_register_driver, etc.) is removed
++// and the replacement (struct platform_driver, platform_driver_register) is
++// GPL-only, so remove this; It only impacts laptop hotkey handling rather than
++// any critical function of the driver.
++int nv_acpi_init(void)
++{
++    return 0;
++}
++
++int nv_acpi_uninit(void)
++{
++    return 0;
++}
++#endif
++
+ static int nv_acpi_add(struct acpi_device *device)
+ {
+     /*
