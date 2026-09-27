@@ -133,19 +133,38 @@ class VersionManager:
         """
         artifact_versions = {}
         
-        for pkg_name in pkg_names:
-            for built_file in built_files:
-                # Skip signature files
-                if built_file.endswith('.sig'):
-                    continue
-                
-                # Parse version from filename
-                match = re.match(rf'^{re.escape(pkg_name)}-(.+?)-(?:x86_64|any|i686|aarch64|armv7h|armv6h)\.pkg\.tar\.(?:zst|xz)$', built_file)
+        # Process pkg_names longest-first so that when one pkgname is a prefix
+        # of another (e.g. 'etlegacy' and 'etlegacy-mod'), the more specific
+        # name claims its own file before the shorter one gets a chance.
+        sorted_pkg_names = sorted(pkg_names, key=len, reverse=True)
+        
+        for built_file in built_files:
+            # Skip signature files
+            if built_file.endswith('.sig'):
+                continue
+            
+            for pkg_name in sorted_pkg_names:
+                # Arch package filename format:
+                #   {pkgname}-{pkgver}-{pkgrel}-{arch}.pkg.tar.{zst,xz}
+                # pkgver must not contain hyphens, so [^-\s]+ is the correct
+                # match for the pkgver segment. pkgrel is [0-9]+ or [0-9]+.[0-9]+.
+                # This stricter pattern prevents a shorter pkgname from
+                # swallowing a longer pkgname's file: e.g. 'etlegacy' will NOT
+                # match 'etlegacy-mod-2.86.0-1-x86_64.pkg.tar.zst' because
+                # 'mod' is not a valid version segment (it would require the
+                # pkgver group to be followed by -{pkgrel}, but '2.86.0-1'
+                # contains a hyphen that pkgver cannot contain, so backtracking
+                # fails and the regex returns no match).
+                match = re.match(
+                    rf'^{re.escape(pkg_name)}-([^-\s]+)-([0-9]+(?:\.[0-9]+)?)-(?:x86_64|any|i686|aarch64|armv7h|armv6h)\.pkg\.tar\.(?:zst|xz)$',
+                    built_file
+                )
                 if match:
-                    version = match.group(1)
-                    artifact_versions[pkg_name] = version
-                    logger.info(f"ARTIFACT_FROM_BUILT_FILES pkg={pkg_name} ver={version}")
-                    break  # Found a version for this package
+                    version = f"{match.group(1)}-{match.group(2)}"
+                    if pkg_name not in artifact_versions:
+                        artifact_versions[pkg_name] = version
+                        logger.info(f"ARTIFACT_FROM_BUILT_FILES pkg={pkg_name} ver={version}")
+                    break  # This built_file is claimed by pkg_name
         
         return artifact_versions
     
