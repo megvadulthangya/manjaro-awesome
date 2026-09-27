@@ -15,7 +15,7 @@ pkgname=('etlegacy' 'etlegacy-mod')
 # Dummy érték, a pkgver() úgyis felülírja. A builder hiába írja bele a
 # legutóbb buildelt verziót, mi nem használjuk sehol, mert minden a _ver
 # változóra épül.
-pkgver=0
+pkgver=2.86.0
 pkgrel=1
 
 # Ezeket a builder nem ismeri, ezért nem írja felül. A legfrissebb stabil
