@@ -2,14 +2,19 @@
 # Full 64 bit ET:Legacy clients can only connect to ET:Legacy servers running mods providing a 64 bit version.
 # If you want to connect to existing 32 bit only mods, install the cross-compiled "etlegacy32" package instead.
 # The engine is dynamically compiled, while the official precompiled mod libraries are provided.
+#
+# NOTE: A `pkgbase` sor szándékosan ki van kommentelve. A Hokibot ugyanis a
+# `pkgbase=etlegacy` alapján próbálja prefix-levágással párosítani az
+# artifactokat, és mivel az `etlegacy` prefixe az `etlegacy-mod`-nak,
+# összekeveri őket (mod-2.86.0-1 lesz az etlegacy verziója). Ha a pkgbase
+# nincs deklarálva, a builder minden pkgname-t külön kezel, és nincs gond.
 
-_pkgbase=etlegacy
 #pkgbase=etlegacy
 pkgname=('etlegacy' 'etlegacy-mod')
 
-# Dummy érték. A builder hiába írja bele a legutóbb buildelt verziót, mi
-# nem használjuk sehol, mert minden a _ver változóra épül. A pkgver()
-# a végén úgyis felülírja.
+# Dummy érték, a pkgver() úgyis felülírja. A builder hiába írja bele a
+# legutóbb buildelt verziót, mi nem használjuk sehol, mert minden a _ver
+# változóra épül.
 pkgver=0
 pkgrel=1
 
@@ -25,6 +30,10 @@ _bver=$(curl -sL --max-time 15 https://www.etlegacy.com/download 2>/dev/null \
         | grep -oP 'file/\K[0-9]+' \
         | sort -n | tail -1)
 : "${_bver:=715}"
+
+# Belső használatú azonosító az URL-ekhez és az útvonalakhoz. A builder
+# ezt nem bántja, mert underscore prefixe van.
+_pkgbase=etlegacy
 
 arch=('x86_64' 'aarch64')
 url="http://www.etlegacy.com/"
