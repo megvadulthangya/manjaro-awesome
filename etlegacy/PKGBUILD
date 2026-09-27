@@ -6,36 +6,48 @@
 _pkgbase=etlegacy
 pkgbase=etlegacy
 pkgname=('etlegacy' 'etlegacy-mod')
-pkgver=2.84.0
+
+# Dummy érték. A builder hiába írja bele a legutóbb buildelt verziót, mi
+# nem használjuk sehol, mert minden a _ver változóra épül. A pkgver()
+# a végén úgyis felülírja.
+pkgver=0
 pkgrel=1
+
+# Ezeket a builder nem ismeri, ezért nem írja felül. A legfrissebb stabil
+# git tag lekérése a GitHub API-ról, fallback a 2.84.0-ra.
+_ver=$(curl -s --max-time 15 "https://api.github.com/repos/etlegacy/etlegacy/tags" 2>/dev/null \
+       | grep -oP '"name":\s*"v?\K[0-9]+\.[0-9]+\.[0-9]+' \
+       | sort -V | tail -1)
+: "${_ver:=2.84.0}"
+
+# A legfrissebb stabil bináris azonosító a letöltési oldalról, fallback 715.
+_bver=$(curl -sL --max-time 15 https://www.etlegacy.com/download 2>/dev/null \
+        | grep -oP 'file/\K[0-9]+' \
+        | sort -n | tail -1)
+: "${_bver:=715}"
+
 arch=('x86_64' 'aarch64')
 url="http://www.etlegacy.com/"
 license=('GPL3' 'custom')
 makedepends=('cmake' 'zip' 'alsa-lib' 'curl' 'freetype2' 'gcc-libs' 'glew'
              'libjpeg-turbo' 'libvorbis' 'libtheora' 'minizip' 'openal>=1.14'
-             'sdl2' 'cjson' 'git')
+             'sdl2' 'cjson')
 
-# Dinamikusan felderítjük a legfrissebb stabil bináris azonosítót.
-# Ez a /download oldal, NEM a workflow-files (unstable). A legnagyobb
-# file/<N> azonosítót vesszük. Ha nincs net, fallback 715 (2.84.0-hoz).
-_binaryversion=$(curl -sL --max-time 15 https://www.etlegacy.com/download 2>/dev/null \
-                 | grep -oP 'file/\K[0-9]+' \
-                 | sort -n | tail -1)
-: "${_binaryversion:=715}"
+source=("${_pkgbase}-${_ver}.tar.gz::https://github.com/etlegacy/${_pkgbase}/archive/v${_ver}.tar.gz"
+        "${_pkgbase}-binary-${_bver}.tar.gz::https://www.etlegacy.com/download/file/${_bver}")
 
-# Fő kód VCS-ként, hogy a pkgver() utána szabadon belőhesse a legfrissebb taget.
-# A bináris a fenti dinamikus számmal megy.
-source=("${_pkgbase}::git+https://github.com/etlegacy/${_pkgbase}.git"
-        "${_pkgbase}-binary-${_binaryversion}.tar.gz::https://www.etlegacy.com/download/file/${_binaryversion}")
+# Dinamikus verzióknál nincs értelme statikus hash-nek. A HTTPS + megbízható
+# forrás az elsődleges védelem.
 sha256sums=('SKIP' 'SKIP')
 
+# A tényleges csomagverziót itt adjuk vissza. Ez felülírja a fájl elején
+# lévő dummy pkgver=0-t, és a builder által beírt értéket is.
 pkgver() {
-    cd "$_pkgbase"
-    git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "$pkgver"
+    echo "$_ver"
 }
 
 build() {
-    cd "$_pkgbase"
+    cd "$_pkgbase-$_ver"
 
     export CFLAGS="-march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions \
         -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security \
@@ -75,7 +87,7 @@ package_etlegacy() {
             'etc/xdg/etlegacy/etmain/objectivecycle.cfg')
     install=etlegacy.install
 
-    cd "$_pkgbase"
+    cd "$_pkgbase-$_ver"
 
     # engine
     make DESTDIR="$pkgdir/" install
@@ -117,18 +129,31 @@ package_etlegacy-mod() {
     optdepends=('etlegacy-omnibot: artificial intelligence (AI) controlled opponent'
                 'geoip-database: GeoLite country geolocation database')
 
-    # A bináris tarball belső könyvtárnevét dinamikusan keressük, mert nem
-    # garantált hogy a git tag és a bináris verziószám pontosan egyezik.
+    # Nem a tarball belső könyvtárnevére keresünk (ami verzióról verzióra
+    # változhat), hanem közvetlenül a legacy_v*.pk3 fájlra. Így teljesen
+    # függetlenek vagyunk a bináris csomag belső szerkezetétől.
     local bindir
-    bindir=$(find "$srcdir" -maxdepth 1 -type d -name 'etlegacy-v*' | head -n1)
+    bindir=$(find "$srcdir" -maxdepth 4 -type f -name 'legacy_v*.pk3' -printf '%h\n' 2>/dev/null | head -n1)
+
     if [[ -z $bindir ]]; then
-        error "Binary tarball directory not found in \$srcdir"
+        error "Nincs legacy_v*.pk3 a \$srcdir-ben"
+        error "A \$srcdir tartalma:"
+        find "$srcdir" -maxdepth 3 -mindepth 1 | sed 's/^/  /' >&2
         return 1
     fi
 
+    msg "Mod fájlok itt: $bindir"
+
     mkdir -p "$pkgdir/usr/lib/$_pkgbase/legacy"
-    install -m 644 "$bindir"/legacy/legacy_v*.pk3 "$pkgdir/usr/lib/$_pkgbase/legacy/"
-    install -m 644 "$bindir"/legacy/qagame.mp.x86_64.so "$pkgdir/usr/lib/$_pkgbase/legacy/"
+    install -m 644 "$bindir"/legacy_v*.pk3 "$pkgdir/usr/lib/$_pkgbase/legacy/"
+
+    local qagame
+    qagame=$(find "$srcdir" -maxdepth 4 -type f -name 'qagame.mp.x86_64.so' 2>/dev/null | head -n1)
+    if [[ -z $qagame ]]; then
+        error "Nincs qagame.mp.x86_64.so a \$srcdir-ben"
+        return 1
+    fi
+    install -m 644 "$qagame" "$pkgdir/usr/lib/$_pkgbase/legacy/"
 
     # geoip
     ln -s /usr/share/GeoIP/GeoIP.dat "$pkgdir/usr/lib/$_pkgbase/legacy"
