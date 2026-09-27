@@ -4,7 +4,7 @@
 # The engine is dynamically compiled, while the official precompiled mod libraries are provided.
 
 _pkgbase=etlegacy
-pkgbase=etlegacy
+#pkgbase=etlegacy
 pkgname=('etlegacy' 'etlegacy-mod')
 
 # Dummy érték. A builder hiába írja bele a legutóbb buildelt verziót, mi
