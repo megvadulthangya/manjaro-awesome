@@ -99,7 +99,6 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "enemy-territory",
-    "zen-browser-bin",
     "gpu-t-git",
     "tilix-git",
     "libinput-gestures",
