@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
+    "etlegacy",
     "cuda65",
     "cuda60",
     "gcc48",
