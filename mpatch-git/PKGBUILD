@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=mpatch-git
-pkgver=r493.9fe8dd2
+pkgver=r257.18c4ea7
 pkgrel=1
 pkgdesc='Applies diffs based on context, not line numbers. Useful for AI-generated code.'
 arch=('x86_64' 'aarch64' 'armv7h')
