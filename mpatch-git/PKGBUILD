@@ -1,0 +1,31 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=mpatch-git
+pkgver=r493.9fe8dd2
+pkgrel=1
+pkgdesc='Applies diffs based on context, not line numbers. Useful for AI-generated code.'
+arch=('x86_64' 'aarch64' 'armv7h')
+url='https://github.com/romelium/mpatch'
+license=('MIT')
+provides=('mpatch')
+conflicts=('mpatch' 'mpatch-bin')
+makedepends=('cargo' 'git')
+source=('git+https://github.com/romelium/mpatch.git')
+sha256sums=('SKIP')
+
+pkgver() {
+    cd mpatch
+    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+    cd mpatch
+    cargo build --release --locked
+}
+
+package() {
+    cd mpatch
+    install -Dm755 target/release/mpatch "$pkgdir/usr/bin/mpatch"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
