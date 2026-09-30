@@ -98,6 +98,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "mpatch-bin",
     "enemy-territory",
     "gpu-t-git",
     "tilix-git",
