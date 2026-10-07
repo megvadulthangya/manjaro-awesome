@@ -1,0 +1,31 @@
+Author: Luca Boccassi <luca.boccassi@gmail.com>
+Description: let Kbuild set the compiler version
+ If CC=cc is passed to make, the default system compiler will be used. But we
+ want to build the kernel modules with the same compiler version used to build
+ the kernel itself. Remove the CC parameter from upstream's Makefile's make
+ invocation.
+
+--- a/Makefile
++++ b/Makefile
+@@ -84,8 +84,8 @@ else
+ 
+   .PHONY: modules module clean clean_conftest modules_install
+   modules clean modules_install:
+-	@$(MAKE) "CC=$(CC)" $(KBUILD_PARAMS) $@
+-	@if [ "$@" = "modules" ]; then \
++	$(MAKE) $(KBUILD_PARAMS) $@
++	@set -x; if [ "$@" = "modules" ]; then \
+ 	  for module in $(NV_KERNEL_MODULES); do \
+ 	    if [ -x split-object-file.sh ]; then \
+ 	      ./split-object-file.sh $$module.ko; \
+--- a/Kbuild
++++ b/Kbuild
+@@ -107,7 +107,7 @@ NV_CONFTEST_SCRIPT := $(src)/conftest.sh
+ NV_CONFTEST_HEADER := $(obj)/conftest/headers.h
+ 
+ NV_CONFTEST_CMD := /bin/sh $(NV_CONFTEST_SCRIPT) \
+- "$(CC)" "$(HOST_CC)" $(ARCH) $(NV_KERNEL_SOURCES) $(NV_KERNEL_OUTPUT)
++ "$(strip $(CC))" "$(strip $(HOST_CC))" $(ARCH) $(NV_KERNEL_SOURCES) $(NV_KERNEL_OUTPUT)
+ 
+ NV_CONFTEST_CFLAGS := $(shell $(NV_CONFTEST_CMD) build_cflags)
+ 

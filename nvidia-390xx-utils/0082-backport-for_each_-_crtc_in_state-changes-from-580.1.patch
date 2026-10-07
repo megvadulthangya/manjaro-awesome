@@ -1,0 +1,79 @@
+From 641bc8957cdb0c148ff6dab1e57231edf43c5fbe Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 28 Jan 2026 15:48:26 +0100
+Subject: [PATCH 3/4] backport for_each_*_crtc_in_state changes from 580.119.02
+
+---
+ nvidia-drm/nvidia-drm-crtc.c    |  2 +-
+ nvidia-drm/nvidia-drm-modeset.c | 16 ++++------------
+ 2 files changed, 5 insertions(+), 13 deletions(-)
+
+diff --git a/nvidia-drm/nvidia-drm-crtc.c b/nvidia-drm/nvidia-drm-crtc.c
+index 6d5478e6..6915d8f5 100644
+--- a/nvidia-drm/nvidia-drm-crtc.c
++++ b/nvidia-drm/nvidia-drm-crtc.c
+@@ -151,7 +151,7 @@ static int nv_drm_plane_atomic_check(struct drm_plane *plane,
+         goto done;
+     }
+ 
+-    nv_drm_for_each_crtc_in_state(plane_state->state, crtc, crtc_state, i) {
++    for_each_new_crtc_in_state(plane_state->state, crtc, crtc_state, i) {
+         struct nv_drm_crtc_state *nv_crtc_state = to_nv_crtc_state(crtc_state);
+         struct NvKmsKapiHeadRequestedConfig *head_req_config =
+             &nv_crtc_state->req_config;
+diff --git a/nvidia-drm/nvidia-drm-modeset.c b/nvidia-drm/nvidia-drm-modeset.c
+index 3a57e8e9..91c175ec 100644
+--- a/nvidia-drm/nvidia-drm-modeset.c
++++ b/nvidia-drm/nvidia-drm-modeset.c
+@@ -112,20 +112,13 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
+     struct NvKmsKapiRequestedModeSetConfig *requested_config =
+         &(to_nv_atomic_state(state)->config);
+     struct drm_crtc *crtc;
+-    struct drm_crtc_state *crtc_state;
++    struct drm_crtc_state *old_crtc_state, *new_crtc_state;
+     int i;
+ 
+     memset(requested_config, 0, sizeof(*requested_config));
+ 
+     /* Loop over affected crtcs and construct NvKmsKapiRequestedModeSetConfig */
+-    nv_drm_for_each_crtc_in_state(state, crtc, crtc_state, i) {
+-        /*
+-         * When commiting a state, the new state is already stored in
+-         * crtc->state. When checking a proposed state, the proposed state is
+-         * stored in crtc_state.
+-         */
+-        struct drm_crtc_state *new_crtc_state =
+-                               commit ? crtc->state : crtc_state;
++    for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
+         struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+         requested_config->headRequestedConfig[nv_crtc->head] =
+@@ -134,7 +127,6 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
+         requested_config->headsMask |= 1 << nv_crtc->head;
+ 
+         if (commit) {
+-            struct drm_crtc_state *old_crtc_state = crtc_state;
+             struct nv_drm_crtc_state *nv_new_crtc_state =
+                 to_nv_crtc_state(new_crtc_state);
+ 
+@@ -230,7 +222,7 @@ int nv_drm_atomic_commit(struct drm_device *dev,
+      * updates to complete.
+      */
+     if (nonblock) {
+-        nv_drm_for_each_crtc_in_state(state, crtc, crtc_state, i) {
++        for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
+             struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+             /*
+@@ -303,7 +295,7 @@ int nv_drm_atomic_commit(struct drm_device *dev,
+     }
+ 
+     if (ret == 0 && !nonblock) {
+-        nv_drm_for_each_crtc_in_state(state, crtc, crtc_state, i) {
++        for_each_old_crtc_in_state(state, crtc, crtc_state, i) {
+             struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+             /*
+-- 
+2.39.5
+

@@ -1,0 +1,109 @@
+From 93772a03c3d44693aa896cecbcfa07f9eab21906 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Fri, 16 Jun 2023 16:33:58 +0200
+Subject: [PATCH] backport drm_driver_has_dumb_destroy changes from 525.116.03
+
+---
+ conftest.sh                              | 24 ++++++++++++++++++++++++
+ nvidia-drm/nvidia-drm-drv.c              |  2 ++
+ nvidia-drm/nvidia-drm-gem-nvkms-memory.c |  2 ++
+ nvidia-drm/nvidia-drm-gem-nvkms-memory.h |  2 ++
+ nvidia-drm/nvidia-drm.Kbuild             |  1 +
+ 5 files changed, 31 insertions(+)
+
+diff --git a/conftest.sh b/conftest.sh
+index 054937a..74523fe 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -4696,6 +4696,30 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" "" "types"
+         ;;
+ 
++        drm_driver_has_dumb_destroy)
++            #
++            # Determine if the 'drm_driver' structure has a 'dumb_destroy'
++            # function pointer.
++            #
++            # Removed by commit 96a7b60f6ddb2 ("drm: remove dumb_destroy
++            # callback") in v6.3 linux-next (2023-02-10).
++            #
++            CODE="
++            #if defined(NV_DRM_DRMP_H_PRESENT)
++            #include <drm/drmP.h>
++            #endif
++
++            #if defined(NV_DRM_DRM_DRV_H_PRESENT)
++            #include <drm/drm_drv.h>
++            #endif
++
++            int conftest_drm_driver_has_dumb_destroy(void) {
++                return offsetof(struct drm_driver, dumb_destroy);
++            }"
++
++            compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_DUMB_DESTROY" "" "types"
++        ;;
++
+         # When adding a new conftest entry, please use the correct format for
+         # specifying the relevant upstream Linux kernel commit.
+         #
+diff --git a/nvidia-drm/nvidia-drm-drv.c b/nvidia-drm/nvidia-drm-drv.c
+index cb8dacc..7e6f5e8 100644
+--- a/nvidia-drm/nvidia-drm-drv.c
++++ b/nvidia-drm/nvidia-drm-drv.c
+@@ -758,7 +758,9 @@ static void nv_drm_update_drm_driver_features(void)
+ 
+     nv_drm_driver.dumb_create      = nv_drm_dumb_create;
+     nv_drm_driver.dumb_map_offset  = nv_drm_dumb_map_offset;
++#if defined(NV_DRM_DRIVER_HAS_DUMB_DESTROY)
+     nv_drm_driver.dumb_destroy     = nv_drm_dumb_destroy;
++#endif /* NV_DRM_DRIVER_HAS_DUMB_DESTROY */
+ 
+ #if defined(NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS)
+     nv_drm_driver.gem_vm_ops       = &nv_drm_gem_vma_ops;
+diff --git a/nvidia-drm/nvidia-drm-gem-nvkms-memory.c b/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+index cd60138..d1cc643 100644
+--- a/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
++++ b/nvidia-drm/nvidia-drm-gem-nvkms-memory.c
+@@ -226,12 +226,14 @@ done:
+     return ret;
+ }
+ 
++#if defined(NV_DRM_DRIVER_HAS_DUMB_DESTROY)
+ int nv_drm_dumb_destroy(struct drm_file *file,
+                         struct drm_device *dev,
+                         uint32_t handle)
+ {
+     return drm_gem_handle_delete(file, handle);
+ }
++#endif /* NV_DRM_DRIVER_HAS_DUMB_DESTROY */
+ 
+ /* XXX Move these vma operations to os layer */
+ 
+diff --git a/nvidia-drm/nvidia-drm-gem-nvkms-memory.h b/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+index 2d9d1a1..9bc6721 100644
+--- a/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
++++ b/nvidia-drm/nvidia-drm-gem-nvkms-memory.h
+@@ -79,9 +79,11 @@ int nv_drm_dumb_map_offset(struct drm_file *file,
+                            struct drm_device *dev, uint32_t handle,
+                            uint64_t *offset);
+ 
++#if defined(NV_DRM_DRIVER_HAS_DUMB_DESTROY)
+ int nv_drm_dumb_destroy(struct drm_file *file,
+                         struct drm_device *dev,
+                         uint32_t handle);
++#endif /* NV_DRM_DRIVER_HAS_DUMB_DESTROY */
+ 
+ extern const struct vm_operations_struct nv_drm_gem_vma_ops;
+ 
+diff --git a/nvidia-drm/nvidia-drm.Kbuild b/nvidia-drm/nvidia-drm.Kbuild
+index eab71b7..60b0412 100644
+--- a/nvidia-drm/nvidia-drm.Kbuild
++++ b/nvidia-drm/nvidia-drm.Kbuild
+@@ -107,3 +107,4 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_add_fence
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_reserve_fences
+ NV_CONFTEST_TYPE_COMPILE_TESTS += reservation_object_reserve_shared_has_num_fences_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_has_override_edid
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_dumb_destroy
+-- 
+2.20.1
+

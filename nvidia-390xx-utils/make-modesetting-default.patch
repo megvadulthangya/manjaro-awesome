@@ -7,13 +7,13 @@ This is required by the patch to support 6.12.
 
 Signed-off-by: Vasiliy Stelmachenok <ventureo@cachyos.org>
 ---
- kernel/nvidia-drm/nvidia-drm-linux.c | 4 ++--
+ nvidia-drm/nvidia-drm-linux.c | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
-diff --git a/kernel/nvidia-drm/nvidia-drm-linux.c b/kernel/nvidia-drm/nvidia-drm-linux.c
+
 index a4c5aeb..2523350 100644
---- a/kernel/nvidia-drm/nvidia-drm-linux.c
-+++ b/kernel/nvidia-drm/nvidia-drm-linux.c
+--- a/nvidia-drm/nvidia-drm-linux.c
++++ b/nvidia-drm/nvidia-drm-linux.c
 @@ -41,8 +41,8 @@
  
  MODULE_PARM_DESC(

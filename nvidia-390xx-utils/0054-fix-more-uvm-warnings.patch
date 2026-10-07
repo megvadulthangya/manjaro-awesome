@@ -1,0 +1,24 @@
+From b49dc813b7e1ddd6ab9179664127d799d1235d74 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Tue, 10 Dec 2024 20:08:50 +0100
+Subject: [PATCH] fix more uvm warnings
+
+---
+ nvidia-uvm/uvm8_va_block.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nvidia-uvm/uvm8_va_block.c b/nvidia-uvm/uvm8_va_block.c
+index be6d873a..110bf1aa 100644
+--- a/nvidia-uvm/uvm8_va_block.c
++++ b/nvidia-uvm/uvm8_va_block.c
+@@ -6521,6 +6521,7 @@ static void map_get_allowed_destinations(uvm_va_block_t *block,
+     uvm_processor_mask_and(allowed_mask, allowed_mask, &va_space->can_access[id]);
+ }
+ 
++static
+ NV_STATUS block_map(uvm_va_block_t *va_block,
+                     uvm_va_block_context_t *va_block_context,
+                     uvm_processor_id_t id,
+-- 
+2.39.5
+

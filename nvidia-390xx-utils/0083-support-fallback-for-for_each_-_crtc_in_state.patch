@@ -1,0 +1,89 @@
+From 65e65afbf370bac6993808f68fc40e2f11e29e0b Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 28 Jan 2026 15:53:49 +0100
+Subject: [PATCH 4/4] support fallback for for_each_*_crtc_in_state
+
+---
+ nvidia-drm/nvidia-drm-crtc.c    |  2 +-
+ nvidia-drm/nvidia-drm-helper.h  | 20 ++++++++++++++++++++
+ nvidia-drm/nvidia-drm-modeset.c |  6 +++---
+ 3 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/nvidia-drm/nvidia-drm-crtc.c b/nvidia-drm/nvidia-drm-crtc.c
+index 6915d8f5..372ad20d 100644
+--- a/nvidia-drm/nvidia-drm-crtc.c
++++ b/nvidia-drm/nvidia-drm-crtc.c
+@@ -151,7 +151,7 @@ static int nv_drm_plane_atomic_check(struct drm_plane *plane,
+         goto done;
+     }
+ 
+-    for_each_new_crtc_in_state(plane_state->state, crtc, crtc_state, i) {
++    nv_drm_for_each_new_crtc_in_state(plane_state->state, crtc, crtc_state, i) {
+         struct nv_drm_crtc_state *nv_crtc_state = to_nv_crtc_state(crtc_state);
+         struct NvKmsKapiHeadRequestedConfig *head_req_config =
+             &nv_crtc_state->req_config;
+diff --git a/nvidia-drm/nvidia-drm-helper.h b/nvidia-drm/nvidia-drm-helper.h
+index da71433e..1a88ad33 100644
+--- a/nvidia-drm/nvidia-drm-helper.h
++++ b/nvidia-drm/nvidia-drm-helper.h
+@@ -258,6 +258,26 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+     for_each_crtc_in_state(__state, crtc, crtc_state, __i)
+ #endif
+ 
++#if defined(for_each_new_crtc_in_state)
++#define nv_drm_for_each_new_crtc_in_state for_each_new_crtc_in_state
++#else
++#define nv_drm_for_each_new_crtc_in_state nv_drm_for_each_crtc_in_state
++#endif
++
++#if defined(for_each_old_crtc_in_state)
++#define nv_drm_for_each_old_crtc_in_state for_each_old_crtc_in_state
++#else
++#define nv_drm_for_each_old_crtc_in_state nv_drm_for_each_crtc_in_state
++#endif
++
++#if defined(for_each_oldnew_crtc_in_state)
++#define nv_drm_for_each_oldnew_crtc_in_state for_each_oldnew_crtc_in_state
++#else
++// this is probably insufficient
++#define nv_drm_for_each_oldnew_crtc_in_state(__state, crtc, old_crtc_state, new_crtc_state, __i) \
++	nv_drm_for_each_new_crtc_in_state(__state, crtc, new_crtc_state, __i)
++#endif
++
+ /**
+  * nv_drm_for_each_plane_in_state - iterate over all planes in an atomic update
+  * @__state: &struct drm_atomic_state pointer
+diff --git a/nvidia-drm/nvidia-drm-modeset.c b/nvidia-drm/nvidia-drm-modeset.c
+index 91c175ec..617d4763 100644
+--- a/nvidia-drm/nvidia-drm-modeset.c
++++ b/nvidia-drm/nvidia-drm-modeset.c
+@@ -118,7 +118,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
+     memset(requested_config, 0, sizeof(*requested_config));
+ 
+     /* Loop over affected crtcs and construct NvKmsKapiRequestedModeSetConfig */
+-    for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
++    nv_drm_for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
+         struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+         requested_config->headRequestedConfig[nv_crtc->head] =
+@@ -222,7 +222,7 @@ int nv_drm_atomic_commit(struct drm_device *dev,
+      * updates to complete.
+      */
+     if (nonblock) {
+-        for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
++        nv_drm_for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
+             struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+             /*
+@@ -295,7 +295,7 @@ int nv_drm_atomic_commit(struct drm_device *dev,
+     }
+ 
+     if (ret == 0 && !nonblock) {
+-        for_each_old_crtc_in_state(state, crtc, crtc_state, i) {
++        nv_drm_for_each_old_crtc_in_state(state, crtc, crtc_state, i) {
+             struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+ 
+             /*
+-- 
+2.39.5
+

@@ -1,0 +1,434 @@
+From 8341328b51a9aa4740b3187d935f161f691b6eac Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Thu, 29 Jan 2026 13:30:59 +0100
+Subject: [PATCH] backport conftest.sh comment changes from 545.23.06
+
+---
+ conftest.sh | 182 +++++++++++++++++++++++++++-------------------------
+ 1 file changed, 96 insertions(+), 86 deletions(-)
+
+diff --git a/conftest.sh b/conftest.sh
+index d2cb8475..e1247f6e 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -586,8 +586,8 @@ compile_test() {
+             #
+             # Added by commit 3c299dc22635 ("PCI: add
+             # pci_get_domain_bus_and_slot function") in 2.6.33 but aarch64
+-            # support was added by commit d1e6dc91b532 
+-            # ("arm64: Add architectural support for PCI") in 3.18-rc1
++            # support was added by commit d1e6dc91b532 ("arm64: Add
++            # architectural support for PCI") in 3.18.
+             #
+             CODE="
+             #include <linux/pci.h>
+@@ -1807,9 +1807,8 @@ compile_test() {
+             #
+             # Determine if the pde_data() function is present.
+             #
+-            # The commit c28198889c15 removed the function
+-            # 'PDE_DATA()', and replaced it with 'pde_data()'
+-            # ("proc: remove PDE_DATA() completely") in v5.17-rc1.
++            # PDE_DATA() was replaced with pde_data() by commit 359745d78351
++            # ("proc: remove PDE_DATA() completely") in v5.17.
+             #
+             CODE="
+             #include <linux/proc_fs.h>
+@@ -2145,8 +2144,8 @@ compile_test() {
+             # Determine if the get_dma_ops() function is present.
+             #
+             # Commit 0a0f0d8be76d ("dma-mapping: split <linux/dma-mapping.h>")
+-            # in v5.10-rc1 (2020-09-22), moved get_dma_ops() function
+-            # prototype from <linux/dma-mapping.h> to <linux/dma-map-ops.h>.
++            # in v5.10 moved get_dma_ops() function prototype from
++            # <linux/dma-mapping.h> to <linux/dma-map-ops.h>.
+             #
+             CODE="
+             #if defined(NV_LINUX_DMA_MAP_OPS_H_PRESENT)
+@@ -2516,7 +2515,7 @@ compile_test() {
+             #   2013-12-11  b3f2333de8e81b089262b26d52272911523e605f
+             #
+             # The commit 57bb1ee60340 ("drm: Compile out legacy chunks from
+-            # struct drm_device") compiles out the legacy chunks like
++            # struct drm_device") in v5.11 compiles out the legacy chunks like
+             # drm_driver::legacy_dev_list.
+             #
+             CODE="
+@@ -2539,14 +2538,14 @@ compile_test() {
+             #
+             # Determine if jiffies_to_timespec() is present
+             #
+-            # removed by commit 751addac78b6
+-            # ("y2038: remove obsolete jiffies conversion functions")
+-            # in v5.6-rc1 (2019-12-13).
+-        CODE="
+-        #include <linux/jiffies.h>
+-        void conftest_jiffies_to_timespec(void){
+-            jiffies_to_timespec();
+-        }"
++            # Removed by commit 751addac78b6 ("y2038: remove obsolete jiffies
++            # conversion functions") in v5.6.
++            #
++            CODE="
++            #include <linux/jiffies.h>
++            void conftest_jiffies_to_timespec(void){
++                jiffies_to_timespec();
++            }"
+             compile_check_conftest "$CODE" "NV_JIFFIES_TO_TIMESPEC_PRESENT" "" "functions"
+         ;;
+ 
+@@ -2556,14 +2555,21 @@ compile_test() {
+             #   drm_universal_plane_init()
+             #   drm_crtc_init_with_planes()
+             #   drm_encoder_init()
+-            # have a 'name' argument, which was added by these commits:
+-            #   drm_universal_plane_init:   2015-12-09  b0b3b7951114315d65398c27648705ca1c322faa
+-            #   drm_crtc_init_with_planes:  2015-12-09  f98828769c8838f526703ef180b3088a714af2f9
+-            #   drm_encoder_init:           2015-12-09  13a3d91f17a5f7ed2acd275d18b6acfdb131fb15
++            # have a 'name' argument.
++            #
++            # drm_universal_plane_init was updated by commit b0b3b7951114
++            # ("drm: Pass 'name' to drm_universal_plane_init()") in v4.5.
+             #
+-            # Additionally determine whether drm_universal_plane_init() has a
+-            # 'format_modifiers' argument, which was added by:
+-            #   2017-07-23  e6fc3b68558e4c6d8d160b5daf2511b99afa8814
++            # drm_crtc_init_with_planes was updated by commit f98828769c88
++            # ("drm: Pass 'name' to drm_crtc_init_with_planes()") in v4.5.
++            #
++            # drm_encoder_init was updated by commit 13a3d91f17a5 ("drm: Pass
++            # 'name' to drm_encoder_init()") in v4.5.
++            #
++            # Additionally, determine whether drm_universal_plane_init() has
++            # a 'format_modifiers' argument, which was added by commit
++            # e6fc3b68558e ("drm: Plumb modifiers through plane init") in
++            # v4.14.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -2848,8 +2854,8 @@ compile_test() {
+             #
+             # Added by commit 210647af897a ("PCI: Rename pci_remove_bus_device
+             # to pci_stop_and_remove_bus_device") in v3.4 (2012-02-25) but
+-            # aarch64 support was added by commit d1e6dc91b532 
+-            # ("arm64: Add architectural support for PCI") in v3.18-rc1.
++            # aarch64 support was added by commit d1e6dc91b532 ("arm64: Add
++            # architectural support for PCI") in v3.18.
+             #
+             CODE="
+             #include <linux/types.h>
+@@ -3028,9 +3034,9 @@ compile_test() {
+             # commit 768ae309a961 ("mm: replace get_user_pages() write/force
+             # parameters with gup_flags") in v4.9 (2016-10-13)
+             #
+-            # Removed vmas parameter from get_user_pages() by commit 7bbf9c8c99
++            # Removed vmas parameter from get_user_pages() by commit 54d020692b34
+             # ("mm/gup: remove unused vmas parameter from get_user_pages()")
+-            # in linux-next, expected in v6.5-rc1
++            # in v6.5.
+             #
+             # linux-4.4.168 cherry-picked commit 768ae309a961 without
+             # c12d2da56d0e which is covered in Conftest #3.
+@@ -3198,11 +3204,11 @@ compile_test() {
+             #
+             # get_user_pages_remote() removed 'tsk' parameter by
+             # commit 64019a2e467a ("mm/gup: remove task_struct pointer for
+-            # all gup code") in v5.9-rc1 (2020-08-11).
++            # all gup code") in v5.9.
+             #
+             # Removed vmas parameter from get_user_pages_remote() by commit
+-            # a4bde14d549 ("mm/gup: remove vmas parameter from get_user_pages_remote()")
+-            # in linux-next, expected in v6.5-rc1
++            # ca5e863233e8 ("mm/gup: remove vmas parameter from
++            # get_user_pages_remote()") in v6.5.
+             #
+ 
+             #
+@@ -4180,8 +4186,8 @@ compile_test() {
+             #
+             # The DRIVER_PRIME flag was added by commit 3248877ea179 (drm:
+             # base prime/dma-buf support (v5)) in v3.4 (2011-11-25) and is
+-            # removed by commit 0424fdaf883a (drm/prime: Actually remove
+-            # DRIVER_PRIME everywhere) on 2019-06-17.
++            # removed by commit 0424fdaf883a ("drm/prime: Actually remove
++            # DRIVER_PRIME everywhere") in v5.4.
+             #
+             # DRIVER_PRIME definition moved from drmP.h to drm_drv.h by
+             # commit 85e634bce01a (drm: Extract drm_drv.h) in v4.10
+@@ -4237,10 +4243,10 @@ compile_test() {
+             #
+             # drm_connector_for_each_possible_encoder() is added by commit
+             # 83aefbb887b5 (drm: Add drm_connector_for_each_possible_encoder())
+-            # in v4.19. The definition and prorotype is changed to take only
+-            # two arguments connector and encoder, by commit 62afb4ad425a
+-            # (drm/connector: Allow max possible encoders to attach to a
+-            # connector) in v5.5rc1.
++            # in v4.19.  The definition and prototype is changed to take only
++            # two arguments connector and encoder by commit 62afb4ad425a
++            # ("drm/connector: Allow max possible encoders to attach to a
++            # connector") in v5.5.
+             #
+             echo "$CONFTEST_PREAMBLE
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4296,8 +4302,8 @@ compile_test() {
+             #
+             # Determine if the 'struct proc_ops' type is present.
+             #
+-            # Added by commit d56c0d45f0e2 ("proc: decouple proc from VFS with
+-            # "struct proc_ops"") in 5.6-rc1
++            # Added by commit d56c0d45f0e2 ("proc: decouple proc from VFS
++            # with "struct proc_ops"") in v5.6.
+             #
+             CODE="
+             #include <linux/proc_fs.h>
+@@ -4332,11 +4338,11 @@ compile_test() {
+             # Added by commit fb7fcc96a86cf ("timekeeping: Standardize on
+             # ktime_get_*() naming") in 4.18 (2018-04-27)
+             #
+-        CODE="
+-        #include <linux/ktime.h>
+-        void conftest_ktime_get_raw_ts64(void){
+-            ktime_get_raw_ts64();
+-        }"
++            CODE="
++            #include <linux/ktime.h>
++            void conftest_ktime_get_raw_ts64(void){
++                ktime_get_raw_ts64();
++            }"
+             compile_check_conftest "$CODE" "NV_KTIME_GET_RAW_TS64_PRESENT" "" "functions"
+         ;;
+ 
+@@ -4347,11 +4353,11 @@ compile_test() {
+             # Added by commit d6d29896c665d ("timekeeping: Provide timespec64
+             # based interfaces") in 3.17 (2014-07-16)
+             #
+-        CODE="
+-        #include <linux/ktime.h>
+-        void conftest_ktime_get_real_ts64(void){
+-            ktime_get_real_ts64();
+-        }"
++            CODE="
++            #include <linux/ktime.h>
++            void conftest_ktime_get_real_ts64(void){
++                ktime_get_real_ts64();
++            }"
+             compile_check_conftest "$CODE" "NV_KTIME_GET_REAL_TS64_PRESENT" "" "functions"
+         ;;
+ 
+@@ -4361,7 +4367,8 @@ compile_test() {
+             #
+             # Kernel commit da1c55f1b272 ("mmap locking API: rename mmap_sem
+             # to mmap_lock") replaced the field 'mmap_sem' by 'mmap_lock'
+-            # in v5.8-rc1 (2020-06-08).
++            # in v5.8.
++            #
+             CODE="
+             #include <linux/mm_types.h>
+ 
+@@ -4418,12 +4425,11 @@ compile_test() {
+             #
+             # Determine if the function drm_gem_object_put_unlocked() is present.
+             #
+-            # In v5.9-rc1, commit 2f4dd13d4bb8 ("drm/gem: add
+-            # drm_gem_object_put helper") removes drm_gem_object_put_unlocked()
+-            # function and replace its definition by transient macro. Commit
+-            # ab15d56e27be ("drm: remove transient
+-            # drm_gem_object_put_unlocked()") finally removes
+-            # drm_gem_object_put_unlocked() macro.
++            # Replaced with a transient macro by commit 2f4dd13d4bb8 ("drm/gem:
++            # add drm_gem_object_put helper") in v5.9.
++            #
++            # Finally removed by commit ab15d56e27be ("drm: remove transient
++            # drm_gem_object_put_unlocked()") in v5.9.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4446,7 +4452,7 @@ compile_test() {
+             # field.
+             #
+             # Removed by commit 0425662fdf05 ("drm: Nuke mode->vrefresh") in
+-            # v5.9-rc1.
++            # v5.9.
+             #
+             CODE="
+             #include <drm/drm_modes.h>
+@@ -4464,7 +4470,7 @@ compile_test() {
+             # Determine if drm_driver::master_set() returns integer value
+             #
+             # Changed to void by commit 907f53200f98 ("drm: vmwgfx: remove
+-            # drm_driver::master_set() return type") in v5.9-rc1.
++            # drm_driver::master_set() return type") in v5.9.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4490,7 +4496,7 @@ compile_test() {
+             # function pointer.
+             #
+             # drm_driver::gem_free_object is removed by commit 1a9458aeb8eb
+-            # ("drm: remove drm_driver::gem_free_object") in v5.9-rc1.
++            # ("drm: remove drm_driver::gem_free_object") in v5.9.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4513,7 +4519,7 @@ compile_test() {
+             # Determine if vga_tryget() is present
+             #
+             # vga_tryget() was removed by commit f369bc3f9096 ("vgaarb: mark
+-            # vga_tryget static") in v5.9-rc1 (2020-08-01).
++            # vga_tryget static") in v5.9.
+             #
+             CODE="
+             #include <linux/vgaarb.h>
+@@ -4530,7 +4536,7 @@ compile_test() {
+             #
+             # pci_channel_state was removed by commit 16d79cd4e23b ("PCI: Use
+             # 'pci_channel_state_t' instead of 'enum pci_channel_state'") in
+-            # v5.9-rc1 (2020-07-02).
++            # v5.9.
+             #
+             CODE="
+             #include <linux/pci.h>
+@@ -4545,8 +4551,9 @@ compile_test() {
+             #
+             # Determine if drm_prime_pages_to_sg() has 'dev' argument.
+             #
+-            # drm_prime_pages_to_sg() is updated to take 'dev' argument by commit
+-            # 707d561f77b5 ("drm: allow limiting the scatter list size.").
++            # drm_prime_pages_to_sg() is updated to take 'dev' argument by
++            # commit 707d561f77b5 ("drm: allow limiting the scatter list
++            # size.") in v5.10.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4570,9 +4577,9 @@ compile_test() {
+             # Determine if drm_driver structure has the GEM and PRIME callback
+             # function pointers.
+             #
+-            # The GEM and PRIME callback are removed from drm_driver
+-            # structure, by commit d693def4fd1c ("drm: Remove obsolete GEM and
+-            # PRIME callbacks from struct drm_driver").
++            # The GEM and PRIME callbacks are removed from drm_driver
++            # structure by commit d693def4fd1c ("drm: Remove obsolete GEM and
++            # PRIME callbacks from struct drm_driver") in v5.11.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4601,8 +4608,8 @@ compile_test() {
+             # Determine if drm_crtc_helper_funcs::atomic_check takes 'state'
+             # argument of 'struct drm_atomic_state' type.
+             #
+-            # The commit 29b77ad7b9ca ("drm/atomic: Pass the full state to CRTC
+-            # atomic_check") passed the full atomic state to
++            # Commit 29b77ad7b9ca ("drm/atomic: Pass the full state to CRTC
++            # atomic_check") in v5.11 passed the full atomic state to
+             # drm_crtc_helper_funcs::atomic_check()
+             #
+             # To test the signature of drm_crtc_helper_funcs::atomic_check(),
+@@ -4638,9 +4645,9 @@ compile_test() {
+             # Determine if drm_gem_object_funcs::vmap takes 'map'
+             # argument of 'struct dma_buf_map' type.
+             #
+-            # The commit 49a3f51dfeee ("drm/gem: Use struct dma_buf_map in GEM
+-            # vmap ops and convert GEM backends") update
+-            # drm_gem_object_funcs::vmap to take 'map' argument.
++            # drm_gem_object_funcs::vmap is updated to take 'map' argument by
++            # commit 49a3f51dfeee ("drm/gem: Use struct dma_buf_map in GEM
++            # vmap ops and convert GEM backends") in v5.11.
+             #
+             # Note that the 'map' argument type is changed from 'struct dma_buf_map'
+             # to 'struct iosys_map' by commit 7938f4218168 ("dma-buf-map: Rename
+@@ -4665,6 +4672,9 @@ compile_test() {
+             # by commit 233eb0bf3b94 ("mm: remove follow_pfn")
+             # from linux-next 233eb0bf3b94.
+             #
++            # Note: this commit never made it to the linux kernel, so
++            # unsafe_follow_pfn() never existed.
++            #
+             CODE="
+             #include <linux/mm.h>
+             void conftest_follow_pfn(void) {
+@@ -4679,8 +4689,8 @@ compile_test() {
+             # Determine if drm_plane_helper_funcs::atomic_check takes 'state'
+             # argument of 'struct drm_atomic_state' type.
+             #
+-            # The commit 7c11b99a8e58 ("drm/atomic: Pass the full state to
+-            # planes atomic_check") passed the full atomic state to
++            # Commit 7c11b99a8e58 ("drm/atomic: Pass the full state to planes
++            # atomic_check") in v5.13 passes the full atomic state to
+             # drm_plane_helper_funcs::atomic_check()
+             #
+             # To test the signature of drm_plane_helper_funcs::atomic_check(),
+@@ -4716,7 +4726,7 @@ compile_test() {
+             # Determine if the 'drm_device' structure has a 'pdev' field.
+             #
+             # Removed by commit b347e04452ff ("drm: Remove pdev field from
+-            # struct drm_device") in v5.14-rc1.
++            # struct drm_device") in v5.14.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4757,7 +4767,7 @@ compile_test() {
+             # dma_resv_add_excl_fence() and dma_resv_add_shared_fence() were
+             # removed and replaced with dma_resv_add_fence() by commit
+             # 73511edf8b19 ("dma-buf: specify usage while adding fences to
+-            # dma_resv obj v7") in linux-next, expected in v5.19-rc1.
++            # dma_resv obj v7") in v5.19.
+             #
+             CODE="
+             #if defined(NV_LINUX_DMA_RESV_H_PRESENT)
+@@ -4851,9 +4861,8 @@ compile_test() {
+             #
+             # Determine if 'struct drm_connector' has an 'override_edid' member.
+             #
+-            # Removed by commit 90b575f52c6ab ("drm/edid: detach debugfs EDID
+-            # override from EDID property update") in linux-next, expected in
+-            # v6.2-rc1.
++            # Removed by commit 90b575f52c6a ("drm/edid: detach debugfs EDID
++            # override from EDID property update") in v6.2.
+             #
+             CODE="
+             #if defined(NV_DRM_DRM_CRTC_H_PRESENT)
+@@ -4874,10 +4883,9 @@ compile_test() {
+             # Determine if the 'vm_area_struct' structure has
+             # const 'vm_flags'.
+             #
+-            # A union of '__vm_flags' and 'const vm_flags' was added 
+-            # by commit bc292ab00f6c ("mm: introduce vma->vm_flags
+-            # wrapper functions") in mm-stable branch (2023-02-09)
+-            # of the akpm/mm maintainer tree.
++            # A union of '__vm_flags' and 'const vm_flags' was added by
++            # commit bc292ab00f6c ("mm: introduce vma->vm_flags wrapper
++            # functions") in v6.3.
+             #
+             CODE="
+             #include <linux/mm_types.h>
+@@ -4893,8 +4901,8 @@ compile_test() {
+             # Determine if the 'drm_driver' structure has a 'dumb_destroy'
+             # function pointer.
+             #
+-            # Removed by commit 96a7b60f6ddb2 ("drm: remove dumb_destroy
+-            # callback") in v6.3 linux-next (2023-02-10).
++            # Removed by commit 96a7b60f6ddb ("drm: remove dumb_destroy
++            # callback") in v6.4.
+             #
+             CODE="
+             #if defined(NV_DRM_DRMP_H_PRESENT)
+@@ -4957,10 +4965,12 @@ compile_test() {
+         ;;
+ 
+         # When adding a new conftest entry, please use the correct format for
+-        # specifying the relevant upstream Linux kernel commit.
++        # specifying the relevant upstream Linux kernel commit.  Please
++        # avoid specifying -rc kernels, and only use SHAs that actually exist
++        # in the upstream Linux kernel git repository.
+         #
+-        # <function> was added|removed|etc by commit <sha> ("<commit message")
+-        # in <kernel-version> (<commit date>).
++        # Added|Removed|etc by commit <short-sha> ("<commit message") in
++        # <kernel-version>.
+ 
+         *)
+             # Unknown test name given
+-- 
+2.39.5
+

@@ -1,0 +1,67 @@
+From 14ad046dd00ce5ea1a75de2581be1ce3af0733d6 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Thu, 29 Jan 2026 14:49:48 +0100
+Subject: [PATCH] backport conftest.sh comment changes from 525.53
+
+---
+ conftest.sh | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/conftest.sh b/conftest.sh
+index 1d8e0598..d2cb8475 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -584,6 +584,11 @@ compile_test() {
+             # Determine if the pci_get_domain_bus_and_slot() function
+             # is present.
+             #
++            # Added by commit 3c299dc22635 ("PCI: add
++            # pci_get_domain_bus_and_slot function") in 2.6.33 but aarch64
++            # support was added by commit d1e6dc91b532 
++            # ("arm64: Add architectural support for PCI") in 3.18-rc1
++            #
+             CODE="
+             #include <linux/pci.h>
+             void conftest_pci_get_domain_bus_and_slot(void) {
+@@ -2840,7 +2845,11 @@ compile_test() {
+         pci_stop_and_remove_bus_device)
+             #
+             # Determine if the pci_stop_and_remove_bus_device() function is present.
+-            # Added in 3.4-rc1 2012-02-25 210647af897af8ef2d00828aa2a6b1b42206aae6
++            #
++            # Added by commit 210647af897a ("PCI: Rename pci_remove_bus_device
++            # to pci_stop_and_remove_bus_device") in v3.4 (2012-02-25) but
++            # aarch64 support was added by commit d1e6dc91b532 
++            # ("arm64: Add architectural support for PCI") in v3.18-rc1.
+             #
+             CODE="
+             #include <linux/types.h>
+@@ -3926,8 +3935,16 @@ compile_test() {
+             #   2018-07-09  cde4c44d8769c1be16074c097592c46c7d64092b
+             #   2018-07-09  97e14fbeb53fe060c5f6a7a07e37fd24c087ed0c
+             #
++            # Note: up to 4.9 function was provided by drm_crtc.h by commit
++            # f453ba046074 in 2.6.29 (2008-12-29)
++            #
+             CODE="
++            #if defined(NV_DRM_DRM_CONNECTOR_H_PRESENT)
+             #include <drm/drm_connector.h>
++            #endif
++            #if defined(NV_DRM_DRM_CRTC_H_PRESENT)
++            #include <drm/drm_crtc.h>
++            #endif
+             void conftest_drm_connector_funcs_have_mode_in_name(void) {
+                 drm_mode_connector_attach_encoder();
+             }"
+@@ -4230,7 +4247,7 @@ compile_test() {
+             #include <drm/drmP.h>
+             #endif
+ 
+-            #if defined(NV_DRM_CONNECTOR_H_PRESENT)
++            #if defined(NV_DRM_DRM_CONNECTOR_H_PRESENT)
+             #include <drm/drm_connector.h>
+             #endif
+ 
+-- 
+2.39.5
+

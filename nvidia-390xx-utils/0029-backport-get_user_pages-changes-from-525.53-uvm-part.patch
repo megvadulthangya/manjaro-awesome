@@ -1,0 +1,25 @@
+From c3c8a0ff0a8627093dd4e0454b34c70c2290f564 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sun, 6 Aug 2023 17:18:58 +0200
+Subject: [PATCH] backport get_user_pages changes from 525.53 (uvm part)
+
+---
+ nvidia-uvm/uvm8_tools.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/nvidia-uvm/uvm8_tools.c b/nvidia-uvm/uvm8_tools.c
+index 1dc7c97..c5ba674 100644
+--- a/nvidia-uvm/uvm8_tools.c
++++ b/nvidia-uvm/uvm8_tools.c
+@@ -251,7 +251,7 @@ static NV_STATUS map_user_pages(NvU64 user_va, NvU64 size, void **addr, struct p
+     }
+ 
+     nv_mmap_read_lock(current->mm);
+-    ret = NV_GET_USER_PAGES(user_va, num_pages, 1, 0, *pages, vmas);
++    ret = NV_GET_USER_PAGES(user_va, num_pages, FOLL_WRITE, *pages, vmas);
+     nv_mmap_read_unlock(current->mm);
+     if (ret != num_pages) {
+         status = NV_ERR_INVALID_ARGUMENT;
+-- 
+2.20.1
+

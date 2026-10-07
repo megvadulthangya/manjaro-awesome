@@ -1,0 +1,11 @@
+--- a/nv-mmap.c
++++ b/nv-mmap.c
+@@ -452,7 +452,7 @@
+     if (interrupted)
+     {
+         // Clean up on error: release refcount and dep_map
+-        refcount_sub_and_test(NV_VMA_LOCK_OFFSET, &vma->vm_refcnt);
++        (void)refcount_sub_and_test(NV_VMA_LOCK_OFFSET, &vma->vm_refcnt);
+         rwsem_release(&vma->vmlock_dep_map, _RET_IP_);
+         return NV_FALSE;
+     }

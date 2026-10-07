@@ -1,0 +1,63 @@
+From 81adfceb43ea64608b081b306a1818ad1467f149 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 28 Jan 2026 15:40:39 +0100
+Subject: [PATCH 2/4] support fallback for for_each_*_plane_in_state
+
+---
+ nvidia-drm/nvidia-drm-helper.c  |  2 +-
+ nvidia-drm/nvidia-drm-helper.h  | 12 ++++++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/nvidia-drm/nvidia-drm-helper.c b/nvidia-drm/nvidia-drm-helper.c
+index fa9e4588..ea3b62f3 100644
+--- a/nvidia-drm/nvidia-drm-helper.c
++++ b/nvidia-drm/nvidia-drm-helper.c
+@@ -152,7 +152,7 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+             goto free;
+     }
+ 
+-    for_each_new_plane_in_state(state, plane, plane_state, i) {
++    nv_drm_for_each_new_plane_in_state(state, plane, plane_state, i) {
+         ret = drm_atomic_set_crtc_for_plane(plane_state, NULL);
+         if (ret < 0)
+             goto free;
+diff --git a/nvidia-drm/nvidia-drm-helper.h b/nvidia-drm/nvidia-drm-helper.h
+index 8467cc76..da71433e 100644
+--- a/nvidia-drm/nvidia-drm-helper.h
++++ b/nvidia-drm/nvidia-drm-helper.h
+@@ -211,6 +211,11 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+  * points to the new state, while afterwards it points to the old state. Due to
+  * this tricky confusion this macro is deprecated.
+  */
++#if defined(for_each_new_connector_in_state)
++#define nv_drm_for_each_connector_in_state(__state,                         \
++                                           connector, connector_state, __i) \
++    for_each_new_connector_in_state(__state, connector, connector_state, __i)
++#else
+ #if !defined(for_each_connector_in_state)
+ #define nv_drm_for_each_connector_in_state(__state,                         \
+                                            connector, connector_state, __i) \
+@@ -225,6 +230,7 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+                                            connector, connector_state, __i) \
+     for_each_connector_in_state(__state, connector, connector_state, __i)
+ #endif
++#endif
+ 
+ 
+ /**
+@@ -277,6 +283,12 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+     for_each_plane_in_state(__state, plane, plane_state, __i)
+ #endif
+ 
++#if defined(for_each_new_plane_in_state)
++#define nv_drm_for_each_new_plane_in_state for_each_new_plane_in_state
++#else
++#define nv_drm_for_each_new_plane_in_state nv_drm_for_each_plane_in_state
++#endif
++
+ static inline struct drm_crtc *nv_drm_crtc_find(struct drm_device *dev,
+     uint32_t id)
+ {
+-- 
+2.39.5
+

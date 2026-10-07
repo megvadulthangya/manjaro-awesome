@@ -1,0 +1,309 @@
+From 18d5859eec53b5a48edb04eb2917a2ad2629f4bb Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 18 Dec 2024 02:54:34 +0100
+Subject: [PATCH] backport uvm warning fixes from 418.30
+
+---
+ nvidia-uvm/uvm8_channel.c            |  4 ++--
+ nvidia-uvm/uvm8_gpu_semaphore_test.c |  2 +-
+ nvidia-uvm/uvm8_map_external.c       |  4 ++--
+ nvidia-uvm/uvm8_mmu.c                |  2 +-
+ nvidia-uvm/uvm8_page_tree_test.c     | 10 +++++-----
+ nvidia-uvm/uvm8_policy.c             |  2 +-
+ nvidia-uvm/uvm8_push_test.c          |  4 ++--
+ nvidia-uvm/uvm8_pushbuffer.c         | 10 ----------
+ nvidia-uvm/uvm8_range_group.c        | 12 ++++++------
+ nvidia-uvm/uvm8_tracker_test.c       |  4 ++--
+ nvidia-uvm/uvm8_va_range.c           |  4 ++--
+ nvidia-uvm/uvm8_volta_fault_buffer.c |  2 +-
+ 12 files changed, 25 insertions(+), 35 deletions(-)
+
+diff --git a/nvidia-uvm/uvm8_channel.c b/nvidia-uvm/uvm8_channel.c
+index ed529100..97cbe05a 100644
+--- a/nvidia-uvm/uvm8_channel.c
++++ b/nvidia-uvm/uvm8_channel.c
+@@ -1137,7 +1137,7 @@ void uvm_channel_print_pending_pushes(uvm_channel_t *channel)
+     channel_print_pushes(channel, 0, NULL);
+ }
+ 
+-void uvm_channel_manager_print_pending_pushes(uvm_channel_manager_t *manager, struct seq_file *seq)
++static void channel_manager_print_pending_pushes(uvm_channel_manager_t *manager, struct seq_file *seq)
+ {
+     uvm_channel_t *channel;
+ 
+@@ -1166,7 +1166,7 @@ static NV_STATUS manager_create_procfs_dirs(uvm_channel_manager_t *manager)
+ static int nv_procfs_read_manager_pending_pushes(struct seq_file *s, void *v)
+ {
+     uvm_channel_manager_t *manager = (uvm_channel_manager_t *)s->private;
+-    uvm_channel_manager_print_pending_pushes(manager, s);
++    channel_manager_print_pending_pushes(manager, s);
+     return 0;
+ }
+ 
+diff --git a/nvidia-uvm/uvm8_gpu_semaphore_test.c b/nvidia-uvm/uvm8_gpu_semaphore_test.c
+index 8b734b85..15238217 100644
+--- a/nvidia-uvm/uvm8_gpu_semaphore_test.c
++++ b/nvidia-uvm/uvm8_gpu_semaphore_test.c
+@@ -54,7 +54,7 @@ static NV_STATUS add_and_test(uvm_gpu_tracking_semaphore_t *tracking_sem, NvU32
+     return NV_OK;
+ }
+ 
+-NV_STATUS test_tracking(uvm_va_space_t *va_space)
++static NV_STATUS test_tracking(uvm_va_space_t *va_space)
+ {
+     NV_STATUS status;
+     uvm_gpu_tracking_semaphore_t tracking_sem;
+diff --git a/nvidia-uvm/uvm8_map_external.c b/nvidia-uvm/uvm8_map_external.c
+index 67620a27..98c4f487 100644
+--- a/nvidia-uvm/uvm8_map_external.c
++++ b/nvidia-uvm/uvm8_map_external.c
+@@ -126,7 +126,7 @@ typedef struct
+ 
+ static NV_STATUS uvm_pte_buffer_init(uvm_va_range_t *va_range,
+                                      uvm_gpu_t *gpu,
+-                                     uvm_map_rm_params_t *map_rm_params,
++                                     const uvm_map_rm_params_t *map_rm_params,
+                                      NvU32 page_size,
+                                      uvm_pte_buffer_t *pte_buffer)
+ {
+@@ -275,7 +275,7 @@ static NV_STATUS copy_ptes(uvm_page_tree_t *tree,
+ //
+ // If the mapped range ends on va_range->node.end, a TLB invalidate for upgrade
+ // is also issued.
+-NV_STATUS map_rm_pt_range(uvm_va_range_t *va_range,
++static NV_STATUS map_rm_pt_range(uvm_va_range_t *va_range,
+                                  uvm_page_tree_t *tree,
+                                  uvm_page_table_range_t *pt_range,
+                                  uvm_pte_buffer_t *pte_buffer,
+diff --git a/nvidia-uvm/uvm8_mmu.c b/nvidia-uvm/uvm8_mmu.c
+index 2b90a3cb..86518f5b 100644
+--- a/nvidia-uvm/uvm8_mmu.c
++++ b/nvidia-uvm/uvm8_mmu.c
+@@ -695,7 +695,7 @@ NV_STATUS uvm_page_tree_wait(uvm_page_tree_t *tree)
+     return status;
+ }
+ 
+-NV_STATUS try_get_ptes(uvm_page_tree_t *tree,
++static NV_STATUS try_get_ptes(uvm_page_tree_t *tree,
+                        NvU32 page_size,
+                        NvU64 start,
+                        NvLength size,
+diff --git a/nvidia-uvm/uvm8_page_tree_test.c b/nvidia-uvm/uvm8_page_tree_test.c
+index 91861b88..9a306b53 100644
+--- a/nvidia-uvm/uvm8_page_tree_test.c
++++ b/nvidia-uvm/uvm8_page_tree_test.c
+@@ -55,7 +55,7 @@ static void fake_ce_memset_8(uvm_push_t *push, uvm_gpu_address_t dst, NvU64 valu
+         *(NvU64 *)phys_to_virt(dst.address + i) = value;
+ }
+ 
+-void *cpu_addr_from_fake(uvm_gpu_address_t fake_gpu_addr)
++static void *cpu_addr_from_fake(uvm_gpu_address_t fake_gpu_addr)
+ {
+     if (fake_gpu_addr.is_virtual)
+         return (void*)fake_gpu_addr.address;
+@@ -69,16 +69,16 @@ static void fake_ce_memcopy(uvm_push_t *push, uvm_gpu_address_t dst, uvm_gpu_add
+     memcpy(cpu_addr_from_fake(dst), cpu_addr_from_fake(src), size);
+ }
+ 
+-void fake_wait_for_idle(uvm_push_t *push)
++static void fake_wait_for_idle(uvm_push_t *push)
+ {
+ }
+ 
+-void fake_noop(uvm_push_t *push, NvU32 size)
++static void fake_noop(uvm_push_t *push, NvU32 size)
+ {
+     push->next += size / 4;
+ }
+ 
+-void fake_membar(uvm_push_t *push)
++static void fake_membar(uvm_push_t *push)
+ {
+ }
+ 
+@@ -304,7 +304,7 @@ static NV_STATUS test_page_tree_get_entry(uvm_page_tree_t *tree, NvU32 page_size
+     return uvm_page_tree_get_entry(tree, page_size, start, UVM_PMM_ALLOC_FLAGS_NONE, single);
+ }
+ 
+-NV_STATUS test_page_tree_alloc_table(uvm_page_tree_t *tree, NvU32 page_size,
++static NV_STATUS test_page_tree_alloc_table(uvm_page_tree_t *tree, NvU32 page_size,
+         uvm_page_table_range_t *single, uvm_page_table_range_t *children)
+ {
+     return uvm_page_tree_alloc_table(tree, page_size, UVM_PMM_ALLOC_FLAGS_NONE, single, children);
+diff --git a/nvidia-uvm/uvm8_policy.c b/nvidia-uvm/uvm8_policy.c
+index 03b1a90e..eb3523c7 100644
+--- a/nvidia-uvm/uvm8_policy.c
++++ b/nvidia-uvm/uvm8_policy.c
+@@ -354,7 +354,7 @@ NV_STATUS uvm_api_unset_accessed_by(UVM_UNSET_ACCESSED_BY_PARAMS *params, struct
+     return accessed_by_set(va_space, params->requestedBase, params->length, &params->accessedByUuid, false);
+ }
+ 
+-NV_STATUS va_block_set_read_duplication_locked(uvm_va_block_t *va_block,
++static NV_STATUS va_block_set_read_duplication_locked(uvm_va_block_t *va_block,
+                                                uvm_va_block_retry_t *va_block_retry,
+                                                uvm_va_block_context_t *va_block_context)
+ {
+diff --git a/nvidia-uvm/uvm8_push_test.c b/nvidia-uvm/uvm8_push_test.c
+index 7eedb32d..f00c661f 100644
+--- a/nvidia-uvm/uvm8_push_test.c
++++ b/nvidia-uvm/uvm8_push_test.c
+@@ -355,7 +355,7 @@ done:
+ //
+ // Starting more than a single push is not safe to do outside of a test as if multiple threads tried doing so,
+ // it could easily deadlock.
+-NV_STATUS test_push_interleaving(uvm_va_space_t *va_space)
++static NV_STATUS test_push_interleaving(uvm_va_space_t *va_space)
+ {
+     NV_STATUS status;
+     uvm_gpu_t *gpu;
+@@ -584,7 +584,7 @@ typedef struct
+     NvU64 timestamp;
+ } timestamp_test_t;
+ 
+-void timestamp_on_complete(void *void_data)
++static void timestamp_on_complete(void *void_data)
+ {
+     timestamp_test_t *data = (timestamp_test_t *)void_data;
+ 
+diff --git a/nvidia-uvm/uvm8_pushbuffer.c b/nvidia-uvm/uvm8_pushbuffer.c
+index 3007f005..7b886630 100644
+--- a/nvidia-uvm/uvm8_pushbuffer.c
++++ b/nvidia-uvm/uvm8_pushbuffer.c
+@@ -109,11 +109,6 @@ error:
+     return status;
+ }
+ 
+-NvLength uvm_pushbuffer_get_size(uvm_pushbuffer_t *pushbuffer)
+-{
+-    return pushbuffer->memory->size;
+-}
+-
+ static uvm_pushbuffer_chunk_t *get_chunk_in_mask(uvm_pushbuffer_t *pushbuffer, unsigned long *mask)
+ {
+     NvU32 index = find_first_bit(mask, UVM_PUSHBUFFER_CHUNKS);
+@@ -210,11 +205,6 @@ static NvU32 *chunk_get_next_push_start_addr(uvm_pushbuffer_t *pushbuffer, uvm_p
+     return (NvU32*)push_start;
+ }
+ 
+-void uvm_pushbuffer_update_progress(uvm_pushbuffer_t *pushbuffer)
+-{
+-    uvm_channel_manager_update_progress(pushbuffer->channel_manager);
+-}
+-
+ static NV_STATUS claim_chunk(uvm_pushbuffer_t *pushbuffer, uvm_push_t *push, uvm_pushbuffer_chunk_t **chunk_out)
+ {
+     NV_STATUS status = NV_OK;
+diff --git a/nvidia-uvm/uvm8_range_group.c b/nvidia-uvm/uvm8_range_group.c
+index 307aaa25..1a3f56d9 100644
+--- a/nvidia-uvm/uvm8_range_group.c
++++ b/nvidia-uvm/uvm8_range_group.c
+@@ -506,13 +506,13 @@ static uvm_range_group_range_t *range_group_range_container(uvm_range_tree_node_
+     return container_of(node, uvm_range_group_range_t, node);
+ }
+ 
+-uvm_range_group_range_t *uvm_range_group_range_prev(uvm_va_space_t *va_space, uvm_range_group_range_t *range)
++static uvm_range_group_range_t *range_group_range_prev(uvm_va_space_t *va_space, uvm_range_group_range_t *range)
+ {
+     uvm_range_tree_node_t *node = uvm_range_tree_prev(&va_space->range_group_ranges, &range->node);
+     return range_group_range_container(node);
+ }
+ 
+-uvm_range_group_range_t *uvm_range_group_range_next(uvm_va_space_t *va_space, uvm_range_group_range_t *range)
++static uvm_range_group_range_t *range_group_range_next(uvm_va_space_t *va_space, uvm_range_group_range_t *range)
+ {
+     uvm_range_tree_node_t *node = uvm_range_tree_next(&va_space->range_group_ranges, &range->node);
+     return range_group_range_container(node);
+@@ -598,13 +598,13 @@ NV_STATUS uvm_range_group_assign_range(uvm_va_space_t *va_space, uvm_range_group
+     status = uvm_range_tree_add(&va_space->range_group_ranges, &new_rgr->node);
+     UVM_ASSERT(status == NV_OK);
+ 
+-    prev = uvm_range_group_range_prev(va_space, new_rgr);
++    prev = range_group_range_prev(va_space, new_rgr);
+     if (prev != NULL && prev->node.end + 1 == new_rgr->node.start && prev->range_group == new_rgr->range_group) {
+         uvm_range_tree_merge_prev(&va_space->range_group_ranges, &new_rgr->node);
+         uvm_range_group_range_destroy(prev);
+     }
+ 
+-    next = uvm_range_group_range_next(va_space, new_rgr);
++    next = range_group_range_next(va_space, new_rgr);
+     if (next != NULL && next->node.start - 1 == new_rgr->node.end && next->range_group == new_rgr->range_group) {
+         uvm_range_tree_merge_next(&va_space->range_group_ranges, &new_rgr->node);
+         uvm_range_group_range_destroy(next);
+@@ -664,7 +664,7 @@ uvm_range_group_range_t *uvm_range_group_range_iter_next(uvm_va_space_t *va_spac
+     return range_group_range_container(node);
+ }
+ 
+-void range_group_range_iter_advance(uvm_range_group_range_iter_t *iter, NvU64 end)
++static void range_group_range_iter_advance(uvm_range_group_range_iter_t *iter, NvU64 end)
+ {
+     if (iter->node == NULL) {
+         iter->end = end;
+@@ -782,7 +782,7 @@ NV_STATUS uvm8_test_range_group_range_info(UVM_TEST_RANGE_GROUP_RANGE_INFO_PARAM
+ 
+         if (next) {
+             params->range_group_range_end = next->node.start - 1;
+-            prev = uvm_range_group_range_prev(va_space, next);
++            prev = range_group_range_prev(va_space, next);
+         }
+         else {
+             params->range_group_range_end = ULLONG_MAX;
+diff --git a/nvidia-uvm/uvm8_tracker_test.c b/nvidia-uvm/uvm8_tracker_test.c
+index 02ce1ce9..9d3ea97c 100644
+--- a/nvidia-uvm/uvm8_tracker_test.c
++++ b/nvidia-uvm/uvm8_tracker_test.c
+@@ -225,7 +225,7 @@ done:
+     return status;
+ }
+ 
+-NV_STATUS test_tracker_overwrite(uvm_va_space_t *va_space)
++static NV_STATUS test_tracker_overwrite(uvm_va_space_t *va_space)
+ {
+     uvm_gpu_t *gpu;
+     uvm_channel_t *channel;
+@@ -313,7 +313,7 @@ done:
+     return status;
+ }
+ 
+-NV_STATUS test_tracker_add_tracker(uvm_va_space_t *va_space)
++static NV_STATUS test_tracker_add_tracker(uvm_va_space_t *va_space)
+ {
+     uvm_gpu_t *gpu;
+     uvm_channel_t *channel;
+diff --git a/nvidia-uvm/uvm8_va_range.c b/nvidia-uvm/uvm8_va_range.c
+index a1fb44ce..74daffe6 100644
+--- a/nvidia-uvm/uvm8_va_range.c
++++ b/nvidia-uvm/uvm8_va_range.c
+@@ -559,7 +559,7 @@ NV_STATUS uvm_va_range_add_gpu_va_space(uvm_va_range_t *va_range, uvm_gpu_va_spa
+     }
+ }
+ 
+-void uvm_va_range_remove_gpu_va_space_managed(uvm_va_range_t *va_range, uvm_gpu_va_space_t *gpu_va_space)
++static void range_remove_gpu_va_space_managed(uvm_va_range_t *va_range, uvm_gpu_va_space_t *gpu_va_space)
+ {
+     uvm_va_block_t *va_block;
+     uvm_va_space_t *va_space = va_range->va_space;
+@@ -585,7 +585,7 @@ void uvm_va_range_remove_gpu_va_space(uvm_va_range_t *va_range,
+ {
+     switch (va_range->type) {
+         case UVM_VA_RANGE_TYPE_MANAGED:
+-            uvm_va_range_remove_gpu_va_space_managed(va_range, gpu_va_space);
++            range_remove_gpu_va_space_managed(va_range, gpu_va_space);
+             break;
+         case UVM_VA_RANGE_TYPE_EXTERNAL:
+             // This function does nothing if the GPU has no mappings in the VA
+diff --git a/nvidia-uvm/uvm8_volta_fault_buffer.c b/nvidia-uvm/uvm8_volta_fault_buffer.c
+index 5ab6a813..b85352eb 100644
+--- a/nvidia-uvm/uvm8_volta_fault_buffer.c
++++ b/nvidia-uvm/uvm8_volta_fault_buffer.c
+@@ -351,7 +351,7 @@ static NvU32 *get_fault_buffer_entry(uvm_gpu_t *gpu, NvU32 index)
+     return fault_entry;
+ }
+ 
+-void parse_fault_entry_common(uvm_gpu_t *gpu, NvU32 *fault_entry, uvm_fault_buffer_entry_t *buffer_entry)
++static void parse_fault_entry_common(uvm_gpu_t *gpu, NvU32 *fault_entry, uvm_fault_buffer_entry_t *buffer_entry)
+ {
+     NV_STATUS status;
+     NvU64 addr_hi, addr_lo;
+-- 
+2.39.5
+

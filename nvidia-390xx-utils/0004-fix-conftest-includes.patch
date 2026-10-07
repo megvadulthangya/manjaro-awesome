@@ -1,0 +1,49 @@
+From 268a4283285e928faa8980795fbaf9babec1a473 Mon Sep 17 00:00:00 2001
+From: Jiri Palecek <jpalecek@web.de>
+Date: Sat, 16 May 2020 02:02:43 +0200
+Subject: [PATCH] fix conftest includes
+
+- atomic_long_t is pulled by including linux/atomic.h, not
+  asm/atomic.h. Otherwise it's detected wrongly as absent
+
+- linux/acpi.h is needed for acpi_status type
+
+Bug-Debian: https://bugs.debian.org/960735
+---
+ conftest.sh | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/conftest.sh b/conftest.sh
+index 2ce8d20..88c7eb1 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1890,7 +1890,7 @@ compile_test() {
+             # Determine if atomic_long_t and associated functions are defined
+             # Added in 2.6.16 2006-01-06 d3cb487149bd706aa6aeb02042332a450978dc1c
+             CODE="
+-            #include <asm/atomic.h>
++            #include <linux/atomic.h>
+             void conftest_atomic_long(void) {
+                 atomic_long_t data;
+                 atomic_long_read(&data);
+@@ -1904,7 +1904,7 @@ compile_test() {
+         atomic64_type)
+             # Determine if atomic64_t and associated functions are defined
+             CODE="
+-            #include <asm/atomic.h>
++            #include <linux/atomic.h>
+             void conftest_atomic64(void) {
+                 atomic64_t data;
+                 atomic64_read(&data);
+@@ -3605,7 +3605,7 @@ compile_test() {
+             #     2008-01-25  9ee85241fdaab358dff1d8647f20a478cfa512a1
+             #
+             CODE="
+-            #include <acpi/acpi_bus.h>
++            #include <linux/acpi.h>
+             int conftest_register_acpi_notifier(void) {
+                 return register_acpi_notifier();
+             }"
+-- 
+2.20.1
+

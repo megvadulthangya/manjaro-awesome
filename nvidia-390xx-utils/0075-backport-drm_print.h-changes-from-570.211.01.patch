@@ -1,0 +1,40 @@
+From 863e318245a5ca986a5f775df3f99f360fb2abf2 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Tue, 27 Jan 2026 17:41:05 +0100
+Subject: [PATCH] backport drm_print.h changes from 570.211.01
+
+---
+ conftest.sh                  | 1 +
+ nvidia-drm/nvidia-drm-priv.h | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/conftest.sh b/conftest.sh
+index 9def63dd..9bd240f5 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -98,6 +98,7 @@ test_headers() {
+     FILES="acpi/video.h"
+     FILES="$FILES asm/system.h"
+     FILES="$FILES drm/drmP.h"
++    FILES="$FILES drm/drm_print.h"
+     FILES="$FILES drm/drm_auth.h"
+     FILES="$FILES drm/drm_gem.h"
+     FILES="$FILES drm/drm_crtc.h"
+diff --git a/nvidia-drm/nvidia-drm-priv.h b/nvidia-drm/nvidia-drm-priv.h
+index 4f1a0e7a..7b0e9f6b 100644
+--- a/nvidia-drm/nvidia-drm-priv.h
++++ b/nvidia-drm/nvidia-drm-priv.h
+@@ -31,6 +31,10 @@
+ #include <drm/drmP.h>
+ #endif
+ 
++#if defined(NV_DRM_DRM_PRINT_H_PRESENT)
++#include <drm/drm_print.h>
++#endif
++
+ #if defined(NV_DRM_DRM_DEVICE_H_PRESENT)
+ #include <drm/drm_device.h>
+ #endif
+-- 
+2.39.5
+

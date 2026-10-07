@@ -1,0 +1,25 @@
+From ca1fe2aeb53df07837526874697b99de9b37a788 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 31 Jan 2024 03:06:19 +0100
+Subject: [PATCH] fix typos
+
+---
+ nvidia-uvm/uvm.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/nvidia-uvm/uvm.h b/nvidia-uvm/uvm.h
+index ec804ad..da9bbf8 100644
+--- a/nvidia-uvm/uvm.h
++++ b/nvidia-uvm/uvm.h
+@@ -1089,7 +1089,7 @@ NV_STATUS UvmCleanUpZombieResources(void);
+ // non-fault-capable HW engines.
+ //
+ // By default, all mappings to this VA range have read, write and atomic access
+-// and are uncached. This behavior can be overriden for GPUs by explicitly
++// and are uncached. This behavior can be overridden for GPUs by explicitly
+ // specifying the mapping and caching attributes through this API. At most one
+ // GPU may cache the allocation, in which case no other processor should write
+ // to it. These GPUs must have been registered via UvmRegisterGpu. These GPUs
+-- 
+2.20.1
+

@@ -1,0 +1,43 @@
+From c1f403ed1db511331b408cd8e7da1109b23df465 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Thu, 29 Jan 2026 14:36:25 +0100
+Subject: [PATCH] backport conftest.sh comment changes from 515.48.07
+
+---
+ conftest.sh | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/conftest.sh b/conftest.sh
+index 7ab9d36b..1d8e0598 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1804,7 +1804,7 @@ compile_test() {
+             #
+             # The commit c28198889c15 removed the function
+             # 'PDE_DATA()', and replaced it with 'pde_data()'
+-            # ("proc: remove PDE_DATA() completely") in v5.17-rc1. 
++            # ("proc: remove PDE_DATA() completely") in v5.17-rc1.
+             #
+             CODE="
+             #include <linux/proc_fs.h>
+@@ -4279,7 +4279,7 @@ compile_test() {
+             #
+             # Determine if the 'struct proc_ops' type is present.
+             #
+-            # Added by commit d56c0d45f0e2 ("proc: decouple proc from VFS with 
++            # Added by commit d56c0d45f0e2 ("proc: decouple proc from VFS with
+             # "struct proc_ops"") in 5.6-rc1
+             #
+             CODE="
+@@ -5344,7 +5344,7 @@ case "$6" in
+ 
+         HASH=$(get_configuration_option CONFIG_MODULE_SIG_HASH)
+ 
+-        if [ $? -eq 0 ] && [ -n $HASH ]; then
++        if [ $? -eq 0 ] && [ -n "$HASH" ]; then
+             echo $HASH
+             exit 0
+         else
+-- 
+2.39.5
+

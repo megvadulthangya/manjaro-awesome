@@ -1,0 +1,131 @@
+From 4fc3ee6fdd8c99f9779fc13c41e79cb1194aafb1 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sun, 8 Dec 2024 22:13:22 +0100
+Subject: [PATCH] fix more warnings
+
+---
+ common/inc/nv-linux.h                 | 4 ++++
+ nvidia-modeset/nvidia-modeset-linux.c | 1 +
+ nvidia/nv-acpi.c                      | 2 ++
+ nvidia/nv-frontend.c                  | 3 ---
+ nvidia/nv-frontend.h                  | 3 +++
+ nvidia/nv-gpu-numa.c                  | 2 +-
+ nvidia/nv-instance.c                  | 1 +
+ nvidia/nv-mmap.c                      | 1 +
+ 8 files changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/common/inc/nv-linux.h b/common/inc/nv-linux.h
+index 6c6b9eda..ad1e6cc8 100644
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -614,14 +614,18 @@ static inline void nv_iounmap(void *ptr, NvU64 size)
+     { \
+         (ptr) = kmalloc(size, NV_GFP_KERNEL); \
+         if (ptr) \
++        { \
+             NV_MEMDBG_ADD(ptr, size); \
++        } \
+     }
+ 
+ #define NV_KMALLOC_ATOMIC(ptr, size) \
+     { \
+         (ptr) = kmalloc(size, NV_GFP_ATOMIC); \
+         if (ptr) \
++        { \
+             NV_MEMDBG_ADD(ptr, size); \
++        } \
+     }
+ 
+ 
+diff --git a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
+index a5ce0659..00105f68 100644
+--- a/nvidia-modeset/nvidia-modeset-linux.c
++++ b/nvidia-modeset/nvidia-modeset-linux.c
+@@ -818,6 +818,7 @@ failed:
+     return NULL;
+ }
+ 
++static
+ void NVKMS_API_CALL nvkms_close_common(struct nvkms_per_open *popen)
+ {
+     /*
+diff --git a/nvidia/nv-acpi.c b/nvidia/nv-acpi.c
+index 23a71c14..5c7ac4a8 100644
+--- a/nvidia/nv-acpi.c
++++ b/nvidia/nv-acpi.c
+@@ -673,7 +673,9 @@ acpi_status nv_acpi_find_methods(
+ 
+ void NV_API_CALL nv_acpi_methods_uninit(void)
+ {
++#if defined(NV_ACPI_BUS_GET_DEVICE_PRESENT)
+     struct acpi_device *device = NULL;
++#endif
+ 
+     nvif_handle = NULL;
+     wmmx_handle = NULL;
+diff --git a/nvidia/nv-frontend.c b/nvidia/nv-frontend.c
+index 59c69a06..dea97c4a 100644
+--- a/nvidia/nv-frontend.c
++++ b/nvidia/nv-frontend.c
+@@ -40,9 +40,6 @@ nvidia_module_t *nv_minor_num_table[NV_FRONTEND_CONTROL_DEVICE_MINOR_MAX + 1];
+ #if defined(CONFIG_PROC_FS)
+ static struct proc_dir_entry *nv_proc_topdir;
+ #endif
+-#else
+-int nvidia_init_module(void);
+-void nvidia_exit_module(void);
+ #endif
+ 
+ /* EXPORTS to Linux Kernel */
+diff --git a/nvidia/nv-frontend.h b/nvidia/nv-frontend.h
+index 38d81382..d125a131 100644
+--- a/nvidia/nv-frontend.h
++++ b/nvidia/nv-frontend.h
+@@ -31,4 +31,7 @@
+ int nvidia_frontend_add_device(nvidia_module_t *, nv_linux_state_t *);
+ int nvidia_frontend_remove_device(nvidia_module_t *, nv_linux_state_t *);
+ 
++int nvidia_init_module(void);
++void nvidia_exit_module(void);
++
+ #endif
+diff --git a/nvidia/nv-gpu-numa.c b/nvidia/nv-gpu-numa.c
+index 7916d35e..b1797ebb 100644
+--- a/nvidia/nv-gpu-numa.c
++++ b/nvidia/nv-gpu-numa.c
+@@ -140,7 +140,7 @@ static NV_STATUS bad_idea_write_string_to_file(const char *path_to_file,
+ // This is a callback for iterate_dir. The callback records the range of memory
+ // block IDs assigned to this NUMA node. The return values are Linux kernel
+ // errno values, because the caller is Linux's iterate_dir() routine.
+-static int filldir_get_memblock_id(struct dir_context *ctx,
++static bool filldir_get_memblock_id(struct dir_context *ctx,
+                                    const char *name,
+                                    int name_len,
+                                    loff_t offset,
+diff --git a/nvidia/nv-instance.c b/nvidia/nv-instance.c
+index 33d39c2e..2ebc0f50 100644
+--- a/nvidia/nv-instance.c
++++ b/nvidia/nv-instance.c
+@@ -13,6 +13,7 @@
+ #include "nv-linux.h"
+ #include "nv-frontend.h"
+ #include "nv-pci-table.h"
++#include "nv-instance.h"
+ 
+ #define MODULE_BASE_NAME "nvidia"
+ #define MODULE_INSTANCE_NUMBER 0
+diff --git a/nvidia/nv-mmap.c b/nvidia/nv-mmap.c
+index e1b8b0ed..a5f08940 100644
+--- a/nvidia/nv-mmap.c
++++ b/nvidia/nv-mmap.c
+@@ -261,6 +261,7 @@ int nv_encode_caching(
+         case NV_MEMORY_CACHED:
+             if (NV_ALLOW_CACHING(memory_type))
+                 break;
++            __attribute__((__fallthrough__));
+         default:
+             nv_printf(NV_DBG_ERRORS,
+                 "NVRM: VM: cache type %d not supported for memory type %d!\n",
+-- 
+2.39.5
+

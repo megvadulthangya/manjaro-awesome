@@ -1,0 +1,35 @@
+From 2f7da9ebd45f795f12e3e968d3c42ecef6bebb7a Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 28 Jan 2026 15:26:45 +0100
+Subject: [PATCH 1/4] backport for_each_*_plane_in_state changes from
+ 580.119.02
+
+---
+ nvidia-drm/nvidia-drm-helper.c  | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/nvidia-drm/nvidia-drm-helper.c b/nvidia-drm/nvidia-drm-helper.c
+index 8b89afee..fa9e4588 100644
+--- a/nvidia-drm/nvidia-drm-helper.c
++++ b/nvidia-drm/nvidia-drm-helper.c
+@@ -71,7 +71,7 @@ static void __nv_drm_framebuffer_put(struct drm_framebuffer *fb)
+  * drm_atomic_helper_disable_all() is copied from
+  * linux/drivers/gpu/drm/drm_atomic_helper.c and modified to use
+  * nv_drm_for_each_crtc instead of drm_for_each_crtc to loop over all crtcs,
+- * use nv_drm_for_each_*_in_state instead of for_each_connector_in_state to loop
++ * use for_each_new_*_in_state instead of for_each_connector_in_state to loop
+  * over all modeset object states, and use drm_atomic_state_free() if
+  * drm_atomic_state_put() is not available.
+  *
+@@ -152,7 +152,7 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+             goto free;
+     }
+ 
+-    nv_drm_for_each_plane_in_state(state, plane, plane_state, i) {
++    for_each_new_plane_in_state(state, plane, plane_state, i) {
+         ret = drm_atomic_set_crtc_for_plane(plane_state, NULL);
+         if (ret < 0)
+             goto free;
+-- 
+2.39.5
+

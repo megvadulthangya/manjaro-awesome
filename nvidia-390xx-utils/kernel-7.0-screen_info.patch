@@ -1,0 +1,121 @@
+diff -Naur a/common/inc/nv-linux.h b/common/inc/nv-linux.h
+--- a/common/inc/nv-linux.h	2026-09-30 11:52:02.204871717 +0200
++++ b/common/inc/nv-linux.h	2026-10-02 04:31:42.958813697 +0200
+@@ -205,6 +205,9 @@
+ #endif
+ #if defined(NV_LINUX_SCREEN_INFO_H_PRESENT)
+ #include <linux/screen_info.h>      /* screen_info                      */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++#include <linux/sysfb.h>            /* sysfb_primary_display            */
++#endif
+ #else
+ #include <linux/tty.h>              /* screen_info                      */
+ #endif
+diff -Naur a/conftest.sh b/conftest.sh
+--- a/conftest.sh	2026-09-30 11:52:02.212738654 +0200
++++ b/conftest.sh	2026-10-02 04:50:42.249810823 +0200
+@@ -4907,6 +4907,27 @@
+             compile_check_conftest "$CODE" "NV_ACPI_VIDEO_BACKLIGHT_USE_NATIVE" "" "functions"
+         ;;
+ 
++        is_export_symbol_present_screen_info)
++            #
++            # Determine if the export of screen_info is present.
++            #
++            # added:   2026-04-30  Archlinux AUR nvidia-390xx-utils kernel 7.0
++            #          patch that removed screen_info and replaced it with
++            #          sysfb_primary_display.
++            #
++            CODE="
++            #include <linux/types.h>
++            #include <linux/export.h>
++            #include <linux/fb.h>
++            #if defined(NV_LINUX_SCREEN_INFO_H_PRESENT)
++            #include <linux/screen_info.h>
++            #endif
++            void conftest(void) {
++                struct screen_info *si = &screen_info;
++            }"
++            compile_check_conftest "$CODE" "NV_EXPORT_SYMBOL_SCREEN_INFO" "" "symbols"
++        ;;
++
+         drm_connector_has_override_edid)
+             #
+             # Determine if 'struct drm_connector' has an 'override_edid' member.
+diff -Naur a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
+--- a/nvidia/nvidia.Kbuild	2026-09-30 11:52:02.187033032 +0200
++++ b/nvidia/nvidia.Kbuild	2026-10-02 04:31:43.637811327 +0200
+@@ -175,6 +175,7 @@
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_dma_ops
++NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_screen_info
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_screen_info
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl___vma_start_write
+diff -Naur a/nvidia/os-interface.c b/nvidia/os-interface.c
+--- a/nvidia/os-interface.c	2026-09-30 11:52:02.139146055 +0200
++++ b/nvidia/os-interface.c	2026-10-02 04:31:43.638811324 +0200
+@@ -1124,6 +1124,14 @@
+ )
+ {
+ #if (defined(NVCPU_X86) || defined(NVCPU_X86_64))
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 20, 0)
++    // Rel. commit "sysfb: Replace screen_info with sysfb_primary_display" (Thomas Zimmermann, 26 Nov 2025)
++    const struct screen_info *si = &sysfb_primary_display.screen;
++#elif defined (NV_IS_EXPORT_SYMBOL_PRESENT_screen_info)
++    const struct screen_info *si = &screen_info;
++#endif
++
+     //
+     // If there is not a framebuffer console, return 0 size.
+     //
+@@ -1131,21 +1139,21 @@
+     // initialization, and then will be set to a value, such as
+     // VIDEO_TYPE_VLFB or VIDEO_TYPE_EFI if an fbdev console is used.
+     //
+-    if (screen_info.orig_video_isVGA <= 1)
++    if (si->orig_video_isVGA <= 1)
+     {
+         *pPhysicalAddress = 0;
+         *pFbWidth = *pFbHeight = *pFbDepth = *pFbPitch = 0;
+         return;
+     }
+ 
+-    *pPhysicalAddress = screen_info.lfb_base;
++    *pPhysicalAddress = si->lfb_base;
+ #if defined(VIDEO_CAPABILITY_64BIT_BASE)
+-    *pPhysicalAddress |= (NvU64)screen_info.ext_lfb_base << 32;
++    *pPhysicalAddress |= (NvU64)si->ext_lfb_base << 32;
+ #endif
+-    *pFbWidth = screen_info.lfb_width;
+-    *pFbHeight = screen_info.lfb_height;
+-    *pFbDepth = screen_info.lfb_depth;
+-    *pFbPitch = screen_info.lfb_linelength;
++    *pFbWidth = si->lfb_width;
++    *pFbHeight = si->lfb_height;
++    *pFbDepth = si->lfb_depth;
++    *pFbPitch = si->lfb_linelength;
+ #else
+     *pPhysicalAddress = 0;
+     *pFbWidth = *pFbHeight = *pFbDepth = *pFbPitch = 0;
+diff -Naur a/nvidia-drm/nvidia-dma-fence-helper.h b/nvidia-drm/nvidia-dma-fence-helper.h
+--- a/nvidia-drm/nvidia-dma-fence-helper.h	2022-10-12 11:30:31.000000000 +0200
++++ b/nvidia-drm/nvidia-dma-fence-helper.h	2026-10-02 04:31:43.095813219 +0200
+@@ -89,11 +89,12 @@
+ #endif
+ }
+ 
+-static inline int nv_dma_fence_signal(nv_dma_fence_t *fence) {
++// Rel. commit "dma-buf/dma-fence: Remove return code of signaling-functions" (Philipp Stanner, 1 Dec 2025)
++static inline void nv_dma_fence_signal(nv_dma_fence_t *fence) {
+ #if defined(NV_LINUX_FENCE_H_PRESENT)
+-    return fence_signal(fence);
++    fence_signal(fence);
+ #else
+-    return dma_fence_signal(fence);
++    dma_fence_signal(fence);
+ #endif
+ }
+ 

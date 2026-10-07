@@ -1,0 +1,69 @@
+Author: Andreas Beckmann <anbe@debian.org>
+Author: Tomas Janousek <tomi@nomi.cz>
+Description: use KBUILD_CFLAGS and (KBUILD_)LDFLAGS
+ skip $(GCC_PLUGINS_CFLAGS): fixes build failure when a kernel
+ is built with CONFIG_GCC_PLUGINS, CONFIG_GCC_PLUGIN_STRUCTLEAK
+ and CONFIG_GCC_PLUGIN_RANDSTRUCT -- Tomas Janousek
+
+--- a/Kbuild
++++ b/Kbuild
+@@ -103,13 +103,25 @@ CC ?= cc
+ HOST_CC ?= $(CC)
+ LD ?= ld
+ 
++NV_REMOVE_KBUILD_CFLAGS = $(GCC_PLUGINS_CFLAGS)
++NV_REMOVE_KBUILD_CFLAGS += -Werror-implicit-function-declaration
++
++NV_CFLAGS_FROM_KBUILD = \
++	$(filter-out $(NV_REMOVE_KBUILD_CFLAGS),\
++	$(KBUILD_CFLAGS)\
++	)
++
+ NV_CONFTEST_SCRIPT := $(src)/conftest.sh
+ NV_CONFTEST_HEADER := $(obj)/conftest/headers.h
+ 
+ NV_CONFTEST_CMD := /bin/sh $(NV_CONFTEST_SCRIPT) \
+  "$(strip $(CC))" "$(strip $(HOST_CC))" $(ARCH) $(NV_KERNEL_SOURCES) $(NV_KERNEL_OUTPUT)
+ 
+-NV_CONFTEST_CFLAGS := $(shell $(NV_CONFTEST_CMD) build_cflags)
++NV_CFLAGS_FROM_CONFTEST := $(shell $(NV_CONFTEST_CMD) build_cflags)
++
++NV_CONFTEST_CFLAGS =
++NV_CONFTEST_CFLAGS += $(NV_CFLAGS_FROM_KBUILD)
++NV_CONFTEST_CFLAGS += $(NV_CFLAGS_FROM_CONFTEST)
+ 
+ NV_CONFTEST_COMPILE_TEST_HEADERS := $(obj)/conftest/macros.h
+ NV_CONFTEST_COMPILE_TEST_HEADERS += $(obj)/conftest/functions.h
+--- a/nvidia/nvidia.Kbuild
++++ b/nvidia/nvidia.Kbuild
+@@ -90,7 +90,7 @@ always += $(NVIDIA_INTERFACE)
+ always-y += $(NVIDIA_INTERFACE)
+ 
+ $(obj)/$(NVIDIA_INTERFACE): $(addprefix $(obj)/,$(NVIDIA_OBJECTS))
+-	$(LD) -r -o $@ $^
++	$(LD) $(or $(KBUILD_LDFLAGS),$(LDFLAGS)) -r -o $@ $^
+ 
+ 
+ #
+--- a/Makefile
++++ b/Makefile
+@@ -120,7 +120,7 @@ else
+   # cannot be defined in the *Kbuild files, which are only used during stage 1.
+ 
+   %-linux.o: modules
+-	$(LD) $(NV_MODULE_COMMON_SCRIPTS) -r -o $@ \
++	$(LD) $(or $(KBUILD_LDFLAGS),$(LDFLAGS)) $(NV_MODULE_COMMON_SCRIPTS) -r -o $@ \
+ 	  $(subst nv,nvidia,$*).mod.o $(subst nv,nvidia,$*)/$*-interface.o
+ 
+   # Kbuild's "clean" rule won't clean up the conftest headers on its own, and
+--- a/nvidia-modeset/nvidia-modeset.Kbuild
++++ b/nvidia-modeset/nvidia-modeset.Kbuild
+@@ -72,7 +72,7 @@ always += $(NVIDIA_MODESET_INTERFACE)
+ always-y += $(NVIDIA_MODESET_INTERFACE)
+ 
+ $(obj)/$(NVIDIA_MODESET_INTERFACE): $(addprefix $(obj)/,$(NVIDIA_MODESET_OBJECTS))
+-	$(LD) -r -o $@ $^
++	$(LD) $(or $(KBUILD_LDFLAGS),$(LDFLAGS)) -r -o $@ $^
+ 
+ #
+ # Register the conftests needed by nvidia-modeset.ko

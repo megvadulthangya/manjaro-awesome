@@ -1,0 +1,82 @@
+From fc965fd6dcb6aab248084292618af6b4872cf250 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Tue, 27 Jan 2026 20:25:31 +0100
+Subject: [PATCH] backport dma_map_ops_has_map_phys changes from 580.126.09
+
+---
+ conftest.sh          | 29 +++++++++++++++++++++++++++++
+ nvidia/nv-dma.c      |  4 ++++
+ nvidia/nvidia.Kbuild |  1 +
+ 3 files changed, 34 insertions(+)
+
+diff --git a/conftest.sh b/conftest.sh
+index b1c82259..ee7b128b 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -3933,6 +3933,35 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_KMEM_CACHE_CREATE_USERCOPY_PRESENT" "" "functions"
+         ;;
+ 
++        dma_map_ops_has_map_phys)
++            #
++            # Determine if .map_phys exists in struct dma_map_ops.
++            #
++            # Commit 14cb413af00c ("dma-mapping: remove unused mapping resource callbacks")
++            # removed .map_resource operation and replaced it with .map_phys.
++            #
++            echo "$CONFTEST_PREAMBLE
++            #include <linux/dma-map-ops.h>
++            int conftest_dma_map_ops_has_map_phys(void) {
++                return offsetof(struct dma_map_ops, map_phys);
++            }
++            int conftest_dma_map_ops_has_unmap_phys(void) {
++                return offsetof(struct dma_map_ops, unmap_phys);
++            }" > conftest$$.c
++
++            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
++            rm -f conftest$$.c
++
++            if [ -f conftest$$.o ]; then
++                echo "#define NV_DMA_MAP_OPS_HAS_MAP_PHYS" | append_conftest "types"
++                rm -f conftest$$.o
++                return
++            else
++                echo "#undef NV_DMA_MAP_OPS_HAS_MAP_PHYS" | append_conftest "types"
++                return
++            fi
++        ;;
++
+         drm_fb_create_takes_format_info)
+             #
+             # Determine if a `struct drm_format_info *` is passed into
+diff --git a/nvidia/nv-dma.c b/nvidia/nv-dma.c
+index 343e878d..e7584dea 100644
+--- a/nvidia/nv-dma.c
++++ b/nvidia/nv-dma.c
+@@ -619,7 +619,11 @@ static NvBool nv_dma_is_map_resource_implemented
+ #endif
+     }
+ 
++#if defined(NV_DMA_MAP_OPS_HAS_MAP_PHYS)
++    return (ops->map_phys != NULL);
++#else
+     return (ops->map_resource != NULL);
++#endif
+ #else
+     return NV_FALSE;
+ #endif
+diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
+index 5e599969..5721092b 100644
+--- a/nvidia/nvidia.Kbuild
++++ b/nvidia/nvidia.Kbuild
+@@ -164,6 +164,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_nocache
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += vga_tryget
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_bus_get_device
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_backlight_use_native
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += dma_map_ops_has_map_phys
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += vma_flags_set_word
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += vm_flags_set
+ 
+-- 
+2.39.5
+

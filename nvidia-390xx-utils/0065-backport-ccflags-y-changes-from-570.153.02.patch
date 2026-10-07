@@ -1,0 +1,42 @@
+From 815a47f32356dadceae09b7b83cd7625f97b529b Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sat, 24 May 2025 22:10:32 +0200
+Subject: [PATCH] backport ccflags-y changes from 570.153.02
+
+---
+ Kbuild | 10 ++--------
+ 1 file changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/Kbuild b/Kbuild
+index 63da3d95..b9cb5e5e 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -68,13 +68,6 @@ $(foreach _module, $(NV_KERNEL_MODULES), \
+  $(eval include $(src)/$(_module)/$(_module).Kbuild))
+ 
+ 
+-#
+-# Define CFLAGS that apply to all the NVIDIA kernel modules. EXTRA_CFLAGS
+-# is deprecated since 2.6.24 in favor of ccflags-y, but we need to support
+-# older kernels which do not have ccflags-y. Newer kernels append
+-# $(EXTRA_CFLAGS) to ccflags-y for compatibility.
+-#
+-
+ EXTRA_CFLAGS += -I$(src)/common/inc
+ EXTRA_CFLAGS += -I$(src)
+ EXTRA_CFLAGS += -Wall -MD $(DEFINES) $(INCLUDES) -Wsign-compare -Wno-cast-qual -Wno-error
+@@ -86,9 +79,10 @@ EXTRA_CFLAGS += -DNV_KERNEL_INTERFACE_LAYER
+ #
+ # Detect SGI UV systems and apply system-specific optimizations.
+ #
++ccflags-y += $(EXTRA_CFLAGS)
+ 
+ ifneq ($(wildcard /proc/sgi_uv),)
+- EXTRA_CFLAGS += -DNV_CONFIG_X86_UV
++ ccflags-y += -DNV_CONFIG_X86_UV
+ endif
+ 
+ 
+-- 
+2.39.5
+

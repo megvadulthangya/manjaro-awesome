@@ -1,0 +1,24 @@
+From b041d7a6c7064527e7d7816a1ecf5d6d17c26894 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Thu, 19 Dec 2024 02:14:55 +0100
+Subject: [PATCH] backport uvm warning fixes from 396.18
+
+---
+ nvidia-uvm/uvm8_volta_access_counter_buffer.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nvidia-uvm/uvm8_volta_access_counter_buffer.c b/nvidia-uvm/uvm8_volta_access_counter_buffer.c
+index 992cca5c..f0a045a8 100644
+--- a/nvidia-uvm/uvm8_volta_access_counter_buffer.c
++++ b/nvidia-uvm/uvm8_volta_access_counter_buffer.c
+@@ -23,6 +23,7 @@
+ 
+ #include "uvm_linux.h"
+ #include "uvm8_gpu.h"
++#include "uvm8_hal.h"
+ #include "clc365.h"
+ #include "uvm8_volta_fault_buffer.h"
+ 
+-- 
+2.39.5
+

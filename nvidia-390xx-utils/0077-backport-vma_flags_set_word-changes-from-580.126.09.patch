@@ -1,0 +1,144 @@
+From a1400514462841faee99c968366a90bb31616bd0 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Tue, 27 Jan 2026 19:48:54 +0100
+Subject: [PATCH] backport vma_flags_set_word changes from 580.126.09
+
+---
+ common/inc/nv-mm.h   | 30 ++++++++++++++++++++++++------
+ conftest.sh          | 35 ++++++++++++++++++++++++++---------
+ nvidia/nvidia.Kbuild |  3 ++-
+ 3 files changed, 52 insertions(+), 16 deletions(-)
+
+diff --git a/common/inc/nv-mm.h b/common/inc/nv-mm.h
+index d7ee64e5..2a492d6e 100644
+--- a/common/inc/nv-mm.h
++++ b/common/inc/nv-mm.h
+@@ -268,7 +268,27 @@ static inline struct rw_semaphore *nv_mmap_get_lock(struct mm_struct *mm)
+  * Commit 45ad9f5290dc updated vma_start_write() to call __vma_start_write().
+  */
+ void nv_vma_start_write(struct vm_area_struct *);
++
++static inline void nv_vma_flags_set_word(struct vm_area_struct *vma, unsigned long flags)
++{
++    nv_vma_start_write(vma);
++#if defined(NV_VMA_FLAGS_SET_WORD_PRESENT)
++    vma_flags_set_word(&vma->flags, flags);
++#else
++    ACCESS_PRIVATE(vma, __vm_flags) |= flags;
+ #endif
++}
++
++static inline void nv_vma_flags_clear_word(struct vm_area_struct *vma, unsigned long flags)
++{
++    nv_vma_start_write(vma);
++#if defined(NV_VMA_FLAGS_SET_WORD_PRESENT)
++    vma_flags_clear_word(&vma->flags, flags);
++#else
++    ACCESS_PRIVATE(vma, __vm_flags) &= ~flags;
++#endif
++}
++#endif // !NV_CAN_CALL_VMA_START_WRITE
+ 
+ #include <linux/version.h>
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
+@@ -278,9 +298,8 @@ typedef unsigned long vm_flags_t;
+ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
+ {
+ #if !NV_CAN_CALL_VMA_START_WRITE
+-    nv_vma_start_write(vma);
+-    ACCESS_PRIVATE(vma, __vm_flags) |= flags;
+-#elif defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)
++    nv_vma_flags_set_word(vma, flags);
++#elif defined(NV_VM_FLAGS_SET_PRESENT)
+     vm_flags_set(vma, flags);
+ #else
+     vma->vm_flags |= flags;
+@@ -290,9 +309,8 @@ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
+ static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags)
+ {
+ #if !NV_CAN_CALL_VMA_START_WRITE
+-    nv_vma_start_write(vma);
+-    ACCESS_PRIVATE(vma, __vm_flags) &= ~flags;
+-#elif defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)
++    nv_vma_flags_clear_word(vma, flags);
++#elif defined(NV_VM_FLAGS_SET_PRESENT)
+     vm_flags_clear(vma, flags);
+ #else
+     vma->vm_flags &= ~flags;
+diff --git a/conftest.sh b/conftest.sh
+index 9bd240f5..b1c82259 100755
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -4898,22 +4898,39 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID" "" "types"
+         ;;
+ 
+-        vm_area_struct_has_const_vm_flags)
++        vm_flags_set)
+             #
+-            # Determine if the 'vm_area_struct' structure has
+-            # const 'vm_flags'.
++            # Determine if the vm_flags_set() function is present. The
++            # presence of this function indicates that the vm_flags_clear()
++            # function is also present.
+             #
+-            # A union of '__vm_flags' and 'const vm_flags' was added by
++            # The functions vm_flags_set()/ vm_flags_clear() were added by
+             # commit bc292ab00f6c ("mm: introduce vma->vm_flags wrapper
+-            # functions") in v6.3.
++            # functions") in v6.3-rc1 (2023-02-09).
+             #
+             CODE="
+-            #include <linux/mm_types.h>
+-            int conftest_vm_area_struct_has_const_vm_flags(void) {
+-                return offsetof(struct vm_area_struct, __vm_flags);
++            #include <linux/mm.h>
++            void conftest_vm_flags_set(void) {
++                vm_flags_set();
++            }"
++
++            compile_check_conftest "$CODE" "NV_VM_FLAGS_SET_PRESENT" "" "functions"
++        ;;
++
++        vma_flags_set_word)
++            #
++            # Determine if the vma_flags_set_word() function is present.
++            #
++            # Added by commit c3f7c506e8f1 ("mm: introduce VMA flags bitmap type")
++            # in v6.19-rc1.
++            #
++            CODE="
++            #include <linux/mm.h>
++            void conftest_vma_flags_set_word(void) {
++                vma_flags_set_word();
+             }"
+ 
+-            compile_check_conftest "$CODE" "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" "" "types"
++            compile_check_conftest "$CODE" "NV_VMA_FLAGS_SET_WORD_PRESENT" "" "functions"
+         ;;
+ 
+         drm_driver_has_dumb_destroy)
+diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
+index aa405d41..5e599969 100644
+--- a/nvidia/nvidia.Kbuild
++++ b/nvidia/nvidia.Kbuild
+@@ -164,6 +164,8 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_nocache
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += vga_tryget
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_bus_get_device
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_backlight_use_native
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += vma_flags_set_word
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += vm_flags_set
+ 
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
+@@ -208,7 +210,6 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += sysfs_slab_unlink
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vmalloc_has_pgprot_t_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += pci_dev_has_skip_bus_pm
+ NV_CONFTEST_TYPE_COMPILE_TESTS += pci_channel_state
+-NV_CONFTEST_TYPE_COMPILE_TESTS += vm_area_struct_has_const_vm_flags
+ 
+ NV_CONFTEST_GENERIC_COMPILE_TESTS += dom0_kernel_present
+ NV_CONFTEST_GENERIC_COMPILE_TESTS += nvidia_vgpu_kvm_build
+-- 
+2.39.5
+

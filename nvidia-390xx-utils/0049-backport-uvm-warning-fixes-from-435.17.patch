@@ -1,0 +1,110 @@
+From 9355f4a46a009922dcd0b578ff83f284c801550c Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Wed, 18 Dec 2024 01:07:20 +0100
+Subject: [PATCH] backport uvm warning fixes from 435.17
+
+---
+ nvidia-uvm/uvm8_gpu.c                   | 1 +
+ nvidia-uvm/uvm8_gpu_replayable_faults.c | 1 +
+ nvidia-uvm/uvm8_perf_prefetch.c         | 1 +
+ nvidia-uvm/uvm8_perf_thrashing.c        | 1 +
+ nvidia-uvm/uvm8_range_group.c           | 1 +
+ nvidia-uvm/uvm8_user_channel.c          | 1 +
+ nvidia-uvm/uvm8_va_space.c              | 2 ++
+ 7 files changed, 8 insertions(+)
+
+diff --git a/nvidia-uvm/uvm8_gpu.c b/nvidia-uvm/uvm8_gpu.c
+index 775dd09d..66e2148f 100644
+--- a/nvidia-uvm/uvm8_gpu.c
++++ b/nvidia-uvm/uvm8_gpu.c
+@@ -38,6 +38,7 @@
+ #include "ctrl2080mc.h"
+ #include "nv-kthread-q.h"
+ #include "uvm8_gpu_access_counters.h"
++#include "uvm8_test.h"
+ 
+ int uvm8_ats_mode = 0;
+ module_param(uvm8_ats_mode, int, S_IRUGO);
+diff --git a/nvidia-uvm/uvm8_gpu_replayable_faults.c b/nvidia-uvm/uvm8_gpu_replayable_faults.c
+index f2279b6b..9e1f4682 100644
+--- a/nvidia-uvm/uvm8_gpu_replayable_faults.c
++++ b/nvidia-uvm/uvm8_gpu_replayable_faults.c
+@@ -35,6 +35,7 @@
+ #include "uvm8_procfs.h"
+ #include "uvm8_perf_thrashing.h"
+ #include "uvm8_gpu_non_replayable_faults.h"
++#include "uvm8_test.h"
+ 
+ // TODO: Bug 1881601: [uvm] Add fault handling overview for replayable and
+ // non-replayable faults
+diff --git a/nvidia-uvm/uvm8_perf_prefetch.c b/nvidia-uvm/uvm8_perf_prefetch.c
+index 4f390ee7..8206d638 100644
+--- a/nvidia-uvm/uvm8_perf_prefetch.c
++++ b/nvidia-uvm/uvm8_perf_prefetch.c
+@@ -28,6 +28,7 @@
+ #include "uvm8_kvmalloc.h"
+ #include "uvm8_va_block.h"
+ #include "uvm8_va_range.h"
++#include "uvm8_test.h"
+ 
+ // Global cache to allocate the per-VA block prefetch detection structures
+ static struct kmem_cache *g_prefetch_info_cache __read_mostly;
+diff --git a/nvidia-uvm/uvm8_perf_thrashing.c b/nvidia-uvm/uvm8_perf_thrashing.c
+index 0ed3b188..5d47b0ea 100644
+--- a/nvidia-uvm/uvm8_perf_thrashing.c
++++ b/nvidia-uvm/uvm8_perf_thrashing.c
+@@ -29,6 +29,7 @@
+ #include "uvm8_va_range.h"
+ #include "uvm8_kvmalloc.h"
+ #include "uvm8_tools.h"
++#include "uvm8_test.h"
+ 
+ // Number of bits for page-granularity time stamps. Currently we ignore the first 6 bits
+ // of the timestamp (i.e. we have 64ns resolution, which is good enough)
+diff --git a/nvidia-uvm/uvm8_range_group.c b/nvidia-uvm/uvm8_range_group.c
+index 1a3f56d9..798b3ce6 100644
+--- a/nvidia-uvm/uvm8_range_group.c
++++ b/nvidia-uvm/uvm8_range_group.c
+@@ -29,6 +29,7 @@
+ #include "uvm_ioctl.h"
+ #include "uvmtypes.h"
+ #include "uvm8_api.h"
++#include "uvm8_test.h"
+ 
+ static struct kmem_cache *g_uvm_range_group_cache __read_mostly;
+ static struct kmem_cache *g_uvm_range_group_range_cache __read_mostly;
+diff --git a/nvidia-uvm/uvm8_user_channel.c b/nvidia-uvm/uvm8_user_channel.c
+index e8906f9e..7e2d30a5 100644
+--- a/nvidia-uvm/uvm8_user_channel.c
++++ b/nvidia-uvm/uvm8_user_channel.c
+@@ -36,6 +36,7 @@
+ #include "uvm8_map_external.h"
+ #include "uvm8_init.h"
+ #include "nv_uvm_interface.h"
++#include "uvm8_test.h"
+ 
+ #include <linux/sort.h>
+ 
+diff --git a/nvidia-uvm/uvm8_va_space.c b/nvidia-uvm/uvm8_va_space.c
+index 42b7bb9a..c8e12225 100644
+--- a/nvidia-uvm/uvm8_va_space.c
++++ b/nvidia-uvm/uvm8_va_space.c
+@@ -21,6 +21,7 @@
+ 
+ *******************************************************************************/
+ 
++#include "uvm8_api.h"
+ #include "uvm8_va_space.h"
+ #include "uvm8_va_range.h"
+ #include "uvm8_lock.h"
+@@ -31,6 +32,7 @@
+ #include "uvm8_tools.h"
+ #include "uvm8_hal.h"
+ #include "uvm8_map_external.h"
++#include "uvm8_test.h"
+ #include "uvm_common.h"
+ #include "nv_uvm_interface.h"
+ #include "nv-kthread-q.h"
+-- 
+2.39.5
+
