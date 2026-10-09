@@ -6,6 +6,7 @@ Now with per-package session tracking + conflict resolution.
 import re
 import time
 import logging
+import shlex
 from typing import List, Tuple, Optional, Dict, Set
 from pathlib import Path
 
@@ -139,21 +140,27 @@ class DependencyInstaller:
         else:
             return "unknown"
 
-    def _stderr_has_fatal_error(self, stderr: str) -> bool:
+    def _stderr_needs_verification(self, stderr: str) -> bool:
         """
-        Detect fatal pacman errors in stderr even when exit code is 0.
+        Detect stderr patterns that are *suspicious* when pacman/yay
+        returned exit code 0.
 
-        Some pacman hooks (e.g. DKMS) can fail while pacman itself still
-        exits 0. Without this check the installer would report success and
-        the subsequent makepkg step would fail in a confusing way.
+        These patterns do NOT by themselves prove a failed install —
+        in containers, harmless post-transaction hooks (e.g. "Loading
+        new kernel modules" which tries to talk to systemd) also emit
+        ``error: command failed to execute correctly``.
 
-        Only well-known fatal patterns are matched so that normal warnings
-        (``warning: ... is up to date -- skipping``) do not trigger this.
+        Therefore callers MUST follow up with ``_verify_packages_satisfied``
+        before declaring failure.
+
+        Only well-known patterns are matched so that ordinary warnings
+        (e.g. ``warning: ... is up to date -- skipping``) do not trigger
+        a verification query.
         """
         if not stderr:
             return False
 
-        fatal_patterns = (
+        suspicious_patterns = (
             "error: command failed to execute correctly",
             "error: failed to commit transaction",
             "error: failed to init transaction",
@@ -164,10 +171,46 @@ class DependencyInstaller:
         )
         for line in stderr.splitlines():
             line_lower = line.lower()
-            for pattern in fatal_patterns:
+            for pattern in suspicious_patterns:
                 if pattern in line_lower:
                     return True
         return False
+
+    def _verify_packages_satisfied(self, packages: List[str]) -> Tuple[bool, List[str]]:
+        """
+        Verify that all dependency specs in ``packages`` are satisfied by
+        currently installed packages.
+
+        Uses ``pacman -T`` which honors provides / virtual packages and
+        version constraints, e.g. ``nvidia-dkms=390.157`` is satisfied by
+        an installed ``nvidia-390xx-dkms-390.157-1`` (which provides
+        ``nvidia-dkms``). This is why we must NOT use ``pacman -Q`` on the
+        stripped base names — the concrete package name on disk may differ.
+
+        Returns:
+            (all_satisfied, unsatisfied_list)
+        """
+        if not packages:
+            return True, []
+
+        # Quote each dep spec to survive shell parsing. '=' is fine unquoted
+        # but quoting is safer for exotic spec strings.
+        args = " ".join(shlex.quote(p) for p in packages)
+        cmd = f"LC_ALL=C pacman -T {args}"
+        result = self.shell_executor.run_command(
+            cmd, log_cmd=False, check=False, timeout=60
+        )
+
+        if result.returncode == 0:
+            return True, []
+
+        # pacman -T prints the unsatisfied dep specs to stdout, one per line
+        unsatisfied = [
+            line.strip()
+            for line in (result.stdout or "").splitlines()
+            if line.strip()
+        ]
+        return False, unsatisfied
 
     # ------------------------------------------------------------------
     # Cleaning / provider / conflict
@@ -177,7 +220,7 @@ class DependencyInstaller:
         """
         Clean and validate package names.
 
-        IMPORTANT: Version constraints are now PRESERVED in the returned
+        IMPORTANT: Version constraints are PRESERVED in the returned
         list (e.g. ``nvidia-dkms=390.157``). Version stripping is only done
         internally for comparison / provider / conflict lookups, never for
         the actual pacman/yay command line.
@@ -350,6 +393,14 @@ class DependencyInstaller:
         are preserved end-to-end so pacman/yay install the correct pinned
         version instead of silently resolving to the latest one.
 
+        Exit-0-with-stderr-error handling:
+        A successful pacman exit code combined with a suspicious stderr
+        line does NOT by itself mean the install failed (post-transaction
+        hooks such as "Loading new kernel modules" fail harmlessly in
+        containers). We therefore *verify* with ``pacman -T`` that the
+        requested dep specs are actually satisfied before deciding. Only
+        genuine non-satisfaction triggers the yay fallback.
+
         Args:
             packages: List of package names to install (may include version pins)
             allow_aur: Whether to allow fallback to AUR (yay)
@@ -395,31 +446,41 @@ class DependencyInstaller:
             timeout=1200
         )
 
-        stderr_text = result.stderr or ""
-        pacman_stderr_fatal = self._stderr_has_fatal_error(stderr_text)
+        pacman_stderr = result.stderr or ""
+        pacman_stderr_suspicious = self._stderr_needs_verification(pacman_stderr)
 
-        if result.returncode == 0 and not pacman_stderr_fatal:
-            logger.info(f"DEP_INSTALL_OK=1 manager=pacman count={len(clean_packages)}")
-            return True
+        if result.returncode == 0:
+            if not pacman_stderr_suspicious:
+                logger.info(f"DEP_INSTALL_OK=1 manager=pacman count={len(clean_packages)}")
+                return True
 
-        # Determine failure reason for logging / fallback decision
-        if result.returncode == 0 and pacman_stderr_fatal:
-            failure_reason = "stderr_fatal_pattern_exit0"
+            # Exit 0 but suspicious stderr — verify real state before deciding
+            all_ok, unsatisfied = self._verify_packages_satisfied(clean_packages)
+            if all_ok:
+                logger.info(
+                    f"DEP_INSTALL_OK=1 manager=pacman count={len(clean_packages)} "
+                    f"note=stderr_had_non_fatal_post_hook_error"
+                )
+                logger.debug(f"pacman stderr (informational):\n{pacman_stderr}")
+                return True
+
             logger.warning(
-                f"DEP_INSTALL_PACMAN_EXIT0_WITH_ERROR=1 manager=pacman "
-                f"count={len(clean_packages)}"
+                f"DEP_INSTALL_PACMAN_EXIT0_UNVERIFIED=1 manager=pacman "
+                f"unsatisfied={unsatisfied}"
             )
             logger.error(f"STDOUT:\n{result.stdout}")
-            logger.error(f"STDERR:\n{result.stderr}")
+            logger.error(f"STDERR:\n{pacman_stderr}")
+            failure_reason = "stderr_suspicious_and_deps_unsatisfied"
         else:
-            combined_output = (result.stdout or "") + "\n" + stderr_text
+            # Non-zero exit — classify and log as before
+            combined_output = (result.stdout or "") + "\n" + pacman_stderr
             failure_reason = self._detect_failure_reason(combined_output)
             logger.warning(
                 f"DEP_INSTALL_PACMAN_FAIL=1 reason={failure_reason} "
                 f"exitcode={result.returncode}"
             )
             logger.error(f"STDOUT:\n{result.stdout}")
-            logger.error(f"STDERR:\n{result.stderr}")
+            logger.error(f"STDERR:\n{pacman_stderr}")
 
         # Don't fallback to yay if AUR not allowed
         if not allow_aur:
@@ -440,31 +501,40 @@ class DependencyInstaller:
             timeout=1800
         )
 
-        yay_stderr_text = result.stderr or ""
-        yay_stderr_fatal = self._stderr_has_fatal_error(yay_stderr_text)
+        yay_stderr = result.stderr or ""
+        yay_stderr_suspicious = self._stderr_needs_verification(yay_stderr)
 
-        if result.returncode == 0 and not yay_stderr_fatal:
-            logger.info(f"DEP_INSTALL_OK=1 manager=yay count={len(clean_packages)}")
-            return True
+        if result.returncode == 0:
+            if not yay_stderr_suspicious:
+                logger.info(f"DEP_INSTALL_OK=1 manager=yay count={len(clean_packages)}")
+                return True
 
-        # Analyze yay failure
-        if result.returncode == 0 and yay_stderr_fatal:
-            yay_failure_reason = "stderr_fatal_pattern_exit0"
+            all_ok, unsatisfied = self._verify_packages_satisfied(clean_packages)
+            if all_ok:
+                logger.info(
+                    f"DEP_INSTALL_OK=1 manager=yay count={len(clean_packages)} "
+                    f"note=stderr_had_non_fatal_post_hook_error"
+                )
+                logger.debug(f"yay stderr (informational):\n{yay_stderr}")
+                return True
+
             logger.error(
-                f"DEP_INSTALL_YAY_EXIT0_WITH_ERROR=1 manager=yay "
-                f"count={len(clean_packages)}"
+                f"DEP_INSTALL_YAY_EXIT0_UNVERIFIED=1 manager=yay "
+                f"unsatisfied={unsatisfied}"
             )
             logger.error(f"STDOUT:\n{result.stdout}")
-            logger.error(f"STDERR:\n{result.stderr}")
-        else:
-            yay_output = (result.stdout or "") + "\n" + yay_stderr_text
-            yay_failure_reason = self._detect_failure_reason(yay_output)
-            logger.error(
-                f"DEP_INSTALL_YAY_FAIL=1 reason={yay_failure_reason} "
-                f"exitcode={result.returncode}"
-            )
-            logger.error(f"STDOUT:\n{result.stdout}")
-            logger.error(f"STDERR:\n{result.stderr}")
+            logger.error(f"STDERR:\n{yay_stderr}")
+            return False
+
+        # Non-zero exit from yay
+        yay_output = (result.stdout or "") + "\n" + yay_stderr
+        yay_failure_reason = self._detect_failure_reason(yay_output)
+        logger.error(
+            f"DEP_INSTALL_YAY_FAIL=1 reason={yay_failure_reason} "
+            f"exitcode={result.returncode}"
+        )
+        logger.error(f"STDOUT:\n{result.stdout}")
+        logger.error(f"STDERR:\n{yay_stderr}")
         return False
 
     def extract_dependencies(self, pkg_dir: Path) -> Tuple[List[str], List[str], List[str]]:
