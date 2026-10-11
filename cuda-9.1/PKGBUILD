@@ -1,0 +1,96 @@
+# Based on the historical Arch AUR cuda-9.0 packaging approach.
+# This package deliberately packages the CUDA 9.1.85 GA toolkit only; the
+# upstream .1/.2/.3 patch installers are not included in this checksum-verified
+# base package.
+pkgname=cuda-9.1
+pkgver=9.1.85
+pkgrel=1
+_basever=9.1.85
+_driverver=387.26
+pkgdesc="NVIDIA CUDA 9.1 GPU programming toolkit (base release; legacy driver branch)"
+arch=('x86_64')
+url="https://developer.nvidia.com/cuda-zone"
+license=('custom:NVIDIA')
+depends=('gcc6' 'gcc6-libs' 'opencl-nvidia-390xx' 'nvidia-390xx-utils')
+optdepends=('gdb: for cuda-gdb'
+            'java-runtime: for Nsight and nvvp')
+provides=('cuda-toolkit' 'cuda-sdk')
+options=(!strip staticlibs)
+install=cuda-9.1.install
+source=("https://developer.nvidia.com/compute/cuda/9.1/Prod/local_installers/cuda_${_basever}_${_driverver}_linux"
+        'cuda-9.1.sh'
+        'cuda-9.1.conf'
+        'cuda-findgllib_mk.diff')
+sha256sums=('8496c72b16fee61889f9281449b5d633d0b358b46579175c275d85c9205fe953'
+            '8845d6df2a8a6e8b1117a35371f613a71a4722cbd2cd6f08b99bd8457cbcc413'
+            'ccd9ca8a47d31627955f37c3aed7b02650b08fefc6cb69909e44340107bb217c'
+            '88a85bdd05ea61a302ce4b0b24b86b42e41a59c3151e9517290c697dfecb3499')
+
+prepare() {
+    cd "$srcdir"
+    sh "cuda_${_basever}_${_driverver}_linux" --extract="$srcdir"
+
+    # The NVIDIA self-extractor unpacks the toolkit and samples sub-installers.
+    local f
+    for f in cuda-*.run; do
+        [[ -f "$f" ]] && ./$f --noexec --keep
+    done
+    for f in cuda-samples*.run; do
+        [[ -f "$f" ]] && ./$f --noexec --keep
+    done
+
+    [[ -d pkg ]] || { echo 'ERROR: CUDA runfile did not produce pkg/'; return 1; }
+
+    sed -e "s|/usr/share|${srcdir}/../pkg/${pkgname}/usr/share|g" \
+        -e 's|can_add_for_all_users;|1;|g' \
+        -e 's|=\\"$prefix\\"|=/opt/cuda-9.1|g' \
+        -e 's|Terminal=No|Terminal=false|g' \
+        -e 's|ParallelComputing|ParallelComputing;|g' \
+        -i pkg/install-linux.pl
+
+    sed 's|\$cudaprefix\\|\\/opt\\/cuda\\-9\\.1\\|g' -i pkg/install-sdk-linux.pl
+
+    find pkg -name '*.py' -type f -print0 | xargs -0 -r sed -i \
+        -e 's|env python|env python2|g' \
+        -e 's|bin/python|bin/python2|g'
+
+    local mk
+    while IFS= read -r -d '' mk; do
+        if ! patch -N "$mk" "$srcdir/cuda-findgllib_mk.diff"; then
+            echo "ERROR: failed to apply the Arch/Manjaro findgllib.mk patch to $mk" >&2
+            return 1
+        fi
+    done < <(find pkg/samples -name findgllib.mk -type f -print0 2>/dev/null)
+}
+
+package() {
+    cd "$srcdir/pkg"
+    export PERL5LIB=.
+    perl install-linux.pl -prefix="${pkgdir}/opt/cuda-9.1" -noprompt
+    perl install-sdk-linux.pl -cudaprefix="${pkgdir}/opt/cuda-9.1" \
+        -prefix="${pkgdir}/opt/cuda-9.1/samples" -noprompt
+
+    # Historical CUDA headers need this guard on modern glibc headers.
+    sed -i '1 i#define _BITS_FLOATN_H' "${pkgdir}/opt/cuda-9.1/include/host_defines.h"
+
+    # CUDA 9.1's nvcc expects the GCC 6 toolchain.
+    ln -s /usr/bin/gcc-6 "${pkgdir}/opt/cuda-9.1/bin/gcc"
+    ln -s /usr/bin/g++-6 "${pkgdir}/opt/cuda-9.1/bin/g++"
+
+    install -Dm755 "$srcdir/cuda-9.1.sh" "$pkgdir/etc/profile.d/cuda-9.1.sh"
+    install -Dm644 "$srcdir/cuda-9.1.conf" "$pkgdir/etc/ld.so.conf.d/cuda-9.1.conf"
+
+    mkdir -p "$pkgdir/usr/share/licenses/$pkgname"
+    ln -s /opt/cuda-9.1/doc/pdf/EULA.pdf "$pkgdir/usr/share/licenses/$pkgname/EULA.pdf"
+
+    rm -rf "$pkgdir/opt/cuda-9.1/cuda-samples"
+    rm -rf "$pkgdir/usr/share/applications" "$pkgdir/usr/share/man"
+    rm -rf "$pkgdir/opt/cuda-9.1/jre"
+    [[ ! -f "$pkgdir/opt/cuda-9.1/libnsight/nsight.ini" ]] || \
+        sed -i 's|../jre/bin/java|/usr/bin/java|g' "$pkgdir/opt/cuda-9.1/libnsight/nsight.ini"
+    [[ ! -f "$pkgdir/opt/cuda-9.1/libnvvp/nvvp.ini" ]] || \
+        sed -i 's|../jre/bin/java|/usr/bin/java|g' "$pkgdir/opt/cuda-9.1/libnvvp/nvvp.ini"
+    rm -f "$pkgdir/opt/cuda-9.1/bin/cuda-install-samples-9.1.sh"
+    rm -f "$pkgdir/opt/cuda-9.1/bin/uninstall_cuda_toolkit_9.1.pl"
+    rm -f "$pkgdir/opt/cuda-9.1/samples/uninstall_cuda_samples_9.1.pl"
+}

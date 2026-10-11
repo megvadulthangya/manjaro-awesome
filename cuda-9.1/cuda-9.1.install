@@ -1,0 +1,11 @@
+post_install() {
+    echo "The cuda-9.1 binaries are in /opt/cuda-9.1/bin"
+    echo "The cuda-9.1 samples are in /opt/cuda-9.1/samples"
+    echo "The cuda-9.1 documentation is in /opt/cuda-9.1/doc"
+    echo "Log out and back in for the CUDA binaries to appear in PATH."
+    post_upgrade
+}
+
+post_upgrade() {
+    ldconfig -r .
+}
