@@ -9,7 +9,7 @@ pkgdesc="NVIDIA's GPU programming toolkit version 6.5 (Tesla/Fermi/Kepler/Maxwel
 arch=('x86_64')
 url="http://www.nvidia.com/object/cuda_home.html"
 license=('custom:NVIDIA')
-depends=('gcc-libs' 'opencl-nvidia-340xx')
+depends=('gcc48' 'gcc-libs' 'opencl-nvidia-340xx')
 makedepends=('patchelf')
 replaces=('cuda-toolkit' 'cuda-sdk')
 conflicts=('cuda-toolkit' 'cuda-sdk' 'cuda')
@@ -56,6 +56,27 @@ package() {
 
   # allow gcc 4.9 to work
   sed -i "/unsupported GNU/d" "${pkgdir}/opt/cuda/include/host_config.h"
+
+  # Use the versioned legacy compiler without changing the system GCC.
+  # gcc48 installs /usr/bin/gcc-4.8 and /usr/bin/g++-4.8.
+  ln -sfn /usr/bin/gcc-4.8 "${pkgdir}/opt/cuda/bin/gcc"
+  ln -sfn /usr/bin/g++-4.8 "${pkgdir}/opt/cuda/bin/g++"
+
+  # Tell this CUDA toolkit's nvcc to use its private compiler symlinks.
+  # This affects nvcc only; it does not alter /usr/bin/gcc or /usr/bin/g++.
+  _nvcc_profile="${pkgdir}/opt/cuda/bin/nvcc.profile"
+  if [[ ! -f "${_nvcc_profile}" ]]; then
+    error "CUDA 6.5 nvcc.profile not found: ${_nvcc_profile}"
+    return 1
+  fi
+
+  if grep -qE '^[[:space:]]*compiler-bindir[[:space:]]*=' "${_nvcc_profile}"; then
+    sed -i -E \
+      's|^[[:space:]]*compiler-bindir[[:space:]]*=.*$|compiler-bindir = $(_HERE_)|' \
+      "${_nvcc_profile}"
+  else
+    printf '\ncompiler-bindir = $(_HERE_)\n' >> "${_nvcc_profile}"
+  fi
 
   install -Dm755 "${srcdir}/cuda.sh"   "${pkgdir}/etc/profile.d/cuda.sh"
   install -Dm644 "${srcdir}/cuda.conf" "${pkgdir}/etc/ld.so.conf.d/cuda.conf"
