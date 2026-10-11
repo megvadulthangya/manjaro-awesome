@@ -1,0 +1,11 @@
+--- src.pristine/gcc-6.5.0/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cc
++++ src.new/gcc-6.5.0/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cc
+@@ -156,7 +156,6 @@
+ #include <linux/lp.h>
+ #include <linux/mroute.h>
+ #include <linux/mroute6.h>
+-#include <linux/scc.h>
+ #include <linux/serial.h>
+ #include <sys/msg.h>
+ #include <sys/ipc.h>
+ 

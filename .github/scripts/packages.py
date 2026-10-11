@@ -10,6 +10,7 @@ LOCAL_PACKAGES = [
     "etlegacy",
     "cuda65",
     "cuda60",
+    "gcc6",
     "gcc48",
     "gcc49",
     "rofi-git",
@@ -107,7 +108,6 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "gcc6",
     "mpatch-bin",
     "enemy-territory",
     "gpu-t-git",
