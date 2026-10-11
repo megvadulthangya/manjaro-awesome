@@ -107,6 +107,7 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
+    "gcc6",
     "mpatch-bin",
     "enemy-territory",
     "gpu-t-git",
