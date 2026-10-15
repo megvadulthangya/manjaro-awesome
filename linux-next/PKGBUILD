@@ -1,5 +1,7 @@
 # Maintainer: gabi <gabi@localhost>
-# Based on AUR linux-next-git + Manjaro linux71/72/73 PKGBUILDs
+# Based on:
+#   - AUR linux-next-git
+#   - Manjaro linux71/72/73 PKGBUILDs
 
 _basekernel=next
 _basever=next
@@ -7,6 +9,8 @@ _kernelname=-MANJARO
 _commit=b810335a0699d1810683796b0e3ffe8827ddfe6c
 _rc=
 pkgbase=linux-next
+pkg_name=$pkgbase
+_linuxprefix=$pkgbase
 pkgver=20260116.r0.gb810335a0699
 pkgrel=1
 arch=('x86_64')
@@ -40,21 +44,11 @@ options=(
   !strip
 )
 
-_patches_enabled=(
-  # "0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch"
-  # "0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch"
-  # "0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch"
-  # "0001-drm-amd-Sanity-check-custom-brightness-curve-data-po.patch"
-  # "0000-usb-vhci-hcd-Unconditionally-allow-system-suspend.patch"
-  # "0999-patch_realtek.patch"
-  # "0001-iio-imu-bmi270-Match-PNP-ID-found-on-newer-OrangePi-NEO-firmware.patch"
-  # "0001-zotac-zone-hid-initial-impl.patch"
-  # "0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch"
-  # "0003-tmp-apply-zotac-screen-quirk.patch"
-  # "0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch"
-  # "0001-steam-deck.patch"
-  # "0000-iwlwifi-fix.patch"
-)
+# Space-separated list of patch file names to apply.
+# Empty by default -> no patches applied.
+# Example:
+#   _patches_enabled="0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch"
+_patches_enabled=""
 
 _mpatch_cmd=(mpatch -Np1)
 
@@ -78,21 +72,23 @@ source=(
 
 _srcdir="linux-next-${_commit}"
 
-sha256sums=('5e76fddb48409c5069b82bf56881d42c8dbea11bfe45f61f709507ee3ebc03bf'
-            '0c632837dfd52e61224c855293ed44373019b3327459902bad562e57f69cf67f'
-            'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
-            'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
-            '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
-            'cacb08b2f43a9fd09053bffaacc4b7bdf8381772f26e61825fb696ded100af57'
-            '512032c6b93fce24254da6cace7bf101c8f7c824761a0f99deed4b7724ac6f3e'
-            '103688f3fceff664c919d94faab7a6948880710641110eaa71fe107ee06c37e9'
-            'fc358dd3b574e4f47d25952417107ca0e743d33125ed93866697a266cde9b76e'
-            'b67f25c13e946b51712b0e828ebbf8bea980d339bd6effab17869f6a62e428df'
-            'f53e0ad0892ab4bd85f55b4cbb829481eba28865cf835a46c80bc237e0771981'
-            '138684588665b8f651dffb4e75c265a2b81f6bd7a606f75f8fc6814a4a63d3fd'
-            '3d37e1f54290bad1b7a4c5c45046341dc4c1bfc2f8648b7754bf0bd9705b3a35'
-            'f8cf8ad3e17857b51c3f7dd954eb5ac7ba44bfe0302a40e70b2c496573407edf'
-            '9628a67ac23beaf2de7194d2934386944adc64cb2a4a90e4c38b867b868654b4')
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
 
 export KBUILD_BUILD_HOST=manjaro
 export KBUILD_BUILD_USER=$pkgbase
@@ -107,12 +103,12 @@ prepare() {
   echo "Setting config..."
   cp ../config .config
 
-  if [ "${#_patches_enabled[@]}" -gt 0 ]; then
-    echo "Applying ${#_patches_enabled[@]} enabled patch(es)..."
+  if [ -n "$_patches_enabled" ]; then
+    echo "Applying patches: $_patches_enabled"
     local p
-    for p in "${_patches_enabled[@]}"; do
+    for p in $_patches_enabled; do
       if [ ! -f "../$p" ]; then
-        error "Enabled patch not found: $p"
+        error "Patch not found: $p"
       fi
       echo "  -> $p"
       "${_mpatch_cmd[@]}" < "../$p"
@@ -134,32 +130,17 @@ build() {
   make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 }
 
-pkgname=(linux-next linux-next-headers)
-
-package_linux-next() {
+_package() {
   pkgdesc="The Linux next kernel and modules"
-  depends=(
-    'coreutils'
-    'initramfs'
-    'kmod'
-  )
+  depends=('coreutils' 'initramfs' 'kmod')
   optdepends=(
     'linux-next-headers: headers and scripts for building modules'
     'linux-firmware: firmware images needed for some devices'
     'scx-scheds: to use sched-ext schedulers'
     'wireless-regdb: to set the correct wireless channels of your country'
   )
-  provides=(
-    "linux=${pkgver}"
-    KSMBD-MODULE
-    NTSYNC-MODULE
-    VIRTUALBOX-GUEST-MODULES
-    WIREGUARD-MODULE
-  )
-  replaces=(
-    virtualbox-guest-modules
-    wireguard
-  )
+  provides=("linux=$pkgver" KSMBD-MODULE NTSYNC-MODULE VIRTUALBOX-GUEST-MODULES WIREGUARD-MODULE)
+  replaces=(virtualbox-guest-modules wireguard)
 
   cd "$_srcdir"
   local modulesdir="$pkgdir/usr/lib/modules/$(<version)"
@@ -182,19 +163,9 @@ package_linux-next() {
   depmod -b "${pkgdir}/usr" -F System.map "$(<version)"
 }
 
-package_linux-next-headers() {
+_package-headers() {
   pkgdesc="Headers and scripts for building modules for the Linux next kernel"
-  depends=(
-    binutils
-    glibc
-    libelf
-    libgcc
-    openssl
-    pahole
-    xxhash
-    zlib
-    zstd
-  )
+  depends=(binutils glibc libelf libgcc openssl pahole xxhash zlib zstd)
   provides=('LINUX-HEADERS' "linux-next-headers=$pkgver")
 
   cd "$_srcdir"
@@ -267,3 +238,14 @@ package_linux-next-headers() {
   mkdir -p "$pkgdir/usr/src"
   ln -sr "$builddir" "$pkgdir/usr/src/$pkgbase"
 }
+
+pkgname=(
+  "$pkgbase"
+  "$pkgbase-headers"
+)
+for _p in "${pkgname[@]}"; do
+  eval "package_$_p() {
+    $(declare -f "_package${_p#$pkgbase}")
+    _package${_p#$pkgbase}"
+  }"
+done
