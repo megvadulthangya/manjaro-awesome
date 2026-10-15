@@ -667,7 +667,7 @@ class PackageBuilder:
                 target_dir=pkg_dir,
                 packager_id=self.packager_id,
                 build_flags="-d --noconfirm --cleanbuild --clean --nocheck",
-                timeout=3600,
+                timeout=10800 if pkg_name == "linux-next-git" else 3600,
                 pkg_names=pkg_names
             )
             
