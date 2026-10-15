@@ -1,0 +1,38 @@
+From b0c8047ba6e06cd76c1885653250785041847d39 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sat, 26 Sep 2026 00:01:32 +0200
+Subject: [PATCH] backport screen_info changes from 450.51
+
+---
+ nvidia/nvidia.Kbuild  | 1 +
+ nvidia/os-interface.c | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
+index 468655f2..693b18fd 100644
+--- a/nvidia/nvidia.Kbuild
++++ b/nvidia/nvidia.Kbuild
+@@ -172,6 +172,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_backlight_use_native
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_dma_ops
++NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_screen_info
+ 
+ NV_CONFTEST_TYPE_COMPILE_TESTS += i2c_adapter
+ NV_CONFTEST_TYPE_COMPILE_TESTS += pm_message_t
+diff --git a/nvidia/os-interface.c b/nvidia/os-interface.c
+index 262171f4..9320c7da 100644
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -1123,7 +1123,7 @@ void NV_API_CALL os_get_screen_info(
+     NvU16 *pFbPitch
+ )
+ {
+-#if (defined(NVCPU_X86) || defined(NVCPU_X86_64))
++#if NV_IS_EXPORT_SYMBOL_PRESENT_screen_info
+     //
+     // If there is not a framebuffer console, return 0 size.
+     //
+-- 
+2.39.5
+

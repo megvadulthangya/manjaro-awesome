@@ -1,0 +1,71 @@
+From 4dbd317f60db1c428581acfdd4a6f9218fad9ae2 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sun, 6 Sep 2026 22:11:07 +0200
+Subject: [PATCH] backport strncpy changes from 580.178.04
+
+---
+ nvidia-modeset/nvidia-modeset-linux.c | 5 +++++
+ nvidia/nv-gpu-numa.c                  | 2 +-
+ nvidia/os-interface.c                 | 7 +++++++
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
+index 98a10d20..8abf6ada 100644
+--- a/nvidia-modeset/nvidia-modeset-linux.c
++++ b/nvidia-modeset/nvidia-modeset-linux.c
+@@ -8,6 +8,7 @@
+  * _NVRM_COPYRIGHT_END_
+  */
+ 
++#include <linux/version.h>
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ #include <linux/slab.h>
+@@ -185,7 +186,11 @@ int NVKMS_API_CALL nvkms_strcmp(const char *s1, const char *s2)
+ 
+ char* NVKMS_API_CALL nvkms_strncpy(char *dest, const char *src, size_t n)
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7,2,0)
+     return strncpy(dest, src, n);
++#else
++    return memcpy(dest, src, n);
++#endif
+ }
+ 
+ void NVKMS_API_CALL nvkms_usleep(NvU64 usec)
+diff --git a/nvidia/nv-gpu-numa.c b/nvidia/nv-gpu-numa.c
+index b1797ebb..2c7c1c70 100644
+--- a/nvidia/nv-gpu-numa.c
++++ b/nvidia/nv-gpu-numa.c
+@@ -158,7 +158,7 @@ static bool filldir_get_memblock_id(struct dir_context *ctx,
+     if (name_len + 1 > BUF_SIZE)
+         return -ERANGE;
+ 
+-    strncpy(name_copy, name, name_len);
++    memcpy(name_copy, name, name_len);
+     *(name_copy + name_len) = '\0';
+ 
+     // Convert the memory block ID into an integer
+diff --git a/nvidia/os-interface.c b/nvidia/os-interface.c
+index 5105acb4..b805300e 100644
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -640,8 +640,15 @@ NvU32 NV_API_CALL os_get_current_process(void)
+ void NV_API_CALL os_get_current_process_name(char *buf, NvU32 len)
+ {
+     task_lock(current);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 3, 0)
+     strncpy(buf, current->comm, len - 1);
+     buf[len - 1] = '\0';
++#else
++    if (strscpy(buf, current->comm, len) < 0) {
++        // strscpy() returns -E2BIG on truncation, which is acceptable here.
++    }
++#endif
++
+     task_unlock(current);
+ }
+ 
+-- 
+2.39.5
+

@@ -1,0 +1,53 @@
+From 01bd97adbe74898e05a09cf59b58a871ec491884 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sat, 12 Sep 2026 03:31:36 +0200
+Subject: [PATCH] backport for_each_*_plane_in_state changes from 535.309.01
+
+---
+ nvidia-drm/nvidia-drm-helper.c |  2 +-
+ nvidia-drm/nvidia-drm-helper.h | 16 ++++++++++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/nvidia-drm/nvidia-drm-helper.c b/nvidia-drm/nvidia-drm-helper.c
+index 833556d4..47291c3a 100644
+--- a/nvidia-drm/nvidia-drm-helper.c
++++ b/nvidia-drm/nvidia-drm-helper.c
+@@ -152,7 +152,7 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+             goto free;
+     }
+ 
+-    nv_drm_for_each_plane_in_state(state, plane, plane_state, i) {
++    nv_drm_for_each_new_plane_in_state(state, plane, plane_state, i) {
+         ret = drm_atomic_set_crtc_for_plane(plane_state, NULL);
+         if (ret < 0)
+             goto free;
+diff --git a/nvidia-drm/nvidia-drm-helper.h b/nvidia-drm/nvidia-drm-helper.h
+index eb3b342b..1b96dad7 100644
+--- a/nvidia-drm/nvidia-drm-helper.h
++++ b/nvidia-drm/nvidia-drm-helper.h
+@@ -310,6 +310,22 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+     for_each_plane_in_state(__state, plane, plane_state, __i)
+ #endif
+ 
++#if !defined(for_each_new_plane_in_state)
++#define nv_drm_for_each_new_plane_in_state(__state, plane, new_plane_state, __i) \
++    nv_drm_for_each_plane_in_state(__state, plane, new_plane_state, __i)
++#else
++#define nv_drm_for_each_new_plane_in_state(__state, plane, new_plane_state, __i) \
++    for_each_new_plane_in_state(__state, plane, new_plane_state, __i)
++#endif
++
++#if !defined(for_each_old_plane_in_state)
++#define nv_drm_for_each_old_plane_in_state(__state, plane, old_plane_state, __i) \
++    nv_drm_for_each_plane_in_state(__state, plane, old_plane_state, __i)
++#else
++#define nv_drm_for_each_old_plane_in_state(__state, plane, old_plane_state, __i) \
++    for_each_old_plane_in_state(__state, plane, old_plane_state, __i)
++#endif
++
+ static inline struct drm_crtc *nv_drm_crtc_find(struct drm_device *dev,
+     uint32_t id)
+ {
+-- 
+2.39.5
+

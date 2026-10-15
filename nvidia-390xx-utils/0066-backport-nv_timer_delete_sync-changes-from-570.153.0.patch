@@ -1,4 +1,4 @@
-From 6f54aa8c491ea4db844c3ba0a188c4bec3811d7d Mon Sep 17 00:00:00 2001
+From db586abe8b3c20da6a2e198f0348a9d1d7e67e6c Mon Sep 17 00:00:00 2001
 From: Andreas Beckmann <anbe@debian.org>
 Date: Mon, 26 May 2025 09:58:49 +0200
 Subject: [PATCH] backport nv_timer_delete_sync changes from 570.153.02
@@ -85,12 +85,12 @@ index 2edbb82c..fb8d0634 100644
  
      return 0;
 diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
-index 810626ba..41a7ca4e 100644
+index ef947f70..8c314f32 100644
 --- a/nvidia/nvidia.Kbuild
 +++ b/nvidia/nvidia.Kbuild
-@@ -169,6 +169,7 @@ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
- NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
+@@ -170,6 +170,7 @@ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attr
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_dma_ops
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_screen_info
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_screen_info
 +NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
  

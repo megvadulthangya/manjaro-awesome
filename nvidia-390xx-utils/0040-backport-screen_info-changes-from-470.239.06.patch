@@ -1,4 +1,4 @@
-From 912ee3fa14aa296c653bd5aa8bac77721960e736 Mon Sep 17 00:00:00 2001
+From cdf6ea3ce2b467b1d27aa5294d46fbc589119051 Mon Sep 17 00:00:00 2001
 From: Andreas Beckmann <anbe@debian.org>
 Date: Mon, 4 Mar 2024 22:48:44 +0100
 Subject: [PATCH] backport screen_info changes from 470.239.06
@@ -7,7 +7,8 @@ Subject: [PATCH] backport screen_info changes from 470.239.06
  common/inc/nv-linux.h | 2 ++
  conftest.sh           | 4 ++--
  nvidia/nvidia.Kbuild  | 1 +
- 3 files changed, 5 insertions(+), 2 deletions(-)
+ nvidia/os-interface.c | 5 ++++-
+ 4 files changed, 9 insertions(+), 3 deletions(-)
 
 diff --git a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 index 2bb311c8..347e4b25 100644
@@ -43,17 +44,35 @@ index 05fc047d..53bf0e83 100755
          echo "#define NV_IS_EXPORT_SYMBOL_GPL_$SYMBOL 1" |
              append_conftest "symbols"
 diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
-index 468655f2..ba503c11 100644
+index 693b18fd..83ca9674 100644
 --- a/nvidia/nvidia.Kbuild
 +++ b/nvidia/nvidia.Kbuild
-@@ -172,6 +172,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_video_backlight_use_native
- NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
+@@ -173,6 +173,7 @@ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_dma_ops
+ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_screen_info
 +NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_screen_info
  
  NV_CONFTEST_TYPE_COMPILE_TESTS += i2c_adapter
  NV_CONFTEST_TYPE_COMPILE_TESTS += pm_message_t
+diff --git a/nvidia/os-interface.c b/nvidia/os-interface.c
+index 03b2259c..3a80a13f 100644
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -1135,9 +1135,12 @@ void NV_API_CALL os_get_screen_info(
+      * SYSFB_SIMPLEFB registers a dummy framebuffer which does not contain the
+      * information required by os_get_screen_info(), therefore you need to
+      * fall back onto the screen_info structure.
++     *
++     * After commit b8466fe82b79 ("efi: move screen_info into efi init code")
++     * in v6.7, 'screen_info' is exported as GPL licensed symbol for ARM64.
+      */
+ 
+-#if NV_IS_EXPORT_SYMBOL_PRESENT_screen_info
++#if NV_CHECK_EXPORT_SYMBOL(screen_info)
+     //
+     // If there is not a framebuffer console, return 0 size.
+     //
 -- 
 2.39.5
 

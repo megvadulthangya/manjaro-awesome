@@ -1,0 +1,69 @@
+From ab15375c67782aae4a3142f26874196b29fcfc92 Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Sat, 12 Sep 2026 03:22:44 +0200
+Subject: [PATCH] backport for_each_*_connector_in_state changes from
+ 535.309.01
+
+---
+ nvidia-drm/nvidia-drm-crtc.c   | 2 +-
+ nvidia-drm/nvidia-drm-helper.c | 4 ++--
+ nvidia-drm/nvidia-drm-helper.h | 8 ++++++++
+ 3 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/nvidia-drm/nvidia-drm-crtc.c b/nvidia-drm/nvidia-drm-crtc.c
+index 6d5478e6..43cb3790 100644
+--- a/nvidia-drm/nvidia-drm-crtc.c
++++ b/nvidia-drm/nvidia-drm-crtc.c
+@@ -368,7 +368,7 @@ static int nv_drm_crtc_atomic_check(struct drm_crtc *crtc,
+ 
+         req_config->flags.displaysChanged = NV_TRUE;
+ 
+-        nv_drm_for_each_connector_in_state(crtc_state->state,
++        nv_drm_for_each_new_connector_in_state(crtc_state->state,
+                                            connector, connector_state, j) {
+             if (connector_state->crtc != crtc) {
+                 continue;
+diff --git a/nvidia-drm/nvidia-drm-helper.c b/nvidia-drm/nvidia-drm-helper.c
+index 8b89afee..833556d4 100644
+--- a/nvidia-drm/nvidia-drm-helper.c
++++ b/nvidia-drm/nvidia-drm-helper.c
+@@ -71,7 +71,7 @@ static void __nv_drm_framebuffer_put(struct drm_framebuffer *fb)
+  * drm_atomic_helper_disable_all() is copied from
+  * linux/drivers/gpu/drm/drm_atomic_helper.c and modified to use
+  * nv_drm_for_each_crtc instead of drm_for_each_crtc to loop over all crtcs,
+- * use nv_drm_for_each_*_in_state instead of for_each_connector_in_state to loop
++ * use nv_drm_for_each_new_*_in_state instead of for_each_connector_in_state to loop
+  * over all modeset object states, and use drm_atomic_state_free() if
+  * drm_atomic_state_put() is not available.
+  *
+@@ -146,7 +146,7 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+             goto free;
+     }
+ 
+-    nv_drm_for_each_connector_in_state(state, conn, conn_state, i) {
++    nv_drm_for_each_new_connector_in_state(state, conn, conn_state, i) {
+         ret = drm_atomic_set_crtc_for_connector(conn_state, NULL);
+         if (ret < 0)
+             goto free;
+diff --git a/nvidia-drm/nvidia-drm-helper.h b/nvidia-drm/nvidia-drm-helper.h
+index 8467cc76..c1828ddb 100644
+--- a/nvidia-drm/nvidia-drm-helper.h
++++ b/nvidia-drm/nvidia-drm-helper.h
+@@ -227,6 +227,14 @@ int nv_drm_atomic_helper_disable_all(struct drm_device *dev,
+ #endif
+ 
+ 
++#if !defined(for_each_new_connector_in_state)
++#define nv_drm_for_each_new_connector_in_state(__state, connector, new_connector_state, __i) \
++    nv_drm_for_each_connector_in_state(__state, connector, new_connector_state, __i)
++#else
++#define nv_drm_for_each_new_connector_in_state(__state, connector, new_connector_state, __i) \
++    for_each_new_connector_in_state(__state, connector, new_connector_state, __i)
++#endif
++
+ /**
+  * nv_drm_for_each_crtc_in_state - iterate over all CRTCs in an atomic update
+  * @__state: &struct drm_atomic_state pointer
+-- 
+2.39.5
+

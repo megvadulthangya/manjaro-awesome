@@ -1,4 +1,4 @@
-From a1400514462841faee99c968366a90bb31616bd0 Mon Sep 17 00:00:00 2001
+From 446cf91445fb85c6c56bbe62039c2ed91bbd2301 Mon Sep 17 00:00:00 2001
 From: Andreas Beckmann <anbe@debian.org>
 Date: Tue, 27 Jan 2026 19:48:54 +0100
 Subject: [PATCH] backport vma_flags_set_word changes from 580.126.09
@@ -119,7 +119,7 @@ index 9bd240f5..b1c82259 100755
  
          drm_driver_has_dumb_destroy)
 diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
-index aa405d41..5e599969 100644
+index b8af60cf..a4647326 100644
 --- a/nvidia/nvidia.Kbuild
 +++ b/nvidia/nvidia.Kbuild
 @@ -164,6 +164,8 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_nocache
@@ -131,7 +131,7 @@ index aa405d41..5e599969 100644
  
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
-@@ -208,7 +210,6 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += sysfs_slab_unlink
+@@ -209,7 +211,6 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += sysfs_slab_unlink
  NV_CONFTEST_TYPE_COMPILE_TESTS += vmalloc_has_pgprot_t_arg
  NV_CONFTEST_TYPE_COMPILE_TESTS += pci_dev_has_skip_bus_pm
  NV_CONFTEST_TYPE_COMPILE_TESTS += pci_channel_state

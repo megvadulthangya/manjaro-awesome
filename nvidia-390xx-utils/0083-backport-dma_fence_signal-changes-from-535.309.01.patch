@@ -1,0 +1,26 @@
+From eb41e9b905a7e8979ecad68c29040a2adbfd089c Mon Sep 17 00:00:00 2001
+From: Andreas Beckmann <anbe@debian.org>
+Date: Mon, 21 Sep 2026 04:29:20 +0200
+Subject: [PATCH] backport dma_fence_signal changes from 535.309.01
+
+---
+ nvidia-drm/nvidia-dma-fence-helper.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/nvidia-drm/nvidia-dma-fence-helper.h b/nvidia-drm/nvidia-dma-fence-helper.h
+index a09ab767..950560db 100644
+--- a/nvidia-drm/nvidia-dma-fence-helper.h
++++ b/nvidia-drm/nvidia-dma-fence-helper.h
+@@ -93,7 +93,8 @@ static inline int nv_dma_fence_signal(nv_dma_fence_t *fence) {
+ #if defined(NV_LINUX_FENCE_H_PRESENT)
+     return fence_signal(fence);
+ #else
+-    return dma_fence_signal(fence);
++    dma_fence_signal(fence);
++    return 0;
+ #endif
+ }
+ 
+-- 
+2.39.5
+

@@ -210,14 +210,14 @@ sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '7026a7bf9221096af816f70cd6ddd9eadf2740429018d1d1db395fc85d1daf54'
             '68876071bc948fddeb668f4561ab26943d04e00205c7385e0e9a15f4853c22e1'
             '5e8cde32a6670e065686988b5b1491c04e20daff1207157ef152fee06488c76d'
-            'ab5be0aa6c299c244cc736333cd4f255ae357feadb48e033a29afd528e4359d5'
+            '1410d0431a9ec796fe9637663f11831903392ff708f1e503ed390d1d676134b6'
             'ed2cb4c840b33a0bcfeecc8837f5fdb23af34e16746b8a76bc9c62d0edd950fe'
-            'c0e6b4edb5d9c742705475e3350b725103c810a7bdcb6758199880b522788ec0'
+            'd192e94b0b11b176c19a1410366c77586d9b18180cb8f4488568d5c68d6cb22a'
             '6e16b6cd77f9319b18adb7117bfb56dfd58176d0dc7bac560529794c89ebef58'
             'de1b745cc919c9f6c60c73f453523885f24fd111a976262dde41537e7d8c69ba'
             '5522b5f3c5469a0fae8087b80e03b88e77deb0383e8e7cf5a1c0646ac3898da8'
             '6775ad7a49e8d9c7a36548cc4ede551f0c6b07bb5f74133a6fbe28b849114a56'
-            'b4a8b3d989387e9e4238286816798d86a75ceb27e60016ff759ffc34e3ae54b7')
+            '0ce6dd386a9fc1e8393b3f97c7b17cb9d1aab824ae7026d936738c3dae255fa3')
 
 create_links() {
     find "$pkgdir" -type f -name '*.so*' ! -path '*xorg/*' -print0 | while read -d $'\0' _lib; do
@@ -355,6 +355,10 @@ EOF_HEADER
     fi
     sed -i "s/__JOBS/`nproc`/" dkms.conf
     sed -i -E 's/^([[:space:]]*)CLEAN/\1clean/' dkms.conf
+    # PREEMPT_RT flag beégetése a DKMS make hívásaiba, hogy RT kernelen
+# a DKMS automatikus újraépítés is átmenjen (nem csak a prebuilt csomag).
+    sed -i 's|^MAKE\[0\]="make |MAKE[0]="IGNORE_PREEMPT_RT_PRESENCE=1 make |' dkms.conf
+    sed -i 's|; make -C uvm |; IGNORE_PREEMPT_RT_PRESENCE=1 make -C uvm |' dkms.conf
     cd ..
 }
 
