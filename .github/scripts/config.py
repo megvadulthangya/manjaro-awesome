@@ -83,7 +83,9 @@ SIGN_PACKAGES = True  # Default toggle for individual package signing
 # will be installed for these packages. This replaces the old global
 # INSTALL_RUNTIME_DEPS_IN_CI flag. Packages not listed will have runtime depends installed,
 # preserving the previous default behavior (INSTALL_RUNTIME_DEPS_IN_CI = True).
-DONT_INSTALL_RUNTIME_DEPS = []
+DONT_INSTALL_RUNTIME_DEPS = [
+"linux-next-git",
+]
 
 # Conflict resolution allowlist
 # Format: {"package-being-installed": ["conflicting-package-to-remove"]}

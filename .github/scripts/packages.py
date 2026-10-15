@@ -111,7 +111,6 @@ LOCAL_PACKAGES = [
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
     "linux-next-git",
-    "linux-next-git-headers",
     "mpatch-bin",
     "enemy-territory",
     "gpu-t-git",
