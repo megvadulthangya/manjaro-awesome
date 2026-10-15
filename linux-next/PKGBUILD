@@ -1,9 +1,5 @@
 # Maintainer: gabi <gabi@localhost>
-# Based on:
-#   - AUR: linux-next-git
-#     (Christian Heusel, Piotr Gorski, Jan Alexander Steffens, et al.)
-#   - Manjaro: linux71 / linux72 / linux73 PKGBUILDs
-#     (Philip Müller, Bernhard Landauer, Jan Alexander Steffens)
+# Based on AUR linux-next-git + Manjaro linux71/72/73 PKGBUILDs
 
 _basekernel=next
 _basever=next
@@ -44,56 +40,27 @@ options=(
   !strip
 )
 
-# ============================================================================
-#  PATCH KEZELÉS
-# ============================================================================
-#  Az összes patch mindig le van töltve (szerepel a source=()-ban), de
-#  egyik sincs alkalmazva, kivéve ha a fájlnevét kikommentezed az
-#  _patches_enabled tömb alatt.
-#
-#  Ajánlott sorrend, ha majd hozzáigazítod őket ehhez a snapshot-hoz:
-#
-#    TIER 1 (nvidia / DKMS szempontból releváns)
-#      0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch
-#
-#    TIER 2 (általános, alacsony kockázat)
-#      0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch
-#
-#    TIER 3 (upstream bugfixek, opcionális)
-#      0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch
-#      0000-iwlwifi-fix.patch
-#      0000-usb-vhci-hcd-Unconditionally-allow-system-suspend.patch
-#      0001-drm-amd-Sanity-check-custom-brightness-curve-data-po.patch
-#
-#    TIER 4 (eszköz-specifikus; csak ha van ilyen HW; egymásra épülnek)
-#      0001-zotac-zone-hid-initial-impl.patch
-#      0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch
-#      0003-tmp-apply-zotac-screen-quirk.patch
-#      0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch
-#      0001-steam-deck.patch
-#      0001-iio-imu-bmi270-Match-PNP-ID-found-on-newer-OrangePi-NEO-firmware.patch
-#      0999-patch_realtek.patch
-#
 _patches_enabled=(
   # "0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch"
   # "0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch"
+  # "0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch"
+  # "0001-drm-amd-Sanity-check-custom-brightness-curve-data-po.patch"
+  # "0000-usb-vhci-hcd-Unconditionally-allow-system-suspend.patch"
+  # "0999-patch_realtek.patch"
+  # "0001-iio-imu-bmi270-Match-PNP-ID-found-on-newer-OrangePi-NEO-firmware.patch"
+  # "0001-zotac-zone-hid-initial-impl.patch"
+  # "0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch"
+  # "0003-tmp-apply-zotac-screen-quirk.patch"
+  # "0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch"
+  # "0001-steam-deck.patch"
+  # "0000-iwlwifi-fix.patch"
 )
 
-# mpatch hívás.  Ha a te mpatch-ed más flag-eket vár, itt igazítsd.
-# A default azt feltételezi, hogy az mpatch a GNU patch drop-in
-# replacement-je, és a stdin-ről olvassa a patchet.
 _mpatch_cmd=(mpatch -Np1)
-
-# ============================================================================
-#  SOURCE
-# ============================================================================
 
 source=(
   "linux-next-${_commit}.tar.gz::https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git/snapshot/linux-next-${_commit}.tar.gz"
   config
-
-  # Minden patch bekerül a source-ba, hogy elérhető legyen a build könyvtárban.
-  # Tényleges alkalmazásukat a _patches_enabled vezérli.
   0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch
   0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch
   0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch
@@ -111,8 +78,6 @@ source=(
 
 _srcdir="linux-next-${_commit}"
 
-# Minden 'SKIP': lokális / fejlesztői build.  Ha reprodukálható releaset
-# akarsz, a build után `makepkg -g`-vel legenerálhatod a valódi összegeket.
 sha256sums=('5e76fddb48409c5069b82bf56881d42c8dbea11bfe45f61f709507ee3ebc03bf'
             '0c632837dfd52e61224c855293ed44373019b3327459902bad562e57f69cf67f'
             'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
@@ -142,18 +107,18 @@ prepare() {
   echo "Setting config..."
   cp ../config .config
 
-  if (( ${#_patches_enabled[@]} > 0 )); then
+  if [ "${#_patches_enabled[@]}" -gt 0 ]; then
     echo "Applying ${#_patches_enabled[@]} enabled patch(es)..."
     local p
     for p in "${_patches_enabled[@]}"; do
-      if [[ ! -f "../$p" ]]; then
+      if [ ! -f "../$p" ]; then
         error "Enabled patch not found: $p"
       fi
       echo "  -> $p"
       "${_mpatch_cmd[@]}" < "../$p"
     done
   else
-    echo "No patches enabled (this is the default)."
+    echo "No patches enabled (default)."
   fi
 
   make olddefconfig
@@ -169,7 +134,9 @@ build() {
   make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 }
 
-_package() {
+pkgname=(linux-next linux-next-headers)
+
+package_linux-next() {
   pkgdesc="The Linux next kernel and modules"
   depends=(
     'coreutils'
@@ -215,7 +182,7 @@ _package() {
   depmod -b "${pkgdir}/usr" -F System.map "$(<version)"
 }
 
-_package-headers() {
+package_linux-next-headers() {
   pkgdesc="Headers and scripts for building modules for the Linux next kernel"
   depends=(
     binutils
@@ -268,7 +235,7 @@ _package-headers() {
   echo "Removing unneeded architectures..."
   local arch
   for arch in "$builddir"/arch/*/; do
-    [[ $arch = */x86/ ]] && continue
+    [ "$arch" = "*/x86/" ] && continue
     echo "Removing $(basename "$arch")"
     rm -r "$arch"
   done
@@ -300,11 +267,3 @@ _package-headers() {
   mkdir -p "$pkgdir/usr/src"
   ln -sr "$builddir" "$pkgdir/usr/src/$pkgbase"
 }
-
-pkgname=("$pkgbase" "$pkgbase-headers")
-for _p in "${pkgname[@]}"; do
-  eval "package_$_p() {
-    $(declare -f "_package${_p#$pkgbase}")
-    _package${_p#$pkgbase}
-  }"
-done
