@@ -1,0 +1,59 @@
+From f6ebe8a7363acc4914ac18d9d5d0e86f504765a4 Mon Sep 17 00:00:00 2001
+From: Mario Limonciello <mario.limonciello@amd.com>
+Date: Sun, 27 Jul 2025 17:54:55 +0530
+Subject: [PATCH] drm/amd: Sanity check custom brightness curve data points
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+[Why]
+The Zotac Zone has custom brightness curve support in it's firmware,
+but it has some problems where values don't increase monotonically.
+
+For example data point 27 has a random input signal value of 108 even
+though the luminance is otherwise monotonic:
+
+🖴 Count[26]  Luminance Level = 0x34  Signal Level = 67
+🖴 Count[27]  Luminance Level = 0x36  Signal Level = 108
+🖴 Count[28]  Luminance Level = 0x38  Signal Level = 71
+
+[How]
+Add a sanity check when the ACPI method queries the data points
+to ensure they're all monotonic.  If they're not, disable advertising
+custom brightness curve data points to the rest of the driver and
+show a `Firmware Bug` message.
+
+Reported-by: Philip Müller <philm@manjaro.org>
+Signed-off-by: Mario Limonciello <mario.limonciello@amd.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c
+index f5466c592d94..160c23c22c84 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_acpi.c
+@@ -398,6 +398,20 @@ static int amdgpu_atif_query_backlight_caps(struct amdgpu_atif *atif)
+ 	memcpy(atif->backlight_caps.luminance_data,
+ 	       characteristics.data_points,
+ 	       sizeof(atif->backlight_caps.luminance_data));
++
++	/*
++	 * Sanity check the data points to ensure both input signal and
++	 * luminance increase monotonically
++	 */
++	for (int i = 0; i < atif->backlight_caps.data_points - 1; i++) {
++		if (atif->backlight_caps.luminance_data[i].input_signal >=
++		    atif->backlight_caps.luminance_data[i + 1].input_signal ||
++		    atif->backlight_caps.luminance_data[i].luminance >=
++		    atif->backlight_caps.luminance_data[i + 1].luminance) {
++			DRM_ERROR(FW_BUG "Invalid luminance data, disabling custom brightness curve support\n");
++			atif->backlight_caps.data_points = 0;
++		}
++	}
+ out:
+ 	kfree(info);
+ 	return err;
+-- 
+2.50.1
+

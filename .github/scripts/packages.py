@@ -6,6 +6,7 @@ Package definitions for Manjaro Package Builder
 LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
+    "linux-next",
     "xnviewmp-old",
     "cuda-9.1",
     "mpatch-git",
@@ -110,7 +111,6 @@ LOCAL_PACKAGES = [
 
 # AUR packages (from Arch User Repository)
 AUR_PACKAGES = [
-    "linux-next-git",
     "mpatch-bin",
     "enemy-territory",
     "gpu-t-git",
