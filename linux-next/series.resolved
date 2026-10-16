@@ -1,0 +1,15 @@
+# Resolved linux-next patch series.
+# One patch filename per line; entries are applied in this exact order.
+# Empty/comment-only means no patches are applied.
+0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch
+0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch
+0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch
+0001-drm-amd-Sanity-check-custom-brightness-curve-data-po.patch
+0999-patch_realtek.patch
+0001-iio-imu-bmi270-Match-PNP-ID-found-on-newer-OrangePi-NEO-firmware.patch
+0001-zotac-zone-hid-initial-impl.patch
+0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch
+0003-tmp-apply-zotac-screen-quirk.patch
+0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch
+0000-iwlwifi-fix.patch
+
