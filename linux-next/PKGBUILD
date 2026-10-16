@@ -9,8 +9,8 @@ _kernelname=-MANJARO
 _commit=b810335a0699d1810683796b0e3ffe8827ddfe6c
 _rc=
 pkgbase=linux-next
-pkg_name=$pkgbase
-_linuxprefix=$pkgbase
+pkg_name=linux-next
+_linuxprefix=linux-next
 pkgver=20260116.r0.gb810335a0699
 pkgrel=1
 arch=('x86_64')
@@ -44,10 +44,8 @@ options=(
   !strip
 )
 
-# Space-separated list of patch file names to apply.
-# Empty by default -> no patches applied.
-# Example:
-#   _patches_enabled="0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch"
+# Space-separated list of patch filenames to apply.
+# Empty by default -> none applied.
 _patches_enabled=""
 
 _mpatch_cmd=(mpatch -Np1)
@@ -130,7 +128,7 @@ build() {
   make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 }
 
-_package() {
+package_linux-next() {
   pkgdesc="The Linux next kernel and modules"
   depends=('coreutils' 'initramfs' 'kmod')
   optdepends=(
@@ -163,7 +161,7 @@ _package() {
   depmod -b "${pkgdir}/usr" -F System.map "$(<version)"
 }
 
-_package-headers() {
+package_linux-next-headers() {
   pkgdesc="Headers and scripts for building modules for the Linux next kernel"
   depends=(binutils glibc libelf libgcc openssl pahole xxhash zlib zstd)
   provides=('LINUX-HEADERS' "linux-next-headers=$pkgver")
@@ -240,12 +238,6 @@ _package-headers() {
 }
 
 pkgname=(
-  "$pkgbase"
-  "$pkgbase-headers"
+  linux-next
+  linux-next-headers
 )
-for _p in "${pkgname[@]}"; do
-  eval "package_$_p() {
-    $(declare -f "_package${_p#$pkgbase}")
-    _package${_p#$pkgbase}"
-  }"
-done
