@@ -625,7 +625,7 @@ class PackageBuilder:
                 pkg_dir=str(pkg_dir),
                 packager_id=self.packager_id,
                 flags=build_flags,
-                timeout=10800 if pkg_name == "linux-next" else 3600,
+                timeout=10800 if pkg_dir.name == "linux-next" else 3600,
             )
             
             build_output = build_result.stdout if build_result else ""
