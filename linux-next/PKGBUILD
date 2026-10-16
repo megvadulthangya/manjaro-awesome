@@ -73,7 +73,7 @@ if [[ ! "${_commit_date}" =~ ^[0-9]{8}$ || ! "${_commit_epoch}" =~ ^[0-9]+$ ]]; 
   exit 1
 fi
 
-pkgver="${_commit_date}.r0.g${_commit_short}"
+pkgver=20261016.r0.g2efb7a11f1aa
 _source_tarball="linux-next-${_commit_date}-${_commit}.tar.gz"
 _srcdir="linux-next-${_commit}"
 
