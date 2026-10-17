@@ -1,0 +1,78 @@
+--- a/conftest.sh   2026-10-17 12:30:15.060387301 +0200
++++ b/conftest.sh   2026-10-17 16:06:54.568679471 +0200
+@@ -5065,6 +5065,38 @@
+             compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_DATE" "" "types"
+         ;;
+ 
++        drm_plane_funcs_has_atomic_create_state)
++            #
++            # Determine if struct drm_plane_funcs has atomic_create_state.
++            #
++            # Commit "drm/plane: Remove reset" (Maxime Ripard) in v7.4
++            # replaced the .reset member with .atomic_create_state.
++            #
++            CODE="
++            #include <drm/drm_atomic_helper.h>
++            #include <drm/drm_plane.h>
++            int conftest_drm_plane_funcs_has_atomic_create_state(void) {
++                return offsetof(struct drm_plane_funcs, atomic_create_state);
++            }"
++            compile_check_conftest "$CODE" "NV_DRM_PLANE_FUNCS_HAS_ATOMIC_CREATE_STATE" "" "types"
++        ;;
++
++        drm_crtc_funcs_has_atomic_create_state)
++            #
++            # Determine if struct drm_crtc_funcs has atomic_create_state.
++            #
++            # Commit "drm/crtc: Remove reset" (Maxime Ripard) in v7.4
++            # replaced the .reset member with .atomic_create_state.
++            #
++            CODE="
++            #include <drm/drm_atomic_helper.h>
++            #include <drm/drm_crtc.h>
++            int conftest_drm_crtc_funcs_has_atomic_create_state(void) {
++                return offsetof(struct drm_crtc_funcs, atomic_create_state);
++            }"
++            compile_check_conftest "$CODE" "NV_DRM_CRTC_FUNCS_HAS_ATOMIC_CREATE_STATE" "" "types"
++        ;;
++
+         drm_connector_helper_funcs_mode_valid_has_const_mode_arg)
+             #
+             # Determine if the 'mode' pointer argument is const in
+--- a/nvidia-drm/nvidia-drm-crtc.c  2026-10-17 12:30:14.993488094 +0200
++++ b/nvidia-drm/nvidia-drm-crtc.c  2026-10-17 16:48:44.018372086 +0200
+@@ -178,7 +178,11 @@
+     .update_plane           = drm_atomic_helper_update_plane,
+     .disable_plane          = drm_atomic_helper_disable_plane,
+     .destroy                = nv_drm_plane_destroy,
++#if defined(NV_DRM_PLANE_FUNCS_HAS_ATOMIC_CREATE_STATE)
++    .atomic_create_state    = drm_atomic_helper_plane_create_state,
++#else
+     .reset                  = drm_atomic_helper_plane_reset,
++#endif
+     .atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
+     .atomic_destroy_state   = drm_atomic_helper_plane_destroy_state,
+ };
+@@ -291,7 +295,11 @@
+ static struct drm_crtc_funcs nv_crtc_funcs = {
+     .set_config             = drm_atomic_helper_set_config,
+     .page_flip              = drm_atomic_helper_page_flip,
++#if defined(NV_DRM_CRTC_FUNCS_HAS_ATOMIC_CREATE_STATE)
++    .atomic_create_state    = drm_atomic_helper_crtc_create_state,
++#else
+     .reset                  = drm_atomic_helper_crtc_reset,
++#endif
+     .destroy                = nv_drm_crtc_destroy,
+     .atomic_duplicate_state = nv_drm_atomic_crtc_duplicate_state,
+     .atomic_destroy_state   = nv_drm_atomic_crtc_destroy_state,
+--- a/nvidia-drm/nvidia-drm.Kbuild  2026-10-17 12:30:14.994523077 +0200
++++ b/nvidia-drm/nvidia-drm.Kbuild  2026-10-17 16:33:34.582415788 +0200
+@@ -113,6 +113,8 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_unlocked_ioctl_flag_present
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_output_poll_changed
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_date
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_plane_funcs_has_atomic_create_state
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_crtc_funcs_has_atomic_create_state
+ NV_CONFTEST_TYPE_COMPILE_TESTS += file_operations_fop_unsigned_offset_present
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_helper_funcs_mode_valid_has_const_mode_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_fb_create_takes_format_info

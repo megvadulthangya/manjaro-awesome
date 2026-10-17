@@ -82,4 +82,5 @@ fixup-warnings.patch
 kernel-6.18-workqueue-flush.patch
 kernel-6.18-prime-fence-flush.patch
 kernel-7.3-acpi.patch
+kernel-linux-next-drm-reset.patch
 

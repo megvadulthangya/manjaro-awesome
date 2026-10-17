@@ -106,6 +106,7 @@ _debian_patches=(
     'kernel-6.18-workqueue-flush.patch'
     'kernel-6.18-prime-fence-flush.patch'
     'kernel-7.3-acpi.patch'
+    'kernel-linux-next-drm-reset.patch'
 )
 
 source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.run"
@@ -132,7 +133,7 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             'c5aa7b8abe69e72bfdc6b9ee8afbfd350bcc557e894558f2e6e4087fa9aa0dd8'
             '1d053c5078387021338cfc3a732bed61be1a20a549775573788e9134775c8149'
             '9e6f14afaa7523370ad96e6675d3357441ee3985e60405cb3e0ced30b2ddaf76'
-            'dabd653bfe413427c3bb67337efafb4a090fb567aff4ced36a7bf1ccde1c2c4a'
+            '6d7e2cb227f03b9a8db9e16dba921a5bffbd21359bbca965ba5a4bd5d70a1cc8'
             'af5e491da1d10cb6c01e0e46f23939fb22fe412b89dce923eb146c30a79f684e'
             '9605f378ba51feb7c984cd04185fac70a83ff5dd30fbff24ad91404c9312ac82'
             '7c2071c822d927280deafea1fca955c41ca352ce4dd81732063a166a32553f62'
@@ -216,7 +217,8 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             'bc9ebbd85ee56a166ab1d81a193fae228c2cc010bccc7d13188af80444aa008e'
             '3a0d56b8707bf775c39330d0fc1fb4dacee023a318081302dce3644bfad24296'
             'bd4252bb9ebaabcc638932f2e0290f00e7205ecb33fb7dc340d82d4542854045'
-            '919b2b04357ce50a461d1a407bf7c9c58fad632a8c8285754b550b6e177575a5')
+            '919b2b04357ce50a461d1a407bf7c9c58fad632a8c8285754b550b6e177575a5'
+            '0947842e795dbfbd9de9fcb5b05f599f6cc9566411bcae98da7725f54d63de16')
 
 create_links() {
     find "$pkgdir" -type f -name '*.so*' ! -path '*xorg/*' -print0 | while read -d $'\0' _lib; do
