@@ -41,6 +41,7 @@ LOCAL_PACKAGES = [
     "linux66-rt-nvidia-390xx",
     "linux72-nvidia-390xx",
     "linux73-nvidia-390xx",
+    "linux-next-nvidia-390xx",
     "linux612-nvidia-390xx",
     "linux612-rt-nvidia-390xx",
     "linux618-nvidia-390xx",
