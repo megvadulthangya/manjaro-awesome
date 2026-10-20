@@ -84,7 +84,7 @@ SIGN_PACKAGES = True  # Default toggle for individual package signing
 # INSTALL_RUNTIME_DEPS_IN_CI flag. Packages not listed will have runtime depends installed,
 # preserving the previous default behavior (INSTALL_RUNTIME_DEPS_IN_CI = True).
 DONT_INSTALL_RUNTIME_DEPS = [
-"linux-next-git",
+"linux-next",
 ]
 
 # Conflict resolution allowlist
