@@ -77,7 +77,7 @@ pkgver() {
     echo "${_commit_date}.r0.g${_commit_short}"
 }
 
-pkgver=20261020.r0.g8f7df005a756
+pkgver=20261022.r0.gbd1ecbb61afe
 _source_tarball="linux-next-${_commit_date}-${_commit}.tar.gz"
 _srcdir="linux-next-${_commit}"
 
