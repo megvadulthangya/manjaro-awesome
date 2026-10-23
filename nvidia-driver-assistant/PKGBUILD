@@ -20,10 +20,8 @@ source=(
   "git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=manjaro"
   "show-driver"
 )
-sha256sums=(
-  'SKIP'
-  'SKIP'
-)
+sha256sums=('SKIP'
+            'a0db80df56df5e4a34befb4689d97cdb2322ae09c7bb7a4e1680165da6eae3f7')
 
 _nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64'
 _nvidia_unix_page='https://www.nvidia.com/en-us/drivers/unix/'

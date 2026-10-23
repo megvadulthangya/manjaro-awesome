@@ -1,0 +1,94 @@
+--- a/src/Mhwd.hpp
++++ b/src/Mhwd.hpp
+@@ -140,5 +140,11 @@
+     bool optionsDontInterfereWithEachOther() const;
+     std::string gatherConfigContent(const std::vector<std::shared_ptr<Config>> & config) const;
++
++    // Query nvidia-driver-assistant for the preferred mhwd config name.
++    // Empty string means no preference (fall back to priority-based selection).
++    std::string getNvidiaAssistantConfig();
++    std::string nvidiaAssistantCache_;
++    bool nvidiaAssistantQueried_ = false;
+ };
+ 
+ #endif /* MHWD_HPP_ */
+--- a/src/Mhwd.cpp
++++ b/src/Mhwd.cpp
+@@ -254,6 +254,38 @@
+     return nullptr;
+ }
+ 
++std::string Mhwd::getNvidiaAssistantConfig()
++{
++    if (nvidiaAssistantQueried_)
++    {
++        return nvidiaAssistantCache_;
++    }
++    nvidiaAssistantQueried_ = true;
++
++    FILE* fp = popen("nvidia-driver-assistant --mhwd-config 2>/dev/null", "r");
++    if (nullptr == fp)
++    {
++        return nvidiaAssistantCache_;
++    }
++
++    char buf[256];
++    if (nullptr != fgets(buf, sizeof(buf), fp))
++    {
++        nvidiaAssistantCache_ = buf;
++        std::size_t endpos = nvidiaAssistantCache_.find_last_not_of(" \n\r\t");
++        if (std::string::npos != endpos)
++        {
++            nvidiaAssistantCache_.erase(endpos + 1);
++        }
++        else
++        {
++            nvidiaAssistantCache_.clear();
++        }
++    }
++    pclose(fp);
++    return nvidiaAssistantCache_;
++}
++
+ MHWD::STATUS Mhwd::performTransaction(const Transaction& transaction)
+ {
+     if ((MHWD::TRANSACTIONTYPE::INSTALL == transaction.type_) &&
+@@ -1252,6 +1284,38 @@
+                 foundDevice = true;
+                 std::shared_ptr<Config> config;
+ 
++                // Query nvidia-driver-assistant for NVIDIA display GPUs.
++                // Falls back to priority-based selection if unavailable.
++                if (autoConfigureNonFreeDriver
++                        && "0300" == autoConfigureClassID
++                        && "10de" == device->vendorID_)
++                {
++                    std::string preferredConfig{getNvidiaAssistantConfig()};
++                    if (!preferredConfig.empty())
++                    {
++                        for (auto&& availableConfig : device->availableConfigs_)
++                        {
++                            if (availableConfig->name_ == preferredConfig)
++                            {
++                                config = availableConfig;
++                                consoleWriter_.printStatus(
++                                        "Using nvidia-driver-assistant recommendation: "
++                                        + preferredConfig);
++                                break;
++                            }
++                        }
++                        if (nullptr == config)
++                        {
++                            consoleWriter_.printWarning(
++                                    "nvidia-driver-assistant recommended '"
++                                    + preferredConfig
++                                    + "' but it is not available for this device; "
++                                    "falling back to priority-based selection");
++                        }
++                    }
++                }
++
++                if (nullptr == config)
+                 for (auto&& availableConfig : device->availableConfigs_)
+                 {
+                     if (autoConfigureNonFreeDriver || availableConfig->freedriver_)

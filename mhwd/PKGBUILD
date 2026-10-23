@@ -4,7 +4,7 @@
 
 pkgname=mhwd
 pkgver=0.6.6
-pkgrel=8
+pkgrel=1
 pkgdesc="Manjaro Linux Hardware Detection library and application"
 arch=('x86_64')
 url="https://code.manjaro.org/applications/mhwd"
@@ -18,16 +18,78 @@ depends=(
 makedepends=(
   'cmake'
   'git'
+  'mpatch-git'
 )
 optdepends=(
   'grub: for choosing kernels'
   'lib32-mesa: for 32bit libgl support'
+  'nvidia-driver-assistant: use its recommended config during auto-detection'
 )
 provides=('libmhwd.so')
 install="$pkgname.install"
 _commit=6ddcc6072c28a067ecebe6d38245dd0748f59c0f
-source=("git+https://code.manjaro.org/applications/mhwd.git#commit=${_commit}")
-sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92')
+source=(
+  "git+https://code.manjaro.org/applications/mhwd.git#commit=${_commit}"
+  "0001-mhwd-nvidia-assistant-integration.patch"
+)
+sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92'
+            '133cc21dea40c86ae2aadaf3165d9cd60afce2573f58b2541529fa590a9fa4f2')
+
+# =============================================================================
+#  MPATCH KONFIGURÁCIÓ
+# =============================================================================
+#  Ugyanaz a minta, mint a 390xx PKGBUILD-ben: --atomic + fuzz + debug.
+#
+_mpatch_opts=(
+    --atomic
+    --fuzz-factor 0.7
+)
+
+_mpatch_debug_opts=(
+    -vvvv
+    --dry-run
+)
+
+_mpatch_debug_on_failure=1
+
+_mpatch_apply() {
+    local _patchfile="$1"
+    local _targetdir="$2"
+    local _patchname
+    _patchname=$(basename "$_patchfile")
+
+    mpatch "${_mpatch_opts[@]}" "$_patchfile" "$_targetdir"
+    local _rc=$?
+
+    if [ "$_rc" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "!!! mpatch FAILED (rc=$_rc): $_patchname" >&2
+
+    if [ "${_mpatch_debug_on_failure}" = "1" ]; then
+        local _dbgdir="${srcdir}/mpatch-debug"
+        mkdir -p "$_dbgdir"
+        echo ">>> Debug riport generálása: $_dbgdir/" >&2
+        ( cd "$_targetdir" && mpatch "${_mpatch_debug_opts[@]}" \
+            "$_patchfile" . ) > "$_dbgdir/${_patchname}.stdout" 2>&1 || true
+        find "${_targetdir}" -maxdepth 1 -name 'mpatch-debug-report-*.md' \
+            -exec mv {} "$_dbgdir/${_patchname}.report.md" \; 2>/dev/null || true
+        echo ">>> Nézd meg: $_dbgdir/${_patchname}.report.md" >&2
+    fi
+
+    return "$_rc"
+}
+
+prepare() {
+  cd "${srcdir}/${pkgname}"
+
+  echo ">>> Alkalmazom: 0001-mhwd-nvidia-assistant-integration.patch"
+  echo ">>> Opciók: ${_mpatch_opts[*]}"
+  _mpatch_apply "${srcdir}/0001-mhwd-nvidia-assistant-integration.patch" . \
+    || { echo "!!! PATCH FAILED"; exit 1; }
+  echo ">>> Patch alkalmazva."
+}
 
 build() {
   cmake -B build -S "$pkgname" \
@@ -39,6 +101,5 @@ build() {
 
 package() {
   DESTDIR="$pkgdir" cmake --install build
-
   install -d "$pkgdir/var/lib/$pkgname"/{db,local}/{pci,usb}
 }

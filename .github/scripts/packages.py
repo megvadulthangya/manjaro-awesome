@@ -7,6 +7,7 @@ LOCAL_PACKAGES = [
 #    "capitaine-cursors-sainnhe-git",
 #    "rofi",
     "linux-next",
+    "mhwd",
     "xnviewmp-old",
     "cuda-9.1",
     "mpatch-git",
