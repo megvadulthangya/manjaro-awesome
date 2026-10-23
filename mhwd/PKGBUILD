@@ -1,0 +1,44 @@
+# Maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# Maintainer: Mark Wagie <mark at manjaro dot org>
+# Contributor: Roland Singer
+
+pkgname=mhwd
+pkgver=0.6.6
+pkgrel=8
+pkgdesc="Manjaro Linux Hardware Detection library and application"
+arch=('x86_64')
+url="https://code.manjaro.org/applications/mhwd"
+license=('GPL-3.0-or-later')
+depends=(
+  'hwinfo'
+  'mesa'
+  'mhwd-db>=20250929'
+  'pacman'
+)
+makedepends=(
+  'cmake'
+  'git'
+)
+optdepends=(
+  'grub: for choosing kernels'
+  'lib32-mesa: for 32bit libgl support'
+)
+provides=('libmhwd.so')
+install="$pkgname.install"
+_commit=6ddcc6072c28a067ecebe6d38245dd0748f59c0f
+source=("git+https://code.manjaro.org/applications/mhwd.git#commit=${_commit}")
+sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92')
+
+build() {
+  cmake -B build -S "$pkgname" \
+    -DCMAKE_BUILD_TYPE='RelWithDebInfo' \
+    -DCMAKE_INSTALL_PREFIX='/usr' \
+    -DCMAKE_POLICY_VERSION_MINIMUM='3.5'
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+
+  install -d "$pkgdir/var/lib/$pkgname"/{db,local}/{pci,usb}
+}

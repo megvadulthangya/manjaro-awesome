@@ -1,0 +1,4 @@
+[mhwd]
+source = "git"
+git = "https://code.manjaro.org/applications/mhwd.git"
+prefix = "v"
