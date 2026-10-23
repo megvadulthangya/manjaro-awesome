@@ -1,0 +1,5 @@
+#!/bin/bash
+# This script is depreciated. Use 'nvidia-driver-assistant --mhwd' in MHWDCONFIG directly
+
+driver=$(nvidia-driver-assistant --mhwd)
+echo $driver
