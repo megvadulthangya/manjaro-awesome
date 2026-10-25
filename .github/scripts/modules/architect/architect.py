@@ -9,7 +9,10 @@ Uses GITHUB_TOKEN (bot actor) so the resulting push does NOT re-trigger
 the build workflow — avoiding infinite loops.
 
 Push race safety: Hokibot may push commits to origin/main during the
-build. Before pushing, Architect fetches and rebases onto origin/main.
+build, and the build itself may modify tracked files (e.g. regenerated
+.SRCINFO). Before rebase, unstaged tracked changes are stashed (and
+dropped after — they are disposable build artifacts). Then rebase onto
+origin/main.
 """
 
 import os
@@ -142,7 +145,32 @@ class Architect:
                     check=False, capture_output=True, text=True
                 )
 
-            # Fetch + rebase to handle race condition with Hokibot
+            # Diagnostic: log what's unstaged before rebase (helps debug future cases)
+            status_result = subprocess.run(
+                ['git', '-C', str(self.repo_root), 'status', '--porcelain'],
+                capture_output=True, text=True
+            )
+            if status_result.returncode == 0 and status_result.stdout.strip():
+                unstaged_lines = status_result.stdout.strip().splitlines()
+                logger.info(f"ARCHITECT_UNSTAGED_BEFORE_REBASE count={len(unstaged_lines)}")
+                for line in unstaged_lines[:10]:
+                    logger.info(f"  {line}")
+
+            # Stash unstaged tracked-file changes (build artifacts, regenerated
+            # .SRCINFO, etc.). These are disposable — we drop them after rebase.
+            stash_result = subprocess.run(
+                ['git', '-C', str(self.repo_root), 'stash', 'push',
+                 '-m', 'architect-pre-rebase'],
+                capture_output=True, text=True
+            )
+            stashed = (
+                stash_result.returncode == 0
+                and 'No local changes' not in (stash_result.stdout or '')
+            )
+            if stashed:
+                logger.info("ARCHITECT_STASH_CREATED (disposable build artifacts)")
+
+            # Fetch
             try:
                 subprocess.run(
                     ['git', '-C', str(self.repo_root), 'fetch', 'origin', 'main'],
@@ -150,8 +178,14 @@ class Architect:
                 )
             except subprocess.CalledProcessError as e:
                 logger.error(f"ARCHITECT_FETCH_FAIL error={(e.stderr or '')[:200]}")
+                if stashed:
+                    subprocess.run(
+                        ['git', '-C', str(self.repo_root), 'stash', 'drop'],
+                        check=False, capture_output=True, text=True
+                    )
                 return False
 
+            # Rebase
             rebase_result = subprocess.run(
                 ['git', '-C', str(self.repo_root), 'rebase', 'origin/main'],
                 capture_output=True, text=True, timeout=60
@@ -162,7 +196,19 @@ class Architect:
                     ['git', '-C', str(self.repo_root), 'rebase', '--abort'],
                     check=False, capture_output=True, text=True
                 )
+                if stashed:
+                    subprocess.run(
+                        ['git', '-C', str(self.repo_root), 'stash', 'drop'],
+                        check=False, capture_output=True, text=True
+                    )
                 return False
+
+            # Drop stash (build artifacts are disposable; no need to restore)
+            if stashed:
+                subprocess.run(
+                    ['git', '-C', str(self.repo_root), 'stash', 'drop'],
+                    check=False, capture_output=True, text=True
+                )
 
             push_result = subprocess.run(
                 ['git', '-C', str(self.repo_root), 'push', 'origin', 'HEAD:main'],
