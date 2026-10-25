@@ -1,0 +1,115 @@
+---
+name: Kernel Watcher (Seraph)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */3 * * *'  # Every 3 hours
+
+# Prevent concurrent Seraph runs
+concurrency:
+  group: kernel-watcher
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    name: Seraph Watches Kernel Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    container:
+      image: manjarolinux/build:latest
+
+    env:
+      LINK_PUSH_TOKEN: ${{ secrets.LINK_PUSH_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      REPO_SERVER_URL: ${{ secrets.REPO_SERVER_URL }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
+
+    steps:
+      - name: Checkout with PAT
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.LINK_PUSH_TOKEN }}
+
+      - name: Disable Broken Manjaro Repository Entries
+        run: |
+          sed -i 's/^\[disk\]/# [disk]/' /etc/pacman.conf
+          sed -i 's/^\[packages\]/# [packages]/' /etc/pacman.conf
+          sed -i 's|^Server = file:///build/packages|# Server = file:///build/packages|' /etc/pacman.conf
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's/^\[disk\]/# [disk]/' {} \; 2>/dev/null || true
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's/^\[packages\]/# [packages]/' {} \; 2>/dev/null || true
+          find /etc/pacman.d/ -type f -name "*.conf" -exec sed -i 's|^Server = file:///build/packages|# Server = file:///build/packages|' {} \; 2>/dev/null || true
+
+      - name: Enable Multilib
+        run: |
+          if grep -q '^#\[multilib\]' /etc/pacman.conf; then
+            sed -i 's/^#\(\[multilib\]\)/\1/' /etc/pacman.conf
+            sed -i 's/^#\(Include = \/etc\/pacman\.d\/mirrorlist\)/\1/' /etc/pacman.conf
+          fi
+
+      - name: Switch Manjaro to Testing
+        run: |
+          pacman-mirrors --api -B testing -R
+          pacman -Syy
+
+      - name: Update Keyrings
+        run: |
+          cp /etc/pacman.conf /etc/pacman.conf.backup-init
+          sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
+          pacman -Sy --noconfirm archlinux-keyring manjaro-keyring
+          pacman-key --init
+          pacman-key --populate archlinux manjaro
+          mv /etc/pacman.conf.backup-init /etc/pacman.conf
+
+      - name: Configure Manjaro-Awesome Repository
+        run: |
+          if [ -z "$REPO_SERVER_URL" ] || [ -z "$REPO_NAME" ]; then
+            echo "Skipping manjaro-awesome repo setup (env vars not set)"
+            exit 0
+          fi
+
+          KEY_ID="A9A569C8F797B6878E44C4F8FBF4AB57E9BB9D3C"
+          REPO_FILE="/etc/pacman.d/${REPO_NAME}"
+
+          if ! pacman-key --list-keys "$KEY_ID" >/dev/null 2>&1; then
+            pacman-key --keyserver keyserver.ubuntu.com --recv-keys "$KEY_ID" || \
+              curl -fsSL "https://repo.gshoots.hu/${REPO_NAME}/x86_64/${REPO_NAME}.pub" | pacman-key --add -
+          fi
+          pacman-key --lsign-key "$KEY_ID"
+
+          echo "Server = ${REPO_SERVER_URL}" > "$REPO_FILE"
+          chmod 644 "$REPO_FILE"
+
+          if ! grep -q "^\[${REPO_NAME}\]" /etc/pacman.conf; then
+            awk -v repo="[${REPO_NAME}]" -v inc="Include = ${REPO_FILE}" '
+              /^\[extra\]/ {
+                print repo
+                print "SigLevel = PackageRequired"
+                print inc
+                print ""
+              }
+              { print }
+            ' /etc/pacman.conf > /tmp/pacman.conf.tmp && mv /tmp/pacman.conf.tmp /etc/pacman.conf
+          fi
+
+      - name: Sync Package Databases
+        run: pacman -Sy --noconfirm
+
+      - name: Install Dependencies
+        run: pacman -S --noconfirm --needed python python-yaml git curl
+
+      - name: Run Seraph
+        run: |
+          python3 .github/scripts/kernel_watcher.py 2>&1 | tee seraph_output.log
+
+      - name: Upload Seraph Log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: seraph-log-${{ github.run_id }}
+          path: seraph_output.log
+          retention-days: 7
+          if-no-files-found: warn
