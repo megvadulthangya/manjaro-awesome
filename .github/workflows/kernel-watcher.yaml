@@ -55,13 +55,14 @@ jobs:
           pacman-mirrors --api -B testing -R
           pacman -Syy
 
-      - name: Update Keyrings
+      - name: Bootstrap System Upgrade
         run: |
           cp /etc/pacman.conf /etc/pacman.conf.backup-init
           sed -i 's/^SigLevel.*/SigLevel = Never/g' /etc/pacman.conf
           pacman -Sy --noconfirm archlinux-keyring manjaro-keyring
           pacman-key --init
           pacman-key --populate archlinux manjaro
+          pacman -Syu --noconfirm --needed python python-yaml git curl
           mv /etc/pacman.conf.backup-init /etc/pacman.conf
 
       - name: Configure Manjaro-Awesome Repository
@@ -97,9 +98,6 @@ jobs:
 
       - name: Sync Package Databases
         run: pacman -Sy --noconfirm
-
-      - name: Install Dependencies
-        run: pacman -S --noconfirm --needed python python-yaml git curl
 
       - name: Run Seraph
         run: |
