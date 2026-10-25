@@ -6,10 +6,10 @@ on:
   schedule:
     - cron: '0 */3 * * *'  # Every 3 hours
 
-# Prevent concurrent Seraph runs
+# Serialize main-branch writes (Seraph + Builder share the same lock)
 concurrency:
-  group: kernel-watcher
-  cancel-in-progress: true
+  group: ${{ github.repository }}-main-write
+  cancel-in-progress: false
 
 jobs:
   watch:

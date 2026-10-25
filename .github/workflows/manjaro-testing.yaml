@@ -12,6 +12,11 @@ on:
       - '.github/workflows/**'
       - '**/PKGBUILD'
 
+# Serialize main-branch writes (Seraph + Builder share the same lock)
+concurrency:
+  group: ${{ github.repository }}-main-write
+  cancel-in-progress: false
+
 jobs:
   cleanup:
     name: Cleanup Disk Space
