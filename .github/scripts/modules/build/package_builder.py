@@ -29,6 +29,7 @@ class PackageBuilder:
     2. Build ONLY if source version is newer
     3. Immediately sign built packages via gpg_handler
     4. Record kernel module builds for Architect (.build_tracking)
+    5. Backfill tracking on skip (only if tracking was missing)
     """
 
     def __init__(
@@ -119,21 +120,72 @@ class PackageBuilder:
             logger.error(f"Failed to ensure output directory exists: {e}")
             raise
 
-    def _detect_and_record_kernel_module_build(self, pkg_dir: Path):
+    def _query_kernel_version(self, kernel_pkg_name: str) -> Optional[str]:
+        """
+        Query the installed kernel version (pkgver-pkgrel format).
+
+        Preference order:
+          1. pacman -Q <kernel>-headers  (what dkms actually used for build;
+                                         headers are always installed as makedepends)
+          2. pacman -Si <kernel>         (repo query, fallback)
+
+        This returns the version format that Seraph compares against, e.g.
+        '6.1.189-1' (NOT '6.1.189-1-MANJARO'), which is what pacman -Si yields.
+
+        Returns:
+            Version string (pkgver-pkgrel) or None on failure
+        """
+        # Prefer the installed headers package (guaranteed by makedepends)
+        try:
+            result = subprocess.run(
+                ['pacman', '-Q', f'{kernel_pkg_name}-headers'],
+                capture_output=True, text=True, check=False, timeout=30
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                if len(parts) >= 2:
+                    return parts[1]
+        except Exception as e:
+            logger.warning(
+                f"KERNEL_VERSION_QUERY_Q_FAIL kernel={kernel_pkg_name} error={e}"
+            )
+
+        # Fallback: repo query
+        try:
+            result = subprocess.run(
+                ['pacman', '-Si', kernel_pkg_name],
+                capture_output=True, text=True, check=False, timeout=30
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith('Version'):
+                        return line.split(':', 1)[1].strip()
+        except Exception as e:
+            logger.warning(
+                f"KERNEL_VERSION_QUERY_SI_FAIL kernel={kernel_pkg_name} error={e}"
+            )
+
+        return None
+
+    def _detect_and_record_kernel_module_build(self, pkg_dir: Path, override_pkg_name: Optional[str] = None):
         """
         Detect if pkg_dir builds a kernel module (has `_linuxprefix=` in PKGBUILD)
-        and, if so, record the build against the actual kernel version present
-        in /usr/src/<prefix>/version.
+        and, if so, record the build against the current installed kernel version
+        (queried via pacman, in pkgver-pkgrel format that Seraph compares against).
 
-        Only called after a build succeeded (so build_tracker knows the build
-        actually completed). The recorded data is consumed by Architect at the
-        end of the pipeline to persist `.build_tracking/<pkg_name>`.
+        Called AFTER a successful build (build_tracker knows the build actually
+        completed). Data is consumed by Architect at the end of the pipeline to
+        persist `.build_tracking/<pkg_name>` and clear `.pending/<pkg_name>`.
 
         Args:
             pkg_dir: Path to the package directory that was built
+            override_pkg_name: Optional override for pkg name (used for AUR builds
+                               where pkg_dir.name is a temp directory name)
         """
         if not self.build_tracker:
             return
+
+        effective_pkg_name = override_pkg_name or pkg_dir.name
 
         pkgbuild_path = pkg_dir / "PKGBUILD"
         if not pkgbuild_path.exists():
@@ -142,7 +194,7 @@ class PackageBuilder:
         try:
             content = pkgbuild_path.read_text(encoding='utf-8')
         except Exception as e:
-            logger.warning(f"KERNEL_MODULE_DETECT_FAIL pkg={pkg_dir.name} error={e}")
+            logger.warning(f"KERNEL_MODULE_DETECT_FAIL pkg={effective_pkg_name} error={e}")
             return
 
         prefix_match = re.search(r'^_linuxprefix\s*=\s*([^\s#]+)', content, re.MULTILINE)
@@ -152,33 +204,57 @@ class PackageBuilder:
         kernel_pkg_name = prefix_match.group(1).strip().strip('"').strip("'")
 
         # Sanity check: skip if the package IS the kernel itself
-        if pkg_dir.name == kernel_pkg_name:
-            logger.debug(f"KERNEL_MODULE_DETECT_SKIP pkg={pkg_dir.name} reason=is_kernel_itself")
+        if effective_pkg_name == kernel_pkg_name:
+            logger.debug(f"KERNEL_MODULE_DETECT_SKIP pkg={effective_pkg_name} reason=is_kernel_itself")
             return
 
-        version_file = Path(f"/usr/src/{kernel_pkg_name}/version")
-        if not version_file.exists():
+        kernel_version = self._query_kernel_version(kernel_pkg_name)
+        if not kernel_version:
             logger.warning(
-                f"KERNEL_MODULE_VERSION_FILE_MISSING pkg={pkg_dir.name} "
-                f"path={version_file}"
+                f"KERNEL_MODULE_VERSION_QUERY_FAILED pkg={effective_pkg_name} "
+                f"kernel={kernel_pkg_name}"
             )
             return
 
-        try:
-            kernel_version = version_file.read_text(encoding='utf-8').strip()
-        except Exception as e:
-            logger.warning(f"KERNEL_MODULE_VERSION_READ_FAIL pkg={pkg_dir.name} error={e}")
+        logger.info(
+            f"KERNEL_MODULE_BUILD_DETECTED pkg={effective_pkg_name} "
+            f"kernel={kernel_pkg_name} version={kernel_version}"
+        )
+        self.build_tracker.record_kernel_module_build(effective_pkg_name, kernel_version)
+
+    def _record_kernel_module_on_skip(self, pkg_dir: Path, override_pkg_name: Optional[str] = None):
+        """
+        Backfill kernel module tracking on SKIP path, but ONLY if tracking is missing.
+
+        This is a safety net for the first-time backfill scenario (e.g., after
+        manual VPS cleanup + rebuild). On subsequent runs, if tracking exists
+        and differs from current kernel, Seraph is responsible for triggering a
+        rebuild — we must NOT hide that by overwriting existing tracking.
+
+        Args:
+            pkg_dir: Path to the package directory
+            override_pkg_name: Optional override for pkg name
+        """
+        if not self.build_tracker:
             return
 
-        if not kernel_version:
-            logger.warning(f"KERNEL_MODULE_VERSION_EMPTY pkg={pkg_dir.name} path={version_file}")
+        effective_pkg_name = override_pkg_name or pkg_dir.name
+
+        # Only backfill if tracking is missing
+        tracking_dir = self.output_dir.parent / ".build_tracking"
+        tracking_path = tracking_dir / effective_pkg_name
+        if tracking_path.exists():
+            logger.debug(
+                f"KERNEL_MODULE_SKIP_TRACKING_EXISTS pkg={effective_pkg_name} "
+                f"(not overwriting - Seraph will handle version mismatches)"
+            )
             return
 
         logger.info(
-            f"KERNEL_MODULE_BUILD_DETECTED pkg={pkg_dir.name} "
-            f"kernel={kernel_pkg_name} version={kernel_version}"
+            f"KERNEL_MODULE_SKIP_RECORD pkg={effective_pkg_name} "
+            f"(assuming VPS module is current - backfilling missing tracking)"
         )
-        self.build_tracker.record_kernel_module_build(pkg_dir.name, kernel_version)
+        self._detect_and_record_kernel_module_build(pkg_dir, override_pkg_name=override_pkg_name)
 
     def audit_and_build_local(
         self,
@@ -221,6 +297,9 @@ class PackageBuilder:
             )
             logger.info(f"BUILD_DECISION: pkg={pkg_dir.name} source_ver={source_version} remote_ver={remote_version or 'NONE'} decision={'BUILD' if should_build else 'SKIP'}")
             if not should_build:
+                # NEW: Backfill kernel module tracking on skip (only if missing)
+                self._record_kernel_module_on_skip(pkg_dir)
+
                 # NEW: Only check completeness if versions are equal (not when remote is newer)
                 # Get full remote version string for comparison
                 remote_full_version = remote_version
@@ -432,6 +511,9 @@ class PackageBuilder:
                 )
                 logger.info(f"BUILD_DECISION: pkg={aur_package_name} source_ver={source_version} remote_ver={remote_version or 'NONE'} decision={'BUILD' if should_build else 'SKIP'}")
                 if not should_build:
+                    # NEW: Backfill kernel module tracking on skip (only if missing)
+                    self._record_kernel_module_on_skip(temp_path, override_pkg_name=aur_package_name)
+
                     # NEW: Only check completeness if versions are equal (not when remote is newer)
                     # Get full remote version string for comparison
                     remote_full_version = remote_version
@@ -541,7 +623,7 @@ class PackageBuilder:
 
                     # Note: AUR packages do NOT record hokibot data per requirements
                     # NEW: Detect kernel module build and record for Architect (safe - skipped if no _linuxprefix)
-                    self._detect_and_record_kernel_module_build(temp_path)
+                    self._detect_and_record_kernel_module_build(temp_path, override_pkg_name=aur_package_name)
 
                     # Log version truth chain
                     logger.info(f"[VERSION_TRUTH_CHAIN] Package: {aur_package_name}")

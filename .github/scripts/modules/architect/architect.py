@@ -7,6 +7,9 @@ used by Seraph to detect kernel changes.
 
 Uses GITHUB_TOKEN (bot actor) so the resulting push does NOT re-trigger
 the build workflow — avoiding infinite loops.
+
+Push race safety: Hokibot may push commits to origin/main during the
+build. Before pushing, Architect fetches and rebases onto origin/main.
 """
 
 import os
@@ -53,11 +56,17 @@ class Architect:
             return True
 
         recorded = []
+        seen_pkgs = set()
         try:
             self.tracking_dir.mkdir(parents=True, exist_ok=True)
             for build in kernel_module_builds:
                 pkg_name = build['pkg_name']
                 kernel_version = build['kernel_version']
+
+                # Dedup: same pkg may appear twice (success + skip paths)
+                if pkg_name in seen_pkgs:
+                    continue
+                seen_pkgs.add(pkg_name)
 
                 tracking_file = self.tracking_dir / pkg_name
                 with open(tracking_file, 'w', encoding='utf-8') as f:
@@ -97,14 +106,16 @@ class Architect:
                 check=True, capture_output=True, text=True
             )
 
-            paths_to_add = [self.TRACKING_DIR]
-            if self.pending_dir.exists():
-                paths_to_add.append(self.PENDING_DIR)
-
+            # Stage tracking files (force-add to bypass any gitignore surprises)
             subprocess.run(
-                ['git', '-C', str(self.repo_root), 'add'] + paths_to_add,
+                ['git', '-C', str(self.repo_root), 'add', '-f', self.TRACKING_DIR],
                 check=True, capture_output=True, text=True
             )
+            if self.pending_dir.exists():
+                subprocess.run(
+                    ['git', '-C', str(self.repo_root), 'add', '-A', '-f', self.PENDING_DIR],
+                    check=False, capture_output=True, text=True
+                )
 
             diff_result = subprocess.run(
                 ['git', '-C', str(self.repo_root), 'diff', '--cached', '--quiet'],
@@ -122,6 +133,7 @@ class Architect:
                 check=True, capture_output=True, text=True
             )
 
+            # Set auth URL for fetch/push
             repo_slug = os.getenv('GITHUB_REPOSITORY')
             if repo_slug:
                 auth_url = f"https://x-access-token:{self.token}@github.com/{repo_slug}.git"
@@ -130,8 +142,30 @@ class Architect:
                     check=False, capture_output=True, text=True
                 )
 
+            # Fetch + rebase to handle race condition with Hokibot
+            try:
+                subprocess.run(
+                    ['git', '-C', str(self.repo_root), 'fetch', 'origin', 'main'],
+                    check=True, capture_output=True, text=True, timeout=60
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"ARCHITECT_FETCH_FAIL error={(e.stderr or '')[:200]}")
+                return False
+
+            rebase_result = subprocess.run(
+                ['git', '-C', str(self.repo_root), 'rebase', 'origin/main'],
+                capture_output=True, text=True, timeout=60
+            )
+            if rebase_result.returncode != 0:
+                logger.error(f"ARCHITECT_REBASE_FAIL error={(rebase_result.stderr or '')[:300]}")
+                subprocess.run(
+                    ['git', '-C', str(self.repo_root), 'rebase', '--abort'],
+                    check=False, capture_output=True, text=True
+                )
+                return False
+
             push_result = subprocess.run(
-                ['git', '-C', str(self.repo_root), 'push', 'origin', 'HEAD'],
+                ['git', '-C', str(self.repo_root), 'push', 'origin', 'HEAD:main'],
                 capture_output=True, text=True, timeout=120
             )
             if push_result.returncode != 0:
