@@ -47,6 +47,42 @@ class Link:
             logger.info("LINK_PUSH_SKIP reason=no_bumps")
             return True
 
+        # ---------------------------------------------------------------
+        # DIAGNOSTIC: verify .git exists before any git operation.
+        # "fatal: not in a git directory" means git could not find .git
+        # via discovery from repo_root. Log the actual state so the root
+        # cause is visible in the run log (missing .git vs. broken
+        # ownership vs. symlink resolution issue).
+        # ---------------------------------------------------------------
+        git_marker = self.repo_root / '.git'
+        if not git_marker.exists():
+            try:
+                entries = sorted(p.name for p in self.repo_root.iterdir())
+            except Exception as e:
+                entries = [f"<iterdir failed: {e}>"]
+            logger.error(
+                f"LINK_NO_GIT_DIR path={self.repo_root} entries={entries[:40]}"
+            )
+            return False
+
+        if git_marker.is_file():
+            # Worktree / submodule gitfile
+            try:
+                target = git_marker.read_text(encoding='utf-8', errors='replace').strip()
+                logger.info(f"LINK_GIT_DIR_IS_FILE target={target[:200]}")
+            except Exception as e:
+                logger.warning(f"LINK_GIT_DIR_READ_FAIL error={e}")
+
+        # Ownership-agnostic access: allow any user (root / builder / etc.)
+        # to operate on this repository regardless of who ran checkout.
+        try:
+            subprocess.run(
+                ['git', 'config', '--global', '--add', 'safe.directory', str(self.repo_root)],
+                check=False, capture_output=True, text=True, timeout=10
+            )
+        except Exception as e:
+            logger.warning(f"LINK_SAFE_DIRECTORY_WARN error={e}")
+
         try:
             subprocess.run(
                 ['git', '-C', str(self.repo_root), 'config', 'user.name', self.LINK_NAME],
@@ -57,7 +93,7 @@ class Link:
                 check=True, capture_output=True, text=True
             )
         except subprocess.CalledProcessError as e:
-            logger.error(f"LINK_GIT_CONFIG_FAIL error={(e.stderr or '')[:200]}")
+            logger.error(f"LINK_GIT_CONFIG_FAIL error={(e.stderr or '')[:300]}")
             return False
 
         paths_to_add = []

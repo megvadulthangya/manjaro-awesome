@@ -34,6 +34,30 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.LINK_PUSH_TOKEN }}
 
+      - name: Diagnostic - Workspace Git State
+        run: |
+          echo "=== GITHUB_WORKSPACE: $GITHUB_WORKSPACE ==="
+          echo "=== whoami ==="
+          whoami
+          echo "=== ls -la \$GITHUB_WORKSPACE (first 40) ==="
+          ls -la "$GITHUB_WORKSPACE" | head -40
+          echo "=== .git state ==="
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            echo "DIR - .git is a directory"
+            ls -la "$GITHUB_WORKSPACE/.git" | head -20
+          elif [ -f "$GITHUB_WORKSPACE/.git" ]; then
+            echo "FILE - .git is a gitfile"
+            cat "$GITHUB_WORKSPACE/.git"
+          else
+            echo "MISSING - .git does not exist"
+          fi
+          echo "=== git rev-parse ==="
+          git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel 2>&1 || echo "rev-parse failed"
+          echo "=== git status (first 5) ==="
+          git -C "$GITHUB_WORKSPACE" status 2>&1 | head -5 || echo "status failed"
+          echo "=== git config local user.name (probe) ==="
+          git -C "$GITHUB_WORKSPACE" config --local user.name 2>&1 || echo "config probe failed"
+
       - name: Disable Broken Manjaro Repository Entries
         run: |
           sed -i 's/^\[disk\]/# [disk]/' /etc/pacman.conf
@@ -98,6 +122,19 @@ jobs:
 
       - name: Sync Package Databases
         run: pacman -Sy --noconfirm
+
+      - name: Diagnostic - Post-Bootstrap Git State
+        run: |
+          echo "=== .git still present? ==="
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            echo "DIR - .git still exists"
+          elif [ -f "$GITHUB_WORKSPACE/.git" ]; then
+            echo "FILE - .git still exists (gitfile)"
+          else
+            echo "MISSING - .git is GONE after bootstrap"
+          fi
+          echo "=== git rev-parse probe ==="
+          git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel 2>&1 || echo "rev-parse failed"
 
       - name: Run Seraph
         run: |
