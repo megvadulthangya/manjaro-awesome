@@ -293,49 +293,63 @@ class ManifestFactory:
     def _parse_with_bash(pkgbuild_text: str) -> List[str]:
         """
         Parse PKGBUILD using bash to extract pkgname values.
-        More reliable for complex PKGBUILDs whose pkgname uses shell
-        variable expansion.
 
-        NOTE: Sourcing executes the PKGBUILD's top-level statements, which
-        may include network calls (linux-next is one such case). The fallback
-        timeout is therefore large; a failing/panicking source simply yields
-        an empty result, which the caller handles.
+        More reliable for complex PKGBUILDs whose pkgname uses shell
+        variable expansion (e.g. pkgname="${_linuxprefix}-nvidia-340xx").
+
+        CRITICAL DESIGN NOTES:
+
+        - We MUST NOT wrap ``source`` in a subshell: a subshell's variable
+          assignments are discarded when the subshell exits, so pkgname set
+          inside ``( source file )`` would never propagate to the enclosing
+          script. That was the bug that caused ~34 packages to be silently
+          dropped from the allowlist.
+
+        - We DO use ``trap print_pkgname EXIT`` so that even if the PKGBUILD
+          calls ``exit 1`` (e.g. linux-next on network failure), whatever
+          pkgname state exists at exit is printed to stdout.
+
+        - We DO NOT rely on the process return code: a PKGBUILD with network
+          calls may exit 1, but pkgname may still be set from before the
+          failure. We rely solely on whether stdout contains non-empty lines.
         """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.PKGBUILD', delete=False) as tmp:
             tmp.write(pkgbuild_text)
             tmp_path = tmp.name
 
         try:
-            # Run the sourcing in a subshell so PKGBUILD top-level `exit 1`
-            # calls don't prevent us from reading pkgname if it was already
-            # defined before the exit.
-            script = f'''
-            ( source "{tmp_path}" 2>/dev/null )
-            if declare -p pkgname 2>/dev/null | grep -q "declare -a"; then
-                for name in "${{pkgname[@]}}"; do
-                    echo "$name"
-                done
-            else
-                echo "$pkgname"
-            fi
-            '''
+            script = (
+                "print_pkgname() {\n"
+                "  if declare -p pkgname 2>/dev/null | grep -q 'declare -a'; then\n"
+                '    for name in "${pkgname[@]}"; do\n'
+                '      printf "%s\\n" "$name"\n'
+                "    done\n"
+                '  elif [ -n "${pkgname:-}" ]; then\n'
+                '    printf "%s\\n" "$pkgname"\n'
+                "  fi\n"
+                "}\n"
+                "trap print_pkgname EXIT\n"
+                'source "$1" 2>/dev/null || true\n'
+            )
 
             result = subprocess.run(
-                ["bash", "-c", script],
+                ["bash", "-c", script, "bash", tmp_path],
                 capture_output=True,
                 text=True,
                 timeout=ManifestFactory._BASH_FALLBACK_TIMEOUT,
             )
 
-            if result.returncode == 0:
-                names = [
+            # NOTE: Intentionally NOT checking returncode. PKGBUILDs like
+            # linux-next can exit 1 before defining pkgname; the trap still
+            # fires and prints whatever state pkgname has. We rely solely on
+            # whether stdout contains non-empty lines.
+            if result.stdout and result.stdout.strip():
+                return [
                     name.strip()
                     for name in result.stdout.strip().split('\n')
                     if name.strip()
                 ]
-                return names
-            else:
-                return []
+            return []
 
         finally:
             # Cleanup
