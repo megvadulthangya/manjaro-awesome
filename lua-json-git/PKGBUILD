@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=lua-json-git
-pkgver=r1.0000000
+pkgver=r53.4cf55a2
 pkgrel=1
 pkgdesc="Pure lua json library (develop branch, git version)"
 arch=('any')
