@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 class LocalBuilder:
     """Handles local package building operations"""
-    
+
     def __init__(self, debug_mode: bool = False):
         self.debug_mode = debug_mode
         self.shell_executor = ShellExecutor(debug_mode=debug_mode)
         self.dependency_installer = DependencyInstaller(self.shell_executor, debug_mode)
-    
+
     def install_build_dependencies(self,
                                   pkg_dir: str,
                                   makedepends: List[str],
@@ -32,39 +32,39 @@ class LocalBuilder:
         Install dependencies for local package.
         - Default: install makedepends + checkdepends + depends (runtime)
         - Configurable via DONT_INSTALL_RUNTIME_DEPS opt-out list.
-        
+
         Args:
             pkg_dir: Package directory path (for logging only)
             makedepends: List of makedepends packages
             checkdepends: List of checkdepends packages
             runtime_depends: List of runtime depends packages
             pkg_names: List of package names produced by the PKGBUILD (for self-reference filtering)
-            
+
         Returns:
             True if successful, False otherwise
         """
         pkg_name = os.path.basename(os.path.normpath(pkg_dir))
         if pkg_names is None:
             pkg_names = [pkg_name]
-        
+
         # Filter self-references from runtime depends
         filtered_runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
-        
+
         # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
-        
+
         install_runtime = pkg_name not in getattr(config, 'DONT_INSTALL_RUNTIME_DEPS', [])
         logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=DONT_INSTALL_RUNTIME_DEPS")
-        
+
         if install_runtime:
             build_deps += filtered_runtime_depends
             logger.info("Runtime depends are INCLUDED in build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
         else:
             logger.info("Runtime depends are EXCLUDED from build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
-        
+
         if not build_deps:
             return True
-        
+
         logger.info(f"Installing {len(build_deps)} dependencies for {pkg_dir}...")
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
@@ -73,32 +73,41 @@ class LocalBuilder:
         if runtime_depends != filtered_runtime_depends:
             skipped = set(runtime_depends) - set(filtered_runtime_depends)
             logger.info(f"Runtime depends filtered out as self-references: {skipped}")
-        
+
         return self.dependency_installer.install_packages(
             packages=build_deps,
             allow_aur=True,  # Allow AUR fallback for local packages too
             mode="build"
         )
-    
+
     def run_makepkg(self, pkg_dir: str, packager_id: str, flags: str = "-d --noconfirm --cleanbuild --clean", timeout: int = 3600) -> subprocess.CompletedProcess:
         """Run makepkg command with specified flags, with retry for missing yasm"""
         cmd = f"makepkg {flags}"
-        
+        pkg_name = os.path.basename(os.path.normpath(pkg_dir))
+
+        # Decide whether to stream this package's output in real-time
+        stream_output = pkg_name in getattr(config, 'STREAM_OUTPUT_PACKAGES', [])
+        if stream_output:
+            logger.info(f"STREAM_OUTPUT_ENABLED pkg={pkg_name}")
+
         logger.info("MAKEPKG_INSTALL_DISABLED=1")
         logger.info("SHELL_EXECUTOR_USED=1")
-        
+
         # Ensure build directory is writable
         if not os.access(pkg_dir, os.W_OK):
             logger.warning(f"Build directory not writable: {pkg_dir}")
             # Try to fix permissions
             subprocess.run(['chmod', '755', pkg_dir], check=False)
             subprocess.run(['chown', '-R', 'builder:builder', pkg_dir], check=False)
-        
+
         if self.debug_mode:
             print(f"🔧 [DEBUG] Running makepkg in {pkg_dir}: {cmd}", flush=True)
-        
+
         try:
-            # First download sources with retry
+            # First download sources with retry (increased to 10 retries;
+            # each attempt has its own timeout, and TimeoutExpired is now
+            # caught by run_command_with_retry so a stalled download is
+            # retried instead of failing the whole build).
             logger.info("   Downloading sources (with retry)...")
             download_result = self.shell_executor.run_command_with_retry(
                 "makepkg -od --noconfirm",
@@ -107,11 +116,12 @@ class LocalBuilder:
                 check=False,
                 timeout=600,
                 extra_env={"PACKAGER": packager_id},
-                max_retries=5,
+                max_retries=10,
                 initial_delay=2.0,
-                user="builder"  # Run as builder user
+                user="builder",
+                stream=stream_output,
             )
-            
+
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources (exit={download_result.returncode}, cwd={pkg_dir})")
                 logger.error("--- makepkg stdout (full) ---")
@@ -120,10 +130,10 @@ class LocalBuilder:
                 logger.error(download_result.stderr if download_result.stderr else "<empty>")
                 raise subprocess.CalledProcessError(download_result.returncode, "makepkg -od",
                                                    download_result.stdout, download_result.stderr)
-            
+
             # Then run the actual build (with possible retry)
             logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
-            
+
             def run_build():
                 return self.shell_executor.run_command(
                     cmd,
@@ -133,12 +143,13 @@ class LocalBuilder:
                     timeout=timeout,
                     extra_env={"PACKAGER": packager_id},
                     log_cmd=self.debug_mode,
-                    user="builder"
+                    user="builder",
+                    stream=stream_output,
                 )
-            
+
             # First attempt
             result = run_build()
-            
+
             # Retry logic for missing yasm
             if result.returncode != 0:
                 error_output = (result.stderr or "") + "\n" + (result.stdout or "")
@@ -151,30 +162,30 @@ class LocalBuilder:
                         result = run_build()
                     else:
                         logger.error("Failed to install yasm, cannot retry build")
-            
+
             # Log diagnostic information on failure
             if result.returncode != 0:
                 logger.error(f"❌ Build failed with exit code: {result.returncode}")
-                
+
                 # Log diagnostic information
                 logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
                 logger.error(f"Command: {cmd}")
                 logger.error(f"Working directory: {pkg_dir}")
-                
+
                 # Get user context
                 try:
                     whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
                     logger.error(f"Current user: {whoami_result.stdout.strip()}")
-                    
+
                     id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
                     logger.error(f"Current UID: {id_result.stdout.strip()}")
-                    
+
                     # Check directory permissions
                     logger.error(f"Directory writable: {os.access(pkg_dir, os.W_OK)}")
                     logger.error(f"Directory owner: {os.stat(pkg_dir).st_uid}")
                 except Exception as e:
                     logger.error(f"Error getting user context: {e}")
-                
+
                 # Log last 200 lines of output
                 if result.stdout:
                     stdout_lines = result.stdout.split('\n')
@@ -183,7 +194,7 @@ class LocalBuilder:
                     for line in last_stdout:
                         if line.strip():
                             logger.error(f"  {line}")
-                
+
                 if result.stderr:
                     stderr_lines = result.stderr.split('\n')
                     last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
@@ -191,7 +202,7 @@ class LocalBuilder:
                     for line in last_stderr:
                         if line.strip():
                             logger.error(f"  {line}")
-                
+
                 # Don't fail on CMake deprecation warnings
                 if result.returncode != 0 and "CMake Deprecation Warning" in result.stderr:
                     logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
@@ -205,14 +216,14 @@ class LocalBuilder:
                             # Only CMake warnings, treat as success
                             logger.info("Only CMake deprecation warnings found, treating as success")
                             result.returncode = 0
-            
+
             if self.debug_mode:
                 if result.stdout:
                     print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{result.stdout}", flush=True)
                 if result.stderr:
                     print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{result.stderr}", flush=True)
                 print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {result.returncode}", flush=True)
-            
+
             return result
         except Exception as e:
             logger.error(f"Error running makepkg: {e}")

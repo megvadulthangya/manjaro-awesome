@@ -16,31 +16,31 @@ logger = logging.getLogger(__name__)
 
 class AURBuilder:
     """Handles AUR package building and dependency resolution"""
-    
+
     def __init__(self, debug_mode: bool = False):
         self.debug_mode = debug_mode
         self._pacman_initialized = False
         self.shell_executor = ShellExecutor(debug_mode=debug_mode)
         self.dependency_installer = DependencyInstaller(self.shell_executor, debug_mode)
-    
+
     def _initialize_pacman_database(self) -> bool:
         """
         REQUIRED PRECONDITION: Initialize pacman database before any dependency resolution.
         This must run ONCE per build session before any dependency installation.
-        
+
         NOTE: This is for dependency resolution only, not the post-repo-enable sync.
         The post-repo-enable pacman -Sy is handled by the orchestrator with proof logging.
         """
         if self._pacman_initialized:
             return True
-        
+
         logger.info("🔄 Initializing pacman database (REQUIRED PRECONDITION)...")
-        
+
         # REQUIRED: Run pacman -Sy to initialize/update package database
         cmd = "sudo LC_ALL=C pacman -Sy --noconfirm"
         logger.info("SHELL_EXECUTOR_USED=1")
         result = self.shell_executor.run_command(cmd, log_cmd=True, check=False, timeout=300)
-        
+
         if result.returncode == 0:
             logger.info("✅ Pacman database initialized successfully")
             self._pacman_initialized = True
@@ -50,7 +50,7 @@ class AURBuilder:
             # Continue anyway - some repositories might fail but main ones should work
             self._pacman_initialized = True
             return True
-    
+
     def install_dependencies(self,
                             makedepends: List[str],
                             checkdepends: List[str],
@@ -61,38 +61,38 @@ class AURBuilder:
         CI-safe dependency resolution:
         - Default: install makedepends + checkdepends + depends (runtime)
         - Configurable via DONT_INSTALL_RUNTIME_DEPS opt-out list.
-        
+
         Args:
             makedepends: List of makedepends packages
             checkdepends: List of checkdepends packages
             runtime_depends: List of runtime depends packages
             pkg_name: Name of the package being built (for policy lookup)
             pkg_names: List of package names produced by the PKGBUILD (for self-reference filtering)
-            
+
         Returns:
             True if installation successful, False otherwise
         """
         if pkg_names is None:
             pkg_names = [pkg_name] if pkg_name else []
-        
+
         # Filter self-references from runtime depends
         filtered_runtime_depends = self.dependency_installer.filter_self_references(runtime_depends, pkg_names)
-        
+
         # Build dependency list according to configuration
         build_deps = makedepends + checkdepends
-        
+
         install_runtime = (pkg_name is None) or (pkg_name not in getattr(config, 'DONT_INSTALL_RUNTIME_DEPS', []))
         logger.info(f"DEP_RUNTIME_POLICY pkg={pkg_name} install_runtime={install_runtime} source=DONT_INSTALL_RUNTIME_DEPS")
-        
+
         if install_runtime:
             build_deps += filtered_runtime_depends
             logger.info("Runtime depends are INCLUDED in build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
         else:
             logger.info("Runtime depends are EXCLUDED from build deps (DONT_INSTALL_RUNTIME_DEPS policy)")
-        
+
         if not build_deps:
             return True
-        
+
         logger.info(f"Installing {len(build_deps)} dependencies...")
         logger.info(f"Makedepends: {makedepends}")
         logger.info(f"Checkdepends: {checkdepends}")
@@ -101,12 +101,12 @@ class AURBuilder:
         if runtime_depends != filtered_runtime_depends:
             skipped = set(runtime_depends) - set(filtered_runtime_depends)
             logger.info(f"Runtime depends filtered out as self-references: {skipped}")
-        
+
         # REQUIRED PRECONDITION: Initialize pacman database FIRST
         if not self._initialize_pacman_database():
             logger.error("❌ Failed to initialize pacman database")
             # Try to continue anyway, as yay might work
-        
+
         # CRITICAL FIX: Update pacman-key database first
         print("🔄 Updating pacman-key database...")
         cmd = "sudo pacman-key --updatedb"
@@ -114,14 +114,14 @@ class AURBuilder:
         result = self.shell_executor.run_command(cmd, log_cmd=True, check=False, timeout=300)
         if result.returncode != 0:
             logger.warning(f"⚠️ pacman-key --updatedb warning: {result.stderr[:200]}")
-        
+
         # Install build dependencies with AUR fallback enabled
         return self.dependency_installer.install_packages(
             packages=build_deps,
             allow_aur=True,
             mode="build"
         )
-    
+
     def build_aur_package(self, pkg_name: str, target_dir: Path, packager_id: str,
                           build_flags: str = "-d --noconfirm --cleanbuild --clean --nocheck",
                           timeout: int = 3600,
@@ -129,7 +129,7 @@ class AURBuilder:
         """
         Build AUR package including dependency installation.
         Per-package dependency session is managed by the caller (PackageBuilder).
-        
+
         Args:
             pkg_name: AUR package name
             target_dir: Directory containing cloned AUR package
@@ -137,16 +137,21 @@ class AURBuilder:
             build_flags: makepkg flags
             timeout: Build timeout in seconds
             pkg_names: List of package names produced by the PKGBUILD (for self-reference filtering)
-            
+
         Returns:
             List of built package filenames
         """
         logger.info(f"🔨 Building AUR package {pkg_name}...")
-        
+
+        # Decide whether to stream this package's output in real-time
+        stream_output = pkg_name in getattr(config, 'STREAM_OUTPUT_PACKAGES', [])
+        if stream_output:
+            logger.info(f"STREAM_OUTPUT_ENABLED pkg={pkg_name}")
+
         # Extract build dependencies from PKGBUILD/.SRCINFO
         logger.info(f"📦 Extracting build dependencies for {pkg_name}...")
         makedepends, checkdepends, runtime_depends = self.dependency_installer.extract_dependencies(target_dir)
-        
+
         # Install dependencies (with configurable runtime depends)
         if makedepends or checkdepends or runtime_depends:
             logger.info(f"📦 Found {len(makedepends) + len(checkdepends) + len(runtime_depends)} total dependencies for {pkg_name}")
@@ -155,11 +160,11 @@ class AURBuilder:
                 return []
         else:
             logger.info(f"📦 No dependencies found for {pkg_name}")
-        
+
         # Download sources with retry for transient errors
         logger.info("   Downloading sources (with retry)...")
         logger.info("SHELL_EXECUTOR_USED=1")
-        
+
         try:
             download_result = self.shell_executor.run_command_with_retry(
                 "makepkg -od --noconfirm",
@@ -168,11 +173,12 @@ class AURBuilder:
                 check=False,
                 timeout=600,
                 extra_env={"PACKAGER": packager_id},
-                max_retries=5,
+                max_retries=10,
                 initial_delay=2.0,
-                user="builder"  # Run as builder user
+                user="builder",
+                stream=stream_output,
             )
-            
+
             if download_result.returncode != 0:
                 logger.error(f"❌ Failed to download sources (exit={download_result.returncode}, cwd={target_dir})")
                 logger.error("--- makepkg stdout (full) ---")
@@ -183,17 +189,17 @@ class AURBuilder:
         except Exception as e:
             logger.error(f"❌ Error downloading sources: {e}")
             return []
-        
+
         # Build package (with possible retry on missing yasm)
         logger.info(f"   Building with flags: {build_flags}")
         logger.info("MAKEPKG_INSTALL_DISABLED=1")
         logger.info("SHELL_EXECUTOR_USED=1")
         logger.info("MAKEPKG_SYNCDEPS_DISABLED=1")
         cmd = f"makepkg {build_flags}"
-        
+
         if self.debug_mode:
             print(f"🔧 [DEBUG] Running makepkg in {target_dir}: {cmd}", flush=True)
-        
+
         try:
             # Ensure target directory is writable
             if not os.access(target_dir, os.W_OK):
@@ -202,7 +208,7 @@ class AURBuilder:
                 import subprocess
                 subprocess.run(['chmod', '755', str(target_dir)], check=False)
                 subprocess.run(['chown', '-R', 'builder:builder', str(target_dir)], check=False)
-            
+
             # First build attempt
             build_result = self.shell_executor.run_command(
                 cmd,
@@ -212,9 +218,10 @@ class AURBuilder:
                 timeout=timeout,
                 extra_env={"PACKAGER": packager_id},
                 log_cmd=self.debug_mode,
-                user="builder"  # Run as builder user
+                user="builder",
+                stream=stream_output,
             )
-            
+
             # Retry logic for missing yasm
             if build_result.returncode != 0:
                 error_output = (build_result.stderr or "") + "\n" + (build_result.stdout or "")
@@ -232,35 +239,36 @@ class AURBuilder:
                             timeout=timeout,
                             extra_env={"PACKAGER": packager_id},
                             log_cmd=self.debug_mode,
-                            user="builder"
+                            user="builder",
+                            stream=stream_output,
                         )
                     else:
                         logger.error("Failed to install yasm, cannot retry build")
-            
+
             # Log diagnostic information on failure
             if build_result.returncode != 0:
                 logger.error(f"❌ Build failed with exit code: {build_result.returncode}")
-                
+
                 # Log diagnostic information
                 logger.error("=== MAKEPKG FAILURE DIAGNOSTICS ===")
                 logger.error(f"Command: {cmd}")
                 logger.error(f"Working directory: {target_dir}")
-                
+
                 # Get user context
                 try:
                     import subprocess
                     whoami_result = subprocess.run(['whoami'], capture_output=True, text=True, check=False)
                     logger.error(f"Current user: {whoami_result.stdout.strip()}")
-                    
+
                     id_result = subprocess.run(['id', '-u'], capture_output=True, text=True, check=False)
                     logger.error(f"Current UID: {id_result.stdout.strip()}")
-                    
+
                     # Check directory permissions
                     logger.error(f"Directory writable: {os.access(target_dir, os.W_OK)}")
                     logger.error(f"Directory owner: {os.stat(target_dir).st_uid}")
                 except Exception as e:
                     logger.error(f"Error getting user context: {e}")
-                
+
                 # Log last 200 lines of output
                 if build_result.stdout:
                     stdout_lines = build_result.stdout.split('\n')
@@ -269,7 +277,7 @@ class AURBuilder:
                     for line in last_stdout:
                         if line.strip():
                             logger.error(f"  {line}")
-                
+
                 if build_result.stderr:
                     stderr_lines = build_result.stderr.split('\n')
                     last_stderr = stderr_lines[-200:] if len(stderr_lines) > 200 else stderr_lines
@@ -277,7 +285,7 @@ class AURBuilder:
                     for line in last_stderr:
                         if line.strip():
                             logger.error(f"  {line}")
-                
+
                 # Don't fail on CMake deprecation warnings
                 if "CMake Deprecation Warning" in build_result.stderr:
                     logger.warning("⚠️ CMake deprecation warnings detected, but continuing...")
@@ -288,14 +296,14 @@ class AURBuilder:
                 else:
                     # Real error
                     return []
-            
+
             if self.debug_mode:
                 if build_result.stdout:
                     print(f"🔧 [DEBUG] MAKEPKG STDOUT:\n{build_result.stdout}", flush=True)
                 if build_result.stderr:
                     print(f"🔧 [DEBUG] MAKEPKG STDERR:\n{build_result.stderr}", flush=True)
                 print(f"🔧 [DEBUG] MAKEPKG EXIT CODE: {build_result.returncode}", flush=True)
-            
+
             # Collect built packages (skip .sig files)
             built_files = []
             for pkg_file in target_dir.glob("*.pkg.tar.*"):
@@ -303,14 +311,14 @@ class AURBuilder:
                 if pkg_file.name.endswith(".sig"):
                     continue
                 built_files.append(pkg_file.name)
-            
+
             if built_files:
                 logger.info(f"✅ Successfully built {pkg_name}: {len(built_files)} package(s)")
                 return built_files
             else:
                 logger.error(f"❌ No package files created for {pkg_name}")
                 return []
-                
+
         except Exception as e:
             logger.error(f"❌ Error building {pkg_name}: {e}")
             return []

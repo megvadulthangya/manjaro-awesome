@@ -62,6 +62,14 @@ GITHUB_REPO = os.getenv("GITHUB_REPOSITORY", "")  # FIX: no hardcoded owner/repo
 # Debug mode configuration - when True, bypass logger for critical build output
 DEBUG_MODE = True
 
+# Packages whose makepkg output should be streamed line-by-line (real-time)
+# in CI logs. Useful for long-running builds (kernel, big packages) to
+# distinguish a slow build from a stalled one. Streaming does not change
+# the build itself — it only changes how output is logged.
+STREAM_OUTPUT_PACKAGES = [
+    "linux-next",
+]
+
 # VPS configuration (from environment variables)
 VPS_USER = os.getenv("VPS_USER")
 VPS_HOST = os.getenv("VPS_HOST")
