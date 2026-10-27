@@ -16,28 +16,13 @@ It is not the ISO download page and it is not an official Manjaro component.
 
 ## About the project
 
-**Manjaro Awesome Respin** is an independent, community-driven collection of Nordic-themed desktop respins based on Manjaro Linux.
+**Manjaro Awesome Respin** is an independent project providing Nordic-themed desktop respins based on Manjaro Linux, shipped in three editions (AwesomeWM, XFCE + Compiz, GNOME).
 
-Three desktop editions are shipped:
-
-- **AwesomeWM** — keyboard-oriented, highly configurable tiling window manager
-- **XFCE + Compiz** — traditional desktop with optional compositing effects
-- **GNOME** — modern, integrated desktop experience
-
-Modern NVIDIA builds (390xx up to current) are provided for all three. Separate **NVIDIA 340 Legacy ISOs** are published on a Legacy-ABI XLibre stack, intended *exclusively* for GPUs that require the 340.108 legacy driver — not for other GPUs, and not as general-purpose Manjaro installs.
-
-The project has no website. Public updates, ISO announcements, and development notes are published on Facebook:
+The project publishes updates, ISO announcements, and download links on Facebook:
 
 **https://www.facebook.com/manjaroawesome**
 
-ISO downloads:
-
-- **SourceForge**: https://sourceforge.net/u/rohambili/profile/
-- **Internet Archive** — automated mirror
-
-Links to new ISOs are shared automatically to the Facebook page as builds complete on GitHub.
-
-The project is not affiliated with, sponsored by, or endorsed by the official Manjaro project.
+It is not affiliated with, sponsored by, or endorsed by the official Manjaro project.
 
 ---
 
@@ -45,7 +30,7 @@ The project is not affiliated with, sponsored by, or endorsed by the official Ma
 
 This is the *upstream* — where packages get built. End users pull from `repo.gshoots.hu`, which this repository's CI populates.
 
-The project's scope has grown beyond its name: the repository now builds the complete dependency set for all three desktop variants (AwesomeWM, XFCE + Compiz, GNOME) — not just AwesomeWM packages.
+The project's scope has grown beyond its name: the repository now builds the complete dependency set for all three desktop variants — not just AwesomeWM packages.
 
 ### Contents
 
@@ -97,21 +82,6 @@ Steps:
 5. **Record** — after the follow-up build succeeds, the new kernel version is written to `.build_tracking/<module>` and the `.pending/<module>` marker is cleared
 
 This loop is what keeps legacy NVIDIA kernel modules current when upstream kernels move — without users having to run DKMS locally on every machine.
-
----
-
-## Related work (separate repositories)
-
-Beyond the ISOs, the project maintains tools for NVIDIA legacy driver support on Manjaro:
-
-- **NVIDIA Driver Assistant** — https://github.com/megvadulthangya/nvidia-driver-assistant
-  Manjaro-specific fork with driver recommendation logic and MHWD integration, including legacy branch handling.
-- **harvest-nvidia-logs** — https://github.com/megvadulthangya/harvest-nvidia-logs
-  Automated build and diagnostic pipeline that turns large `make.log` files into structured failure reports.
-
-These share the project's goals but are tracked in their own repositories.
-
-For NVIDIA legacy driver discussion on the Manjaro forum, see the project's forum thread (linked from the Facebook page).
 
 ---
 
