@@ -1,0 +1,29 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=lua-json-git
+pkgver=r1.0000000
+pkgrel=1
+pkgdesc="Pure lua json library (develop branch, git version)"
+arch=('any')
+url="https://github.com/megvadulthangya/json.lua"
+license=('MIT')
+depends=('lua')
+makedepends=('git')
+provides=('lua-json')
+conflicts=('lua-json')
+
+source=("$pkgname::git+https://github.com/megvadulthangya/json.lua.git#branch=develop")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm644 ./json.lua "$pkgdir/usr/share/lua/5.5/json.lua"
+  install -Dm644 ./LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
