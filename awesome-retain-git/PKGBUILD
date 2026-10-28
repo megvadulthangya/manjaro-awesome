@@ -1,0 +1,29 @@
+# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+
+pkgname=awesome-retain-git
+pkgver=r53.4cf55a2
+pkgrel=1
+pkgdesc="Retain tags and layouts between restarts for Awesome WM (git version)"
+arch=('any')
+url="https://github.com/Veratil/awesome-retain"
+license=('MIT')
+depends=('lua' 'lua-json')
+makedepends=('git')
+provides=('awesome-retain')
+conflicts=('awesome-retain')
+
+source=("$pkgname::git+https://github.com/Veratil/awesome-retain.git#branch=master")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm644 ./init.lua "$pkgdir/usr/share/lua/5.5/retain/init.lua"
+  install -Dm644 ./LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

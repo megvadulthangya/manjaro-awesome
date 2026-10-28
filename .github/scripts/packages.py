@@ -8,6 +8,7 @@ LOCAL_PACKAGES = [
 #    "rofi",
     "linux-next",
     "lua-json-git",
+    "awesome-retain-git",
     "mhwd",
     "xnviewmp-old",
     "cuda-9.1",
