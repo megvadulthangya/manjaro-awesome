@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome-retain-git
-pkgver=r0
+pkgver=r10.f295d25
 pkgrel=1
 pkgdesc="Retain tags and layouts between restarts for Awesome WM (EDID fork)"
 arch=('any')
