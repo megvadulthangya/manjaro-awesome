@@ -2,7 +2,7 @@
 
 pkgname=awesome-copycats-manjaro
 pkgver=r1080.6ad4ea0
-pkgrel=1
+pkgrel=2
 pkgdesc="Nord themed AwesomeWM configuration"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
@@ -25,6 +25,7 @@ package() {
 
   install -dm755 "$pkgdir/etc/xdg/awesome"
   install -dm755 "$pkgdir/usr/share/awesome"
+  install -dm755 "$pkgdir/usr/local/bin"
 
   for dir in configuration modules signals widgets; do
     if [[ -d "$dir" ]]; then
@@ -34,6 +35,10 @@ package() {
 
   if [[ -d "themes" ]]; then
     cp -r themes "$pkgdir/usr/share/awesome/"
+  fi
+
+  if [[ -d "bin" ]]; then
+    install -m755 bin/*.sh "$pkgdir/usr/local/bin/"
   fi
 
   if [[ -f rc.lua.template ]]; then
@@ -46,7 +51,7 @@ package() {
   find "$pkgdir/usr/share/awesome/themes" -type d -exec chmod 755 {} \;
   find "$pkgdir/usr/share/awesome/themes" -type f -exec chmod 644 {} \;
 
-  if [[ -f README.rst ]]; then
-    install -Dm644 README.rst "$pkgdir/usr/share/doc/$pkgname/README.rst"
+  if [[ -f README.md ]]; then
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   fi
 }
