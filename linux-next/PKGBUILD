@@ -6,7 +6,7 @@
 _basekernel=next
 _basever=next
 _kernelname=-MANJARO
-_commit=f1ac44c32cba88ad65dcecd4a279661d14e93651
+_commit=151a134a4e6ec66f69db8750c66006f5207f7a9d
 _commit_short=${_commit:0:12}
 _rc=
 pkgbase=linux-next
@@ -180,7 +180,7 @@ source=(
   0000-iwlwifi-fix.patch
 )
 
-sha256sums=('c3833549a6915fc72d76da71b47f40bba132aae247c7200d4da757fbd19fc40a'
+sha256sums=('SKIP'
             '0c632837dfd52e61224c855293ed44373019b3327459902bad562e57f69cf67f'
             'ac87ef1ae8a6999afc12aa1da4ce0f6bc00bd05e272ada1be3b316b66136cfc5'
             'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
