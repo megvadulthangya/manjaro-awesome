@@ -1,18 +1,18 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome-retain-git
-pkgver=r9.19ff61c
+pkgver=r15.a1b2c3d
 pkgrel=1
-pkgdesc="Retain tags and layouts between restarts for Awesome WM (git version)"
+pkgdesc="Retain tags and layouts between restarts for Awesome WM (EDID fork)"
 arch=('any')
-url="https://github.com/Veratil/awesome-retain"
+url="https://github.com/megvadulthangya/awesome-retain"
 license=('MIT')
-depends=('lua' 'lua-json')
+depends=('lua' 'lua-json' 'xorg-xrandr')
 makedepends=('git')
 provides=('awesome-retain')
 conflicts=('awesome-retain')
 
-source=("$pkgname::git+https://github.com/Veratil/awesome-retain.git#branch=master")
+source=("$pkgname::git+https://github.com/megvadulthangya/awesome-retain.git#branch=develop")
 sha256sums=('SKIP')
 
 pkgver() {
