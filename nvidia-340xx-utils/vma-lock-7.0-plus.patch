@@ -1,11 +1,23 @@
 --- a/nv-mmap.c
 +++ b/nv-mmap.c
-@@ -391,16 +391,32 @@
+@@ -391,16 +391,43 @@
      return status;
  }
  
 -#if !NV_CAN_CALL_VMA_START_WRITE
-+#if !NV_CAN_CALL_VMA_START_WRITE && defined(CONFIG_PER_VMA_LOCK)
++#if NV_CAN_CALL_VMA_START_WRITE
++void nv_vma_start_write(struct vm_area_struct *vma)
++{
++    vma_start_write(vma);
++}
++EXPORT_SYMBOL(nv_vma_start_write);
++#elif !NV_CAN_CALL_VMA_START_WRITE && !defined(CONFIG_PER_VMA_LOCK)
++void nv_vma_start_write(struct vm_area_struct *vma)
++{
++    (void)vma;
++}
++EXPORT_SYMBOL(nv_vma_start_write);
++#elif !NV_CAN_CALL_VMA_START_WRITE && defined(CONFIG_PER_VMA_LOCK)
 +static inline int nv_is_vma_write_locked(struct vm_area_struct *vma, unsigned int *mm_lock_seq)
 +{
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
@@ -36,7 +48,7 @@
      {
          return NV_FALSE;
      }
-@@ -430,7 +446,7 @@
+@@ -430,7 +457,7 @@
      if (interrupted)
      {
          // Clean up on error: release refcount and dep_map
@@ -45,7 +57,7 @@
          rwsem_release(&vma->vmlock_dep_map, _RET_IP_);
          return NV_FALSE;
      }
-@@ -446,7 +462,7 @@
+@@ -446,7 +473,7 @@
  {
      NvU32 mm_lock_seq;
      NvBool locked;
@@ -54,7 +66,7 @@
          return;
  
      locked = nv_vma_enter_locked(vma, NV_FALSE);
-@@ -455,7 +471,7 @@
+@@ -455,7 +482,7 @@
      if (locked)
      {
          NvBool detached;

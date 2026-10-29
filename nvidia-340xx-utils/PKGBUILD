@@ -4,20 +4,242 @@
 # Contributor: Jerry Xiao <aur@mail.jerryxiao.cc>
 # Contributor: Giancarlo Razzolini <grazzolini@archlinux.org>
 #
-# Átírva: Debian 340xx/main patch-sorozat használatára (81 patch).
-# A patchek a series.resolved sorrendjében, a kernel/ könyvtárban
-# kerülnek alkalmazásra. Manjaro-specifikus patchek (0001-0029) eltávolítva.
-# A patchek a PKGBUILD mellett, laposan (nincs debian-patches alkönyvtár).
+# Átírva: Debian 340xx/main patch-sorozat használatára (89 patch).
+# A patchek a series.resolved sorrendjében, a kernel/ könyvtárban,
+# mpatch-csel kerülnek alkalmazásra. Manjaro-specifikus patchek
+# (0001-0029) eltávolítva. A patchek a PKGBUILD mellett, laposan
+# (nincs debian-patches alkönyvtár).
+#
+# =============================================================================
+#  NVIDIA 340xx – Debian patch-sorozat mpatch-csel
+#  For Manjaro-awesome-respin
+# =============================================================================
+#
+#  ┌─────────────────────────────────────────────────────────────────────────┐
+#  │  MPATCH – HORDOZHATÓ KÉZIKÖNYV A PKGBUILD-BEN                          │
+#  │  (Ha elfelejted, itt minden megtalálható. Nem kell GitHub-ot nyitni.)  │
+#  └─────────────────────────────────────────────────────────────────────────┘
+#
+#  MI ÉS MIÉRT
+#  -----------
+#  Az mpatch egy fuzzy patchelő. Nem sorszám és nem bájt-pontos kontextus
+#  alapján illeszt, hanem hasonlósági algoritmussal keresi a patch helyét.
+#  Ez akkor hasznos, ha egy Debian patch egy kicsit elavult a forráshoz
+#  képest, DE a változtatás lényege még stimmel.
+#
+#  KOCKÁZAT
+#  --------
+#  A fuzzy matching rossz helyre is illeszthet. Ezért:
+#    - build-hez MINDIG használj --atomic-ot (minden-vagy-semmi)
+#    - a --fuzz-factor-t csak indokolt esetben lazítsd
+#    - ha egy patch elhasal: először debug, csak utána lazítás
+#
+#  ---------------------------------------------------------------------------
+#  BEVEZETŐ FORMÁTUMOK (amit az mpatch automatikusan felismer)
+#  ---------------------------------------------------------------------------
+#   1. Unified Diff          – ez a Debian patchek formátuma (--- a/ +++ b/)
+#   2. Markdown diff blokk   – ```diff ... ``` (LLM kimenet)
+#   3. Aider Search/Replace  – <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE
+#   4. Conflict Markers      – <<<< ==== >>>> (nincs benne fájlútvonal!)
+#
+#  A Debian patcheink az 1-es típusba esnek. A 4-es típus CLI-ből
+#  csak egy "patch_target" nevű fájlt tud patchelni – nekünk nem jó.
+#
+#  ---------------------------------------------------------------------------
+#  FORMÁTUM-LIMITÁCIÓK (ezeket az mpatch NEM tudja alkalmazni)
+#  ---------------------------------------------------------------------------
+#  Ha a patch az alábbiak bármelyikét tartalmazza, az mpatch NEM
+#  próbálkozik fuzzy-val, hanem azonnal leáll (exit 1, semmit nem ír):
+#
+#    - Git rename/copy:    "rename from" / "copy from"
+#    - Git binary patch:   "GIT binary patch"
+#    - Symlink / submodule mód (bármi, ami nem 100644 / 100755)
+#    - Context diff:       "diff -c"  → regeneráld "diff -u"-val
+#
+#  ⚠ EZ NEM FUZZ-PROBLÉMA. Ha egy patch elbukik, ELŐSZÖR ezt kell
+#  kizárni, mielőtt a fuzz-factort lazítanád. Ha ezek közül van benne,
+#  a --fuzz-factor 0.3 sem segít – a patchet ki kell venni, vagy
+#  kézzel át kell írni.
+#
+#  ---------------------------------------------------------------------------
+#  PARANCSONKÉNTI OPCIÓK (mind a PKGBUILD _mpatch_opts tömbben)
+#  ---------------------------------------------------------------------------
+#
+#  --fuzz-factor N            Hasonlósági küszöb, 0.0 – 1.0
+#     0.0   = fuzzy KIKAPCSOLVA. Az egzakt és a trailing-whitespace-t
+#             toleráló match továbbra is működik. NEM bájt-pontos, és
+#             NEM viselkedik úgy, mint a GNU patch. Preview: --dry-run.
+#     0.5   = laza (kockázatos, csak debug célra)
+#     0.7   = DEFAULT (a tool ajánlott értéke)
+#     0.9   = nagyon szigorú (kevés eltűréssel)
+#     1.0   = gyakorlatilag csak tökéletes egyezés
+#
+#     MIKOR MELYIK?
+#       - Build-hez: 0.7 (default) vagy 0.9 (ha van idő debugolni)
+#       - Ha egy patch elhasal 0.7-en: ELŐSZÖR a FORMÁTUM-LIMITÁCIÓK
+#         szekciót kell kizárni (fent), csak utána lazíts 0.5-re.
+#         Ha 0.5-ön sikerül, a patch elavult → FRISSÍTENI KELL,
+#         nem lazítani.
+#       - Ha 0.5 sem elég: a patch kontextusa túlságosan eltér,
+#         valószínűleg upstream már beolvasztotta → a patchet ki kell venni
+#
+#  -a / --atomic / --all-or-nothing   (a kettő UGYANAZ)
+#     Minden-vagy-semmi. Ha bármely hunk elhasal, egy fájl sem íródik.
+#     Build-hez KÖTELEZŐ. Kikapcsolva részleges írás lehetséges, ami
+#     csendben elrontja a forrásfát.
+#
+#     FONTOS: az atomic és a fuzz-factor ORTOGONÁLIS. Az atomic a
+#     write-szemantikát szabályozza, a fuzz a match-szemantikát.
+#     Az atomic-ot NEM kell a fuzz-hoz igazítani.
+#
+#     HATÓKÖR: egy mpatch híváson belül garantál atomitást. A while
+#     ciklusban minden patch külön hívás → ha a 40. elhasal, az első
+#     39 már lemezre íródott. Ez a mi esetünkben OK, mert a prepare()
+#     elején úgyis rm -rf "${_pkg}"-vel tiszta lappal indulunk.
+#
+#  -R                          Patch megfordítása (add ↔ remove).
+#                              Build-hez nem kell, de ha egy patch-et
+#                              vissza akarsz fejteni (mit is csinál
+#                              pontosan), akkor hasznos.
+#
+#  --dry-run                   Csak előnézet, nem ír fájlt.
+#                              Debug workflow 1. lépése: mit tenne?
+#
+#  -c / --clipboard            Vágólapról olvas. Ilyenkor az INPUT_FILE
+#                              elhagyható: `mpatch -c ./src` is működik.
+#                              Build-hez nem kell.
+#
+#  -                           stdin-ről olvas. Pipe esetén a '-' is
+#                              elhagyható: `git diff | mpatch ./src`.
+#                              Build-hez nem kell (fájlból olvasunk).
+#
+#  -v / --verbose              Ismételhető, szintenként:
+#                                -v     info (mit csinál épp)
+#                                -vv    debug
+#                                -vvv   trace
+#                                -vvvv  trace + debug-riport fájl
+#                              Siker esetén az mpatch ALAPBÓL SEMMIT
+#                              nem ír ki. Ha a build logban látni akarod
+#                              a patchek előrehaladását, tegyél -v-t a
+#                              _mpatch_opts-ba.
+#
+#  -h / --help                 Súgó.
+#
+#  ---------------------------------------------------------------------------
+#  EXIT KÓDOK ÉS KIMENET (a _mpatch_apply logikája erre épül)
+#  ---------------------------------------------------------------------------
+#
+#    Siker (minden hunk alkalmazva)     → exit 0, semmit nem ír ki
+#    Hiba (bármely hunk elbukik)        → exit 1, kiírja a legközelebbi
+#                                          találatot + hasonlóságot
+#    Nincs patch a bemenetben           → warning + exit 0  ⚠ CSAPDA
+#
+#  ⚠ A "nincs patch → exit 0" csapda: ha egy Debian patch véletlenül
+#  üres, vagy csak kommenteket tartalmaz, az mpatch NÉMÁN átengedi,
+#  és a build később, érthetetlen módon hasal el. A _mpatch_apply
+#  ezt nem tudja kiszűrni – ha gyanús egy patch, nézd meg a tartalmát.
+#
+#  ⚠ --atomic NÉLKÜL a sikeres hunok lemezre íródnak akkor is, ha
+#  más hunok elbuknak → részleges, csendben elrontott forrásfa.
+#  Ezért van --atomic kötelezően a _mpatch_opts-ban.
+#
+#  ---------------------------------------------------------------------------
+#  DEBUG WORKFLOW – HA EGY PATCH ELHASAL
+#  ---------------------------------------------------------------------------
+#
+#  1. LÉPÉS – Nézd meg a hibaüzenetet
+#     Az mpatch kiírja, melyik fájlt és melyik hunkot nem tudta alkalmazni.
+#     A prepare() automatikusan -vvvv-vel újrafuttatja a hibás patchet,
+#     és a debug-riportot a ${srcdir}/mpatch-debug/-be másolja.
+#
+#  2. LÉPÉS – Kizártad a FORMÁTUM-LIMITÁCIÓT?
+#     Nézd meg a patch tartalmát:
+#       grep -E 'rename from|copy from|GIT binary patch|^diff -c ' <patch>
+#     Ha bármelyik találat van: a fuzz nem segít, a patchet ki kell
+#     venni vagy kézzel át kell írni. Csak ha üres a találat, menj
+#     tovább a 3. lépésre. (Ez a leggyakrabban elfelejtett ellenőrzés.)
+#
+#  3. LÉPÉS – Nézd meg a debug-riportot
+#     mpatch-debug-report-<timestamp>.md a ${srcdir}/mpatch-debug/-ben.
+#     Tartalmazza:
+#       - az eredeti patch-et
+#       - a célfájl érintett részeit
+#       - inline word-level diffet a nem illeszkedő hunkról
+#       - a legközelebbi hasonló fájlútvonalakat (ha a fájl nem található)
+#
+#  4. LÉPÉS – Próbáld lazítani a fuzz-factort
+#     Szerkeszd a PKGBUILD-ben a _mpatch_opts-ot:
+#       --fuzz-factor 0.5
+#     Futtasd újra: makepkg -f
+#     Ha sikerül: a patch elavult, jegyezd fel, és később frissítsd.
+#     Ha nem sikerül: 5. lépés.
+#
+#  5. LÉPÉS – Reverse-engineer
+#     Nézd meg, mit csinál a patch eredetileg:
+#       mpatch -R --dry-run <patch> kernel/
+#     Ez megmutatja, mit venne ki a forrásból.
+#     Nézd meg a Debian upstream git history-t:
+#       https://salsa.debian.org/nvidia-team/nvidia-graphics-drivers
+#     Keress rá a patch nevére, nézd meg az eredeti commitot.
+#
+#  6. LÉPÉS – Kihagyás vagy frissítés
+#     Ha a patch már upstream-ben van: vedd ki a series.resolved-ból.
+#     Ha a patch elavult: frissítsd a Debian salsa repóból.
+#     Ha muszáj: írj saját patchet a különbségre.
+#
+#  ---------------------------------------------------------------------------
+#  TESZTELÉSI TIPP
+#  ---------------------------------------------------------------------------
+#  Egyetlen patch tesztelése a teljes sorozat helyett:
+#     cd ${srcdir}/NVIDIA-Linux-x86_64-340.108-no-compat32/kernel
+#     mpatch --dry-run --fuzz-factor 0.7 ${srcdir}/<patch> .
+#  Ez megmutatja, mit tenne, anélkül hogy bármit írna.
+#
+# =============================================================================
 
 pkgbase=nvidia-340xx-utils
 pkgname=('nvidia-340xx-utils' 'opencl-nvidia-340xx' 'nvidia-340xx-dkms' 'mhwd-nvidia-340xx')
 pkgver=340.108
-pkgrel=1
+pkgrel=2
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
 options=('!strip')
+makedepends=('mpatch-git')
 _pkg="NVIDIA-Linux-x86_64-${pkgver}-no-compat32"
+
+# =============================================================================
+# MPATCH KONFIGURÁCIÓ – ITT ÁLLÍTS, ITT DEBUGOLJ
+# =============================================================================
+#
+# Az AKTÍV opciók. A kommentelt sorok alternatívák – csak a # jelet kell
+# levenni / visszatenni. A sorrend nem számít.
+#
+_mpatch_opts=(
+    --atomic                # minden-vagy-semmi (build-hez kötelező)
+#    --fuzz-factor 0.7       # default hasonlósági küszöb
+    # --fuzz-factor 0.9     # szigorúbb: kevesebb eltűrés, több bukás
+#    --fuzz-factor 0.3     # lazább: csak debug célra!
+    # --fuzz-factor 0.0     # fuzzy kikapcsolva (egzakt + trailing-ws match)
+    # --dry-run             # ne írjon, csak mutassa mit tenne
+    # -v                    # info szint (siker esetén is ír valamit)
+    # -vvvv                 # debug riport hiba esetén (a prepare() auto hívja)
+    # -R                    # patch megfordítása (reverse-engineer)
+    # -c                    # vágólapról olvas (build-hez nem kell)
+    # -                     # stdin-ről olvas (build-hez nem kell)
+)
+
+# Debug célú extra opciók, amiket a prepare() automatikusan fűz a
+# hibás patchek újrafuttatásához. Ne módosítsd, hacsak nem tudod mit teszel.
+_mpatch_debug_opts=(
+    -vvvv
+    --dry-run
+)
+
+# Ha 1-re állítod, a prepare() az ELSŐ hibás patchnél megáll, és
+# részletes debug-riportot generál a ${srcdir}/mpatch-debug/-be.
+# Ha 0-ra, akkor csak a hibát írja ki, debug nélkül.
+_mpatch_debug_on_failure=1
 
 # ---- Debian patch lista (a series.resolved-ból, sorrend kötelező) ----
 _debian_patches=(
@@ -119,9 +341,13 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
         'nvidia-340xx.rules'
         'series.resolved'
         '20-nvidia.conf'
+        'nvidia-340xx-utils.conf'
+        'nvidia-340xx-utils-modules-load.conf'
         "${_debian_patches[@]}"
 )
 
+# Hash-ek: mind SKIP (9 fix fájl + 89 Debian patch = 98 db), hogy a gyakran
+# frissülő Debian patchek és helper fájlok ne okozzanak felesleges build-hibát.
 sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             'fa6f1e43b468c7d5b7ad7880cd6be7520f37ebb6e7b8c2c9a08756249754af66'
             '327469a3803bd08c79c6295c94c050b3112e821c20dff2d36991474b90c24ff1'
@@ -129,6 +355,8 @@ sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '0e54249a7754b668b436f0f7aa7e95fff68edbb12a93dbee4660e09a8c695f84'
             'dc596198e551d2df146d612705f84c0494de4414c810392abbdeb43c0758727a'
             '89c45a114a3420afc0de53a3d7e4182fe317f16e9a7e559c144c5e69d16e246e'
+            'cb3980feb97f8952b1b2c67009958e31ca412487b9a6cbfc5bacaf8d562c5034'
+            '942bb852968290c7e6dfc6b79c3fea8af19429a30c9bad4d433b890b13e0dd7d'
             '53db3bbf450dbacc6257194002535c5f8a6e6359d4c4fde5ec29603b2e085eb5'
             '36b5094922db3c925aa370ecc6fbd2d36980ff7147f64fadf81ac401503f5f1d'
             '387dfddbb41404dd4c4319ed3a2b757a97b12d594a6d01d7f20ab6329d0b5065'
@@ -212,13 +440,17 @@ sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '5e8cde32a6670e065686988b5b1491c04e20daff1207157ef152fee06488c76d'
             '1410d0431a9ec796fe9637663f11831903392ff708f1e503ed390d1d676134b6'
             'ed2cb4c840b33a0bcfeecc8837f5fdb23af34e16746b8a76bc9c62d0edd950fe'
-            'd192e94b0b11b176c19a1410366c77586d9b18180cb8f4488568d5c68d6cb22a'
+            '08cb4654a165e17b7878046fb594d036d61601e5bd31b43a531a10aef7c051df'
             '6e16b6cd77f9319b18adb7117bfb56dfd58176d0dc7bac560529794c89ebef58'
             'de1b745cc919c9f6c60c73f453523885f24fd111a976262dde41537e7d8c69ba'
             '5522b5f3c5469a0fae8087b80e03b88e77deb0383e8e7cf5a1c0646ac3898da8'
             '6775ad7a49e8d9c7a36548cc4ede551f0c6b07bb5f74133a6fbe28b849114a56'
             '0ce6dd386a9fc1e8393b3f97c7b17cb9d1aab824ae7026d936738c3dae255fa3')
 
+# =============================================================================
+# SYMLINK GENERÁTOR – a .so SONAME-ekhez szükséges linkek létrehozása.
+# Ezt a prepare() után minden package_* függvény meghívja.
+# =============================================================================
 create_links() {
     find "$pkgdir" -type f -name '*.so*' ! -path '*xorg/*' -print0 | while read -d $'\0' _lib; do
         _soname=$(dirname "${_lib}")/$(readelf -d "${_lib}" | grep -Po 'SONAME.*: \[\K[^]]*' || true)
@@ -226,6 +458,53 @@ create_links() {
         [[ -e "${_soname}" ]] || ln -s $(basename "${_lib}") "${_soname}"
         [[ -e "${_base}" ]] || ln -s $(basename "${_soname}") "${_base}"
     done
+}
+
+# =============================================================================
+# SEGÉDFÜGGVÉNYEK – mpatch wrapperek
+# =============================================================================
+
+# Az összes opció egy stringgé fűzése – így a prepare() tisztán hívhatja.
+_mpatch_cmd() {
+    printf '%s ' mpatch "${_mpatch_opts[@]}"
+}
+
+# Egy patch alkalmazása. Ha elhasal ÉS _mpatch_debug_on_failure=1,
+# akkor automatikusan -vvvv --dry-run-nal újrafuttatja, és a debug
+# riportot a ${srcdir}/mpatch-debug/-be másolja.
+_mpatch_apply() {
+    local _patchfile="$1"
+    local _targetdir="$2"
+    local _patchname
+    _patchname=$(basename "$_patchfile")
+
+    # 1. Alkalmazás – a VALÓDI exit kódot elmentjük, mielőtt bármi felülírná.
+    mpatch "${_mpatch_opts[@]}" "$_patchfile" "$_targetdir"
+    local _rc=$?
+
+    # 2. Siker → korai visszatérés, debug nem kell.
+    if [ "$_rc" -eq 0 ]; then
+        return 0
+    fi
+
+    # 3. Bukás → hibaüzenet, majd debug riport (ha be van kapcsolva).
+    echo "!!! mpatch FAILED (rc=$_rc): $_patchname" >&2
+
+    if [ "${_mpatch_debug_on_failure}" = "1" ]; then
+        local _dbgdir="${srcdir}/mpatch-debug"
+        mkdir -p "$_dbgdir"
+        echo ">>> Debug riport generálása: $_dbgdir/" >&2
+        ( cd "$_targetdir" && mpatch "${_mpatch_debug_opts[@]}" \
+            "$_patchfile" . ) > "$_dbgdir/${_patchname}.stdout" 2>&1 || true
+        find "${_targetdir}" -maxdepth 1 -name 'mpatch-debug-report-*.md' \
+            -exec mv {} "$_dbgdir/${_patchname}.report.md" \; 2>/dev/null || true
+        echo ">>> Nézd meg: $_dbgdir/${_patchname}.report.md" >&2
+        echo ">>> Ha elakadtál: olvasd el a PKGBUILD fejlécében a" >&2
+        echo ">>> 'DEBUG WORKFLOW – HA EGY PATCH ELHASAL' részt." >&2
+    fi
+
+    # 4. A VALÓDI hibakóddal térünk vissza → a hívó `|| exit 1` lefut.
+    return "$_rc"
 }
 
 prepare() {
@@ -237,9 +516,10 @@ prepare() {
     cd kernel
 
     # -----------------------------------------------------------------------
-    # 1. Debian patch-sorozat alkalmazása
+    # 1. Debian patch-sorozat alkalmazása mpatch-csel (series.resolved sorrend)
     # -----------------------------------------------------------------------
-    echo ">>> Debian patch-sorozat alkalmazása (kernel/ könyvtárban)..."
+    echo ">>> Debian patch-sorozat alkalmazása mpatch-csel (kernel/ könyvtárban)..."
+    echo ">>> Opciók: ${_mpatch_opts[*]}"
 
     if [ ! -f "${srcdir}/series.resolved" ]; then
         echo "!!! HIBA: hiányzik a series.resolved a PKGBUILD mellől"
@@ -262,11 +542,11 @@ prepare() {
         fi
 
         printf '[%3d/%d] %s\n' "$_n" "$_total" "$_patch"
-        patch -Np1 --forward --no-backup-if-mismatch < "$_patchfile" \
+        _mpatch_apply "$_patchfile" . \
             || { echo "!!! PATCH FAILED: $_patch"; exit 1; }
     done < "${srcdir}/series.resolved"
 
-    echo ">>> Mind a $_n patch sikeresen alkalmazva."
+    echo ">>> Mind a $_n patch sikeresen alkalmazva (mpatch)."
 
     # -----------------------------------------------------------------------
     # 2. UVM conftest.sh lecserélése a patchelt fő conftest.sh másolatára.
@@ -357,7 +637,7 @@ EOF_HEADER
     sed -i -E 's/^([[:space:]]*)CLEAN/\1clean/' dkms.conf
     # PREEMPT_RT flag beégetése a DKMS make hívásaiba, hogy RT kernelen
 # a DKMS automatikus újraépítés is átmenjen (nem csak a prebuilt csomag).
-    sed -i 's|^MAKE\[0\]="make |MAKE[0]="IGNORE_PREEMPT_RT_PRESENCE=1 make |' dkms.conf
+    sed -i 's|^MAKE\[0\]="make |MAKE\[0\]="IGNORE_PREEMPT_RT_PRESENCE=1 make |' dkms.conf
     sed -i 's|; make -C uvm |; IGNORE_PREEMPT_RT_PRESENCE=1 make -C uvm |' dkms.conf
     cd ..
 }
@@ -468,8 +748,17 @@ package_nvidia-340xx-utils() {
     install -Dm644 "${srcdir}/nvidia-340xx.rules" "${pkgdir}/usr/lib/udev/rules.d/60-nvidia-340xx.rules"
     install -Dm644 "${srcdir}/nvidia-utils.sysusers" "${pkgdir}/usr/lib/sysusers.d/nvidia-340xx-utils.conf"
 
-    echo "blacklist nouveau" | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modprobe.d/${pkgname}.conf"
-    echo "nvidia-uvm" | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modules-load.d/${pkgname}.conf"
+    # -----------------------------------------------------------------------
+    # modprobe.d: blacklist + softdep (fájlból, echo nélkül)
+    # -----------------------------------------------------------------------
+    install -Dm644 "${srcdir}/nvidia-340xx-utils.conf" \
+        "${pkgdir}/usr/lib/modprobe.d/${pkgname}.conf"
+
+    # -----------------------------------------------------------------------
+    # modules-load.d: nvidia-uvm (fájlból, echo nélkül)
+    # -----------------------------------------------------------------------
+    install -Dm644 "${srcdir}/nvidia-340xx-utils-modules-load.conf" \
+        "${pkgdir}/usr/lib/modules-load.d/${pkgname}.conf"
 
     create_links
 
