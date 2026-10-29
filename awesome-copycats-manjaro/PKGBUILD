@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome-copycats-manjaro
-pkgver=r1100.88d8df9
+pkgver=r1107.a485226
 pkgrel=1
 pkgdesc="Nord themed AwesomeWM configuration"
 arch=('any')
