@@ -35,7 +35,7 @@ LOCAL_PACKAGES = [
     "linux66-rt-nvidia-340xx",
     "linux72-nvidia-340xx",
     "linux73-nvidia-340xx",
-#    "linux-next-nvidia-340xx",
+    "linux-next-nvidia-340xx",
     "linux612-nvidia-340xx",
     "linux612-rt-nvidia-340xx",
     "linux618-nvidia-340xx",
