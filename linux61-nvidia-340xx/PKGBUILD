@@ -6,7 +6,7 @@ _linuxprefix=linux61   # <-- EZT cseréld a kívánt kernelre
 
 pkgname="${_linuxprefix}-nvidia-340xx"
 pkgver=340.108
-pkgrel=1
+pkgrel=2
 pkgdesc="NVIDIA kernel modules for ${_linuxprefix}"
 arch=('x86_64')
 url="https://www.nvidia.com/"
