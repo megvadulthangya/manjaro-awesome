@@ -7,6 +7,14 @@ pkgdesc="Nord themed AwesomeWM configuration"
 arch=('any')
 url="https://github.com/megvadulthangya/awesome-copycats-manjaro"
 license=('GPL3')
+depends=(
+  'xorg-xrandr'
+  'copyq'
+  'lain-git'
+  'lua-json-git'
+  'awesome-retain-git'
+)
+
 makedepends=('git')
 backup=('etc/xdg/awesome/rc.lua')
 
