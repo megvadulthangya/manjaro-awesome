@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=awesome54-git
-pkgver=4.3.1753.g7ae39e0a8
+pkgver=4.3.1754.gc463e19ef
 pkgrel=1
 pkgdesc='Highly configurable framework window manager (Lua 5.4 build)'
 arch=('i686' 'x86_64')
