@@ -200,7 +200,7 @@
 pkgbase=nvidia-340xx-utils
 pkgname=('nvidia-340xx-utils' 'opencl-nvidia-340xx' 'nvidia-340xx-dkms' 'mhwd-nvidia-340xx')
 pkgver=340.108
-pkgrel=2
+pkgrel=3
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
@@ -440,7 +440,7 @@ sha256sums=('995d44fef587ff5284497a47a95d71adbee0c13020d615e940ac928f180f5b77'
             '5e8cde32a6670e065686988b5b1491c04e20daff1207157ef152fee06488c76d'
             '1410d0431a9ec796fe9637663f11831903392ff708f1e503ed390d1d676134b6'
             'ed2cb4c840b33a0bcfeecc8837f5fdb23af34e16746b8a76bc9c62d0edd950fe'
-            '08cb4654a165e17b7878046fb594d036d61601e5bd31b43a531a10aef7c051df'
+            'b1aaa36f6899a0f285cf4b0025a4a49af1589bceb93cd71cecdbd364b3e39b10'
             '6e16b6cd77f9319b18adb7117bfb56dfd58176d0dc7bac560529794c89ebef58'
             'de1b745cc919c9f6c60c73f453523885f24fd111a976262dde41537e7d8c69ba'
             '5522b5f3c5469a0fae8087b80e03b88e77deb0383e8e7cf5a1c0646ac3898da8'
