@@ -1,0 +1,181 @@
+
+#!/usr/bin/bash
+
+set -u
+
+STATE_FILE="/var/lib/linux-next/pending-cleanup"
+KVER_FILE="/boot/linux-next-x86_64.kver"
+MODULES_ROOT="/usr/lib/modules"
+
+_valid_kernelrelease() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9._+-]+$ ]] &&
+    [[ "${1:-}" != "." ]] &&
+    [[ "${1:-}" != ".." ]]
+}
+
+if [[ ! -s "${STATE_FILE}" ]]; then
+    exit 0
+fi
+
+if [[ ! -r "${KVER_FILE}" ]]; then
+    printf 'WARNING: Cannot read current kernelrelease. Cleanup skipped.\n' >&2
+    exit 0
+fi
+
+if ! IFS=' ' read -r current_release _ < "${KVER_FILE}"; then
+    exit 0
+fi
+
+if ! _valid_kernelrelease "${current_release}"; then
+    printf 'WARNING: Invalid current kernelrelease. Cleanup skipped.\n' >&2
+    exit 0
+fi
+
+# Verify that pacman can query file ownership before deleting anything.
+if ! /usr/bin/pacman -Qo /usr/bin/pacman >/dev/null 2>&1; then
+    printf 'WARNING: Pacman ownership database unavailable. Cleanup skipped.\n' >&2
+    exit 0
+fi
+
+tmp_state=$(/usr/bin/mktemp "${STATE_FILE}.XXXXXX") || exit 1
+tmp_data=$(/usr/bin/mktemp "${STATE_FILE}.data.XXXXXX") || {
+    /usr/bin/rm -f -- "${tmp_state}"
+    exit 1
+}
+
+trap '/usr/bin/rm -f -- "${tmp_state}" "${tmp_data}"' EXIT
+
+while IFS= read -r old_release || [[ -n "${old_release}" ]]; do
+
+    [[ -n "${old_release}" ]] || continue
+
+    if ! _valid_kernelrelease "${old_release}"; then
+        printf 'WARNING: Invalid saved kernelrelease: %s\n' \
+            "${old_release}" >&2
+        printf '%s\n' "${old_release}" >> "${tmp_state}"
+        continue
+    fi
+
+    # Never remove the currently installed kernel.
+    if [[ "${old_release}" == "${current_release}" ]]; then
+        continue
+    fi
+
+    old_dir="${MODULES_ROOT}/${old_release}"
+
+    # Pacman may already have removed the complete directory.
+    if [[ ! -d "${old_dir}" ]]; then
+        continue
+    fi
+
+    # Collect all existing non-directory entries.
+    if ! /usr/bin/find "${old_dir}" -mindepth 1 ! -type d -print0 > "${tmp_data}"; then
+        printf 'WARNING: Cannot inspect %s; retaining it.\n' \
+            "${old_dir}" >&2
+        printf '%s\n' "${old_release}" >> "${tmp_state}"
+        continue
+    fi
+
+    # Do not delete anything still owned by an installed package.
+    owner_found=0
+
+    while IFS= read -r -d '' entry; do
+        if /usr/bin/pacman -Qo "${entry}" >/dev/null 2>&1; then
+            owner_found=1
+            break
+        fi
+    done < "${tmp_data}"
+
+    if (( owner_found )); then
+        printf '>> Retaining %s: package-owned files still exist.\n' \
+            "${old_release}"
+        printf '%s\n' "${old_release}" >> "${tmp_state}"
+        continue
+    fi
+
+    # Remove DKMS registrations for this particular old kernel.
+    # Do not use --all: that would affect other installed kernels too.
+    if [[ -x /usr/bin/dkms ]]; then
+
+        if ! /usr/bin/dkms status -k "${old_release}/x86_64" > "${tmp_data}" 2>&1; then
+            printf 'WARNING: Cannot query DKMS for %s; retaining it.\n' \
+                "${old_release}" >&2
+            printf '%s\n' "${old_release}" >> "${tmp_state}"
+            continue
+        fi
+
+        dkms_failed=0
+
+        while IFS= read -r dkms_line; do
+            [[ -n "${dkms_line}" ]] || continue
+
+            if [[ "${dkms_line}" != *,* ]]; then
+                printf 'WARNING: Unrecognized DKMS status: %s\n' \
+                    "${dkms_line}" >&2
+                dkms_failed=1
+                break
+            fi
+
+            module_version="${dkms_line%%,*}"
+            module_version="${module_version//[[:space:]]/}"
+
+            if [[ "${module_version}" != */* ]]; then
+                dkms_failed=1
+                break
+            fi
+
+            module="${module_version%%/*}"
+            version="${module_version#*/}"
+
+            if [[ ! "${module}" =~ ^[A-Za-z0-9._+-]+$ ||
+                  ! "${version}" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+                printf 'WARNING: Invalid DKMS module entry: %s\n' \
+                    "${module_version}" >&2
+                dkms_failed=1
+                break
+            fi
+
+            printf '>> Removing DKMS module %s/%s for %s\n' \
+                "${module}" "${version}" "${old_release}"
+
+            if ! /usr/bin/dkms remove \
+                -m "${module}" \
+                -v "${version}" \
+                -k "${old_release}/x86_64"; then
+                dkms_failed=1
+            fi
+
+        done < "${tmp_data}"
+
+        if (( dkms_failed )); then
+            printf 'WARNING: DKMS cleanup incomplete for %s; retaining directory.\n' \
+                "${old_release}" >&2
+            printf '%s\n' "${old_release}" >> "${tmp_state}"
+            continue
+        fi
+    fi
+
+    # No package-owned files or registered DKMS modules remain.
+    if /usr/bin/rm -rf -- "${old_dir}"; then
+        printf '>> Removed obsolete kernel directory: %s\n' \
+            "${old_dir}"
+    else
+        printf 'WARNING: Failed to remove %s\n' "${old_dir}" >&2
+        printf '%s\n' "${old_release}" >> "${tmp_state}"
+    fi
+
+done < "${STATE_FILE}"
+
+# Keep only kernel releases that could not yet be safely removed.
+if [[ -s "${tmp_state}" ]]; then
+    if ! /usr/bin/sort -u -o "${tmp_state}" "${tmp_state}"; then
+        exit 1
+    fi
+
+    /usr/bin/mv -f -- "${tmp_state}" "${STATE_FILE}" || exit 1
+else
+    /usr/bin/rm -f -- "${STATE_FILE}" "${tmp_state}"
+fi
+
+/usr/bin/rm -f -- "${tmp_data}"
+trap - EXIT

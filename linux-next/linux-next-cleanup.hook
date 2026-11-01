@@ -1,0 +1,16 @@
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = linux-next
+Target = linux-next-headers
+
+[Action]
+Description = Cleaning obsolete linux-next kernel module directories...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/linux-next-cleanup
+Depends = bash
+Depends = coreutils
+Depends = findutils
+Depends = pacman

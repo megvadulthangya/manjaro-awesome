@@ -1,3 +1,4 @@
+
 # Maintainer: gabi <gabi@localhost>
 # Based on:
 #   - AUR linux-next-git
@@ -24,10 +25,12 @@ if [[ ! "${_commit}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 _commit_metadata_url="https://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next/+/${_commit}?format=JSON"
+
 if ! command -v curl >/dev/null 2>&1; then
   printf 'ERROR: curl is required to resolve the pinned linux-next commit date.\n' >&2
   exit 1
 fi
+
 if ! command -v python3 >/dev/null 2>&1; then
   printf 'ERROR: python3 is required to parse the pinned linux-next commit metadata.\n' >&2
   exit 1
@@ -59,8 +62,6 @@ value = committer.get("time")
 if not value:
     raise SystemExit("Gitiles response has no committer timestamp")
 dt = datetime.datetime.strptime(value, "%a %b %d %H:%M:%S %Y %z")
-# Keep the date as recorded in the commit timezone; preserve the exact instant
-# separately as SOURCE_DATE_EPOCH so builds are independent of local timezone.
 print(dt.strftime("%Y%m%d"), int(dt.timestamp()))
 ' "${_commit}" <<< "${_commit_json}")" || {
   printf 'ERROR: could not parse Git commit metadata for %s.\n' "${_commit}" >&2
@@ -68,6 +69,7 @@ print(dt.strftime("%Y%m%d"), int(dt.timestamp()))
 }
 
 read -r _commit_date _commit_epoch <<< "${_commit_metadata}"
+
 if [[ ! "${_commit_date}" =~ ^[0-9]{8}$ || ! "${_commit_epoch}" =~ ^[0-9]+$ ]]; then
   printf 'ERROR: invalid commit date metadata for %s: %s\n' "${_commit}" "${_commit_metadata}" >&2
   exit 1
@@ -77,7 +79,10 @@ pkgver() {
     echo "${_commit_date}.r0.g${_commit_short}"
 }
 
+# Intentionally static:
+# The GitHub builder updates this value to the last successfully built version.
 pkgver=20261030.r0.g7649ba73f9e7
+
 _source_tarball="linux-next-${_commit_date}-${_commit}.tar.gz"
 _srcdir="linux-next-${_commit}"
 
@@ -143,23 +148,24 @@ options=(
 
 # The selectable options are intentionally kept together here.
 _mpatch_opts=(
-    --atomic                # minden-vagy-semmi (build-hez kötelező)
-    --fuzz-factor 0.7       # default hasonlósági küszöb
-#     --fuzz-factor 0.9     # szigorúbb: kevesebb eltűrés, több bukás
-#    --fuzz-factor 0.3     # lazább: csak debug célra!
-#    --fuzz-factor 0.1
-    # --fuzz-factor 0.0     # csak egzakt egyezés
-#    --dry-run             # ne írjon, csak mutassa mit tenne
-    # -vvvv                 # debug riport hiba esetén (a prepare() auto hívja)
-    # -R                    # patch megfordítása (reverse-engineer)
-    # -c                    # vágólapról olvas (build-hez nem kell)
-    # -                     # stdin-ről olvas (build-hez nem kell)
+    --atomic
+    --fuzz-factor 0.7
+#   --fuzz-factor 0.9
+#   --fuzz-factor 0.3
+#   --fuzz-factor 0.1
+#   --fuzz-factor 0.0
+#   --dry-run
+#   -vvvv
+#   -R
+#   -c
+#   -
 )
 
 _mpatch_debug_opts=(
   -vvvv
   --dry-run
 )
+
 _mpatch_debug_on_failure=1
 
 source=(
@@ -180,8 +186,8 @@ source=(
   0000-iwlwifi-fix.patch
 )
 
-sha256sums=('SKIP'
-            '0c632837dfd52e61224c855293ed44373019b3327459902bad562e57f69cf67f'
+sha256sums=('eb7ab83bae4bb121db053b2c387aab8b65ffbc9cea0ce5818a73f86bf47fcd06'
+            '80282f72c636a69f84af13a7c2a3a281281eb1cc74deee68423b0d662ba08aa7'
             'ac87ef1ae8a6999afc12aa1da4ce0f6bc00bd05e272ada1be3b316b66136cfc5'
             'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
@@ -194,7 +200,26 @@ sha256sums=('SKIP'
             'f53e0ad0892ab4bd85f55b4cbb829481eba28865cf835a46c80bc237e0771981'
             '138684588665b8f651dffb4e75c265a2b81f6bd7a606f75f8fc6814a4a63d3fd'
             '3d37e1f54290bad1b7a4c5c45046341dc4c1bfc2f8648b7754bf0bd9705b3a35'
-            '9628a67ac23beaf2de7194d2934386944adc64cb2a4a90e4c38b867b868654b4')
+            '9628a67ac23beaf2de7194d2934386944adc64cb2a4a90e4c38b867b868654b4'
+            '6994d7a815feee1b9956c957d192c976cc0da3ee16adb3f2e8de7aa3595d99f7'
+            '6567929ea33814c83b72aba755e6fb9d807b6c64cd7450724ebd32d5cd3fd02f')
+
+# =============================================================================
+# AUTOMATIC OLD KERNEL CLEANUP
+# =============================================================================
+# The hook and cleanup helper are local files beside this PKGBUILD.
+#
+# linux-next-cleanup.hook
+# linux-next-cleanup
+#
+# The .install script is assigned separately to package_linux-next().
+# It is deliberately NOT included in the source array.
+
+source+=(
+  linux-next-cleanup.hook
+  linux-next-cleanup
+)
+
 
 # Reproducible kernel build metadata: derived from the pinned commit, not build time.
 export SOURCE_DATE_EPOCH="${_commit_epoch}"
@@ -220,6 +245,7 @@ _mpatch_apply() {
   if [[ "${_mpatch_debug_on_failure}" == '1' ]]; then
     local _dbgdir="${srcdir}/mpatch-debug"
     mkdir -p -- "${_dbgdir}"
+
     printf 'Generating mpatch diagnostics in %s\n' "${_dbgdir}" >&2
 
     (
@@ -250,6 +276,7 @@ prepare() {
   fi
 
   local -a _patches=()
+
   mapfile -t _patches < <(
     awk '
       {
@@ -270,6 +297,7 @@ prepare() {
     fi
 
     msg "Applying ${#_patches[@]} patch(es) in series.resolved order."
+
     local _patch
     local _patchfile
     local _index=0
@@ -284,12 +312,14 @@ prepare() {
       fi
 
       _patchfile="${srcdir}/${_patch}"
+
       if [[ ! -f "${_patchfile}" ]]; then
         error "Patch listed in series.resolved is missing: ${_patchfile}"
         return 1
       fi
 
       msg "[${_index}/${_total}] ${_patch}"
+
       if ! _mpatch_apply "${_patchfile}" "${PWD}"; then
         error "Patch application failed: ${_patch}. See ${srcdir}/mpatch-debug/ if enabled."
         return 1
@@ -300,23 +330,32 @@ prepare() {
   make olddefconfig
   diff -u "${srcdir}/config" .config || :
   make -s kernelrelease > version
+
   msg "Prepared ${pkgbase} version $(<version)"
 }
 
 build() {
   cd -- "${_srcdir}"
+
   make ${MAKEFLAGS} bzImage modules
   make -C tools/bpf/bpftool vmlinux.h feature-clang-bpf-co-re=1
 }
+
 package_linux-next() {
+  # Package-specific install script.
+  install=linux-next.install
+
   pkgdesc='The Linux next kernel and modules'
+
   depends=('coreutils' 'initramfs' 'kmod')
+
   optdepends=(
     'linux-next-headers: headers and scripts for building modules'
     'linux-firmware: firmware images needed for some devices'
     'scx-scheds: to use sched-ext schedulers'
     'wireless-regdb: to set the correct wireless channels of your country'
   )
+
   provides=(
     "linux=${pkgver}"
     KSMBD-MODULE
@@ -324,38 +363,70 @@ package_linux-next() {
     VIRTUALBOX-GUEST-MODULES
     WIREGUARD-MODULE
   )
+
   replaces=('virtualbox-guest-modules' 'wireguard')
 
   cd -- "${_srcdir}"
+
   local modulesdir="${pkgdir}/usr/lib/modules/$(<version)"
 
   install -Dm644 "$(make -s image_name)" "${modulesdir}/vmlinuz"
+
   printf '%s\n' "${pkgbase}" | install -Dm644 /dev/stdin "${modulesdir}/pkgbase"
   printf '%s\n' "${_basekernel}-${CARCH}" | install -Dm644 /dev/stdin "${modulesdir}/kernelbase"
 
   install -d "${pkgdir}/boot"
+
   printf '%s x64\n' "$(<version)" > "${pkgdir}/boot/${pkgbase}-${CARCH}.kver"
 
   ZSTD_CLEVEL=19 make INSTALL_MOD_PATH="${pkgdir}/usr" INSTALL_MOD_STRIP=1 \
     DEPMOD=/doesnt/exist modules_install
 
   rm -f -- "${modulesdir}/build"
+
   depmod -b "${pkgdir}/usr" -F System.map "$(<version)"
+
+  # Install the PostTransaction cleanup hook.
+  install -Dm644 "${srcdir}/linux-next-cleanup.hook" \
+    "${pkgdir}/usr/share/libalpm/hooks/95-linux-next-cleanup.hook"
+
+  # Install the cleanup helper.
+  install -Dm755 "${srcdir}/linux-next-cleanup" \
+    "${pkgdir}/usr/share/libalpm/scripts/linux-next-cleanup"
 }
 
 package_linux-next-headers() {
   pkgdesc='Headers and scripts for building modules for the Linux next kernel'
-  depends=('binutils' 'glibc' 'libelf' 'libgcc' 'openssl' 'pahole' 'xxhash' 'zlib' 'zstd')
-  provides=('LINUX-HEADERS' "linux-next-headers=${pkgver}")
+
+  depends=(
+    'binutils'
+    'glibc'
+    'libelf'
+    'libgcc'
+    'openssl'
+    'pahole'
+    'xxhash'
+    'zlib'
+    'zstd'
+  )
+
+  provides=(
+    'LINUX-HEADERS'
+    "linux-next-headers=${pkgver}"
+  )
 
   cd -- "${_srcdir}"
+
   local builddir="${pkgdir}/usr/lib/modules/$(<version)/build"
 
   install -Dt "${builddir}" -m644 .config Makefile Module.symvers System.map \
     localversion.* version vmlinux tools/bpf/bpftool/vmlinux.h
+
   install -Dt "${builddir}/kernel" -m644 kernel/Makefile
   install -Dt "${builddir}/arch/x86" -m644 arch/x86/Makefile
+
   cp -t "${builddir}" -a scripts
+
   ln -srt "${builddir}" "${builddir}/scripts/gdb/vmlinux-gdb.py"
 
   install -Dt "${builddir}/tools/objtool" tools/objtool/objtool
@@ -367,6 +438,7 @@ package_linux-next-headers() {
 
   cp -t "${builddir}" -a include
   cp -t "${builddir}/arch/x86" -a arch/x86/include
+
   install -Dt "${builddir}/arch/x86/kernel" -m644 arch/x86/kernel/asm-offsets.s
 
   install -Dt "${builddir}/drivers/md" -m644 drivers/md/*.h
@@ -375,12 +447,14 @@ package_linux-next-headers() {
   install -Dt "${builddir}/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
   install -Dt "${builddir}/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
   install -Dt "${builddir}/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+
   install -Dt "${builddir}/drivers/iio/common/hid-sensors" \
     -m644 drivers/iio/common/hid-sensors/*.h
 
   find . -name 'Kconfig*' -exec install -Dm644 {} "${builddir}/{}" \;
 
   local _arch
+
   for _arch in "${builddir}"/arch/*/; do
     [[ -d "${_arch}" ]] || continue
     [[ "${_arch}" == "${builddir}/arch/x86/" ]] && continue
@@ -388,10 +462,12 @@ package_linux-next-headers() {
   done
 
   rm -rf -- "${builddir}/Documentation"
+
   find -L "${builddir}" -type l -printf 'Removing %P\n' -delete
   find "${builddir}" -type f -name '*.o' -printf 'Removing %P\n' -delete
 
   local _file
+
   while IFS= read -r -d '' _file; do
     case "$(file -Sib "${_file}")" in
       application/x-sharedlib\;*)       strip -v ${STRIP_SHARED} "${_file}" ;;
@@ -404,6 +480,7 @@ package_linux-next-headers() {
   strip -v ${STRIP_STATIC} "${builddir}/vmlinux"
 
   install -d "${pkgdir}/usr/src"
+
   ln -sr "${builddir}" "${pkgdir}/usr/src/${pkgbase}"
 }
 
