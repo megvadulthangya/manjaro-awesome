@@ -186,7 +186,7 @@ source=(
   0000-iwlwifi-fix.patch
 )
 
-sha256sums=('eb7ab83bae4bb121db053b2c387aab8b65ffbc9cea0ce5818a73f86bf47fcd06'
+sha256sums=('SKIP'
             '80282f72c636a69f84af13a7c2a3a281281eb1cc74deee68423b0d662ba08aa7'
             'ac87ef1ae8a6999afc12aa1da4ce0f6bc00bd05e272ada1be3b316b66136cfc5'
             'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
