@@ -81,7 +81,7 @@ pkgver() {
 
 # Intentionally static:
 # The GitHub builder updates this value to the last successfully built version.
-pkgver=20261102.r0.g2637bdec0535
+pkgver=20261103.r0.gd6bcfc94eb4d
 
 _source_tarball="linux-next-${_commit_date}-${_commit}.tar.gz"
 _srcdir="linux-next-${_commit}"
@@ -172,13 +172,11 @@ source=(
   "${_source_tarball}::https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git/snapshot/linux-next-${_commit}.tar.gz"
   config
   series.resolved
-  0001-add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by.patch
   0002-drivers-firmware-skip-simpledrm-if-nvidia-drm.modese.patch
   0000-drm-amdgpu-fix-race-condition-in-amdgpu_vm_wait_idle-during-process-kill.patch
   0001-drm-amd-Sanity-check-custom-brightness-curve-data-po.patch
   0000-usb-vhci-hcd-Unconditionally-allow-system-suspend.patch
   0999-patch_realtek.patch
-  0001-iio-imu-bmi270-Match-PNP-ID-found-on-newer-OrangePi-NEO-firmware.patch
   0001-zotac-zone-hid-initial-impl.patch
   0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch
   0003-tmp-apply-zotac-screen-quirk.patch
@@ -188,14 +186,12 @@ source=(
 
 sha256sums=('SKIP'
             '80282f72c636a69f84af13a7c2a3a281281eb1cc74deee68423b0d662ba08aa7'
-            'ac87ef1ae8a6999afc12aa1da4ce0f6bc00bd05e272ada1be3b316b66136cfc5'
-            'ccbd1a83d4f25020b9a19cf6d7a16d9d0b3d50543082dd233f514fb655bf042c'
+            'e254e87c199d814e548cd88d41c2e1d024ce286c7438c61cb9eab69090119018'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
             'cacb08b2f43a9fd09053bffaacc4b7bdf8381772f26e61825fb696ded100af57'
             '512032c6b93fce24254da6cace7bf101c8f7c824761a0f99deed4b7724ac6f3e'
             '103688f3fceff664c919d94faab7a6948880710641110eaa71fe107ee06c37e9'
-            'fc358dd3b574e4f47d25952417107ca0e743d33125ed93866697a266cde9b76e'
             'e6e8c4c4143b760fcf927c3ff978126b03c6d558f86d39d7b11f009af1f43eb9'
             'f53e0ad0892ab4bd85f55b4cbb829481eba28865cf835a46c80bc237e0771981'
             '138684588665b8f651dffb4e75c265a2b81f6bd7a606f75f8fc6814a4a63d3fd'
