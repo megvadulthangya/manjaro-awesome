@@ -13,6 +13,7 @@ depends=(
   'lain-git'
   'lua-json-git'
   'awesome-retain-git'
+  'dunst'
 )
 
 makedepends=('git')
