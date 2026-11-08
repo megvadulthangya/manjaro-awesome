@@ -7,7 +7,7 @@
 # Contributor: SanskritFritz (gmail)
 
 pkgname=rofi-git
-pkgver=r4379.a4534903
+pkgver=r4382.68f2db03
 pkgrel=1
 pkgdesc='A window switcher, run dialog and dmenu replacement'
 arch=('x86_64' 'aarch64')
