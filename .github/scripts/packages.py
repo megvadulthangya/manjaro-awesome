@@ -21,7 +21,7 @@ LOCAL_PACKAGES = [
     "gcc49",
     "rofi-git",
     "awesome-updater",
-    "xlibre-xserver-legacyabi",
+#    "xlibre-xserver-legacyabi",
     "gtkd",
     "lib32-libxvmc",
     "nvidia-340xx-utils",
