@@ -1,0 +1,100 @@
+--- a/nvidia-drm/nvidia-drm-prime-fence.c
++++ b/nvidia-drm/nvidia-drm-prime-fence.c
+@@ -49,15 +49,9 @@
+     struct NvKmsKapiMemory *pSemSurface;
+     NvU32 *pLinearAddress;
+ 
+-    /* Protects nv_drm_fence_context::{pending, dead, cd, last_seqno} */
++    /* Protects nv_drm_fence_context::{pending, last_seqno} */
+     spinlock_t lock;
+ 
+-    /*
+-     * Whether the fence context is active and all fields in this
+-     * structure are valid.
+-     */
+-    bool dead;
+-
+     /* Software signaling structures */
+     struct NvKmsKapiChannelEvent *cb;
+ 
+@@ -143,8 +137,6 @@
+ {
+     WARN_ON(!spin_is_locked(&nv_fence_context->lock));
+ 
+-    WARN_ON(nv_fence_context->dead);
+-
+     while (!list_empty(&nv_fence_context->pending)) {
+         struct nv_drm_prime_fence *nv_fence = list_first_entry(
+             &nv_fence_context->pending,
+@@ -165,11 +157,6 @@
+     spin_lock(&nv_fence_context->lock);
+ 
+-    if (nv_fence_context->dead) {
+-        WARN_ON(!list_empty(&nv_fence_context->pending));
+-        goto unlock_and_out;
+-    }
+-
+     while (!list_empty(&nv_fence_context->pending)) {
+         struct nv_drm_prime_fence *nv_fence = list_first_entry(
+             &nv_fence_context->pending,
+@@ -192,5 +179,4 @@
+         __nv_drm_prime_fence_signal(nv_fence);
+     }
+ 
+-unlock_and_out:
+     spin_unlock(&nv_fence_context->lock);
+ }
+ 
+@@ -310,20 +296,15 @@
+-    /*
+-     * Force signal all pending fences to empty pending list, free channel
+-     * event, and mark as dead.
+-     */
+-
+-    spin_lock(&nv_fence_context->lock);
+-
+-    nv_drm_gem_prime_force_fence_signal(nv_fence_context);
+-
+-    nvKms->freeChannelEvent(nv_dev->pDevice, nv_fence_context->cb);
+-
+-    nv_fence_context->dead = true;
+-
+-    spin_unlock(&nv_fence_context->lock);
+-
+-    /* Wait for all its already schedule callbacks to complete. */
+-
+-    flush_scheduled_work();
+-
++    /*
++     * Free the channel event before destroying the fence context,
++     * then force signal all pending fences.
++     */
++    nvKms->freeChannelEvent(nv_dev->pDevice, nv_fence_context->cb);
++
++    /* Force signal all pending fences and empty the pending list. */
++    spin_lock(&nv_fence_context->lock);
++
++    nv_drm_gem_prime_force_fence_signal(nv_fence_context);
++
++    spin_unlock(&nv_fence_context->lock);
++
+     /* Free nvkms resources */
+ 
+@@ -350,11 +331,6 @@
+     spin_lock(&nv_fence_context->lock);
+ 
+-    if (nv_fence_context->dead) {
+-        ret = -EINVAL;
+-        goto unlock_and_out;
+-    }
+-
+     /*
+      * If seqno wrapped, force signal fences to make sure none of them
+      * get stuck.
+@@ -400,6 +381,5 @@
+     }
+ 
+-unlock_and_out:
+     spin_unlock(&nv_fence_context->lock);
+ 
+     return nv_fence;

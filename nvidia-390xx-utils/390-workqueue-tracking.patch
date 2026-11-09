@@ -1,0 +1,221 @@
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -1546,9 +1546,14 @@
+     void *data;
+ } nv_work_t;
+ 
+-#define NV_WORKQUEUE_SCHEDULE(work) schedule_work(work)
+-#define NV_WORKQUEUE_FLUSH()                           \
+-    flush_scheduled_work();
++int NV_API_CALL nv_workqueue_init(void);
++void NV_API_CALL nv_workqueue_shutdown(void);
++int NV_API_CALL nv_workqueue_schedule(nv_task_t *work);
++void NV_API_CALL nv_workqueue_complete(void);
++void NV_API_CALL nv_workqueue_flush(void);
++
++#define NV_WORKQUEUE_SCHEDULE(work) nv_workqueue_schedule(work)
++#define NV_WORKQUEUE_FLUSH() nv_workqueue_flush()
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_WORKQUEUE_INIT(tq,handler,data)             \
+     {                                                  \
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -9,6 +9,10 @@
+  */
+ 
+ #define  __NO_VERSION__
++#include <linux/atomic.h>
++#include <linux/errno.h>
++#include <linux/spinlock.h>
++#include <linux/wait.h>
+ #include "nv-misc.h"
+ 
+ #include "os-interface.h"
+@@ -17,6 +21,11 @@
+ #include "nv-time.h"
+ #include "nv-gpu-numa.h"
+ 
++static DEFINE_SPINLOCK(nv_workqueue_state_lock);
++static DECLARE_WAIT_QUEUE_HEAD(nv_workqueue_wait_queue);
++static atomic_t nv_workqueue_pending = ATOMIC_INIT(0);
++static NvBool nv_workqueue_accepting = NV_FALSE;
++
+ #define MAX_ERROR_STRING 512
+ static char nv_error_string[MAX_ERROR_STRING];
+ nv_spinlock_t nv_error_string_lock;
+@@ -1002,6 +1011,87 @@
+     }
+ }
+ 
++int NV_API_CALL nv_workqueue_init(void)
++{
++    unsigned long flags;
++    int status = 0;
++
++    spin_lock_irqsave(&nv_workqueue_state_lock, flags);
++
++    if (nv_workqueue_accepting ||
++        atomic_read(&nv_workqueue_pending) != 0)
++    {
++        status = -EBUSY;
++    }
++    else
++    {
++        nv_workqueue_accepting = NV_TRUE;
++    }
++
++    spin_unlock_irqrestore(&nv_workqueue_state_lock, flags);
++
++    return status;
++}
++
++void NV_API_CALL nv_workqueue_shutdown(void)
++{
++    unsigned long flags;
++
++    for (;;)
++    {
++        wait_event(nv_workqueue_wait_queue,
++                   atomic_read(&nv_workqueue_pending) == 0);
++
++        spin_lock_irqsave(&nv_workqueue_state_lock, flags);
++
++        if (atomic_read(&nv_workqueue_pending) == 0)
++        {
++            nv_workqueue_accepting = NV_FALSE;
++            spin_unlock_irqrestore(&nv_workqueue_state_lock, flags);
++            break;
++        }
++
++        spin_unlock_irqrestore(&nv_workqueue_state_lock, flags);
++    }
++}
++
++int NV_API_CALL nv_workqueue_schedule(nv_task_t *work)
++{
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_workqueue_state_lock, flags);
++
++    if (!nv_workqueue_accepting)
++    {
++        spin_unlock_irqrestore(&nv_workqueue_state_lock, flags);
++        return 0;
++    }
++
++    atomic_inc(&nv_workqueue_pending);
++
++    spin_unlock_irqrestore(&nv_workqueue_state_lock, flags);
++
++    if (schedule_work(work))
++        return 1;
++
++    if (atomic_dec_and_test(&nv_workqueue_pending))
++        wake_up(&nv_workqueue_wait_queue);
++
++    return 0;
++}
++
++void NV_API_CALL nv_workqueue_complete(void)
++{
++    if (atomic_dec_and_test(&nv_workqueue_pending))
++        wake_up(&nv_workqueue_wait_queue);
++}
++
++void NV_API_CALL nv_workqueue_flush(void)
++{
++    wait_event(nv_workqueue_wait_queue,
++               atomic_read(&nv_workqueue_pending) == 0);
++}
++
+ static void os_execute_work_item(
+     NV_WORKQUEUE_DATA_T *data
+ )
+@@ -1009,16 +1099,19 @@
+     nv_work_t *work = NV_WORKQUEUE_UNPACK_DATA(data);
+     nvidia_stack_t *sp = NULL;
+ 
+-    if (nv_kmem_cache_alloc_stack(&sp) != 0)
++    if (nv_kmem_cache_alloc_stack(&sp) == 0)
+     {
+-        return;
++        rm_execute_work_item(sp, work->data);
++        nv_kmem_cache_free_stack(sp);
++    }
++    else
++    {
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: failed to allocate stack for RM work item\n");
+     }
+-
+-    rm_execute_work_item(sp, work->data);
+ 
+     os_free_mem((void *)work);
+-
+-    nv_kmem_cache_free_stack(sp);
++    nv_workqueue_complete();
+ }
+ 
+ NV_STATUS NV_API_CALL os_queue_work_item(
+@@ -1037,7 +1130,12 @@
+ 
+     NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
+                       (void *)work);
+-    NV_WORKQUEUE_SCHEDULE(&work->task);
++
++    if (!NV_WORKQUEUE_SCHEDULE(&work->task))
++    {
++        os_free_mem((void *)work);
++        return NV_ERR_NOT_READY;
++    }
+ 
+     return NV_OK;
+ }
+--- a/nvidia/nv-gvi.c
++++ b/nvidia/nv-gvi.c
+@@ -48,6 +48,7 @@
+     nv  = NV_STATE_PTR(nvl);
+ 
+     rm_gvi_bh(nvl->sp[NV_DEV_STACK_ISR_BH], nv);
++    nv_workqueue_complete();
+ }
+ 
+ #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
+--- a/nvidia/nv.c
++++ b/nvidia/nv.c
+@@ -854,8 +854,19 @@
+ 
+     }
+ 
++    rc = nv_workqueue_init();
++    if (rc != 0)
++    {
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: failed to initialize work tracking: %d\n", rc);
++        nv_kmem_cache_free_stack(sp);
++        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
++        goto failed5;
++    }
++
+     if (!rm_init_rm(sp))
+     {
++        nv_workqueue_shutdown();
+         nv_kmem_cache_free_stack(sp);
+         NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
+         nv_printf(NV_DBG_ERRORS, "NVRM: rm_init_rm() failed!\n");
+@@ -1144,6 +1155,7 @@
+     nv_unregister_chrdev((void *)&nv_fops);
+ 
+ failed4:
++    nv_workqueue_shutdown();
+     nv_lock_destroy_locks(sp, nv);
+     rm_shutdown_rm(sp);
+ 
+@@ -1197,6 +1209,7 @@
+ 
+     nv_unregister_chrdev((void *)&nv_fops);
+ 
++    nv_workqueue_shutdown();
+     nv_lock_destroy_locks(sp, nv);
+ 
+     // Shutdown the resource manager

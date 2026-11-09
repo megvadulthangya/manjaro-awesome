@@ -81,4 +81,6 @@ make-modesetting-default.patch
 fixup-warnings.patch
 kernel-7.3-acpi.patch
 kernel-linux-next-drm-reset.patch
+390-prime-fence-lifecycle.patch
+390-workqueue-tracking.patch
 
