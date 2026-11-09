@@ -1,13 +1,12 @@
-
 # linux-next package installation scriptlet
 #
-# Records the actual previous kernelrelease before pacman replaces
-# the old kernel package files.
+# Records the currently installed kernelrelease before pacman replaces the
+# old kernel package files. The actual cleanup is done by the PostTransaction
+# hook (95-linux-next-cleanup.hook), which uses the recorded state.
 #
-# The PostTransaction hook performs the actual cleanup.
-#
-# Package versions ($1 and $2) are intentionally not used:
-# the PKGBUILD has a builder-managed static pkgver.
+# Package versions ($1 and $2) are intentionally not used because the
+# PKGBUILD has a builder-managed static pkgver: the effective kernelrelease
+# is captured from /boot/linux-next-x86_64.kver instead.
 
 _ln_state_file="/var/lib/linux-next/pending-cleanup"
 _ln_kver_file="/boot/linux-next-x86_64.kver"
@@ -17,7 +16,7 @@ pre_upgrade() {
     local old_release old_pkgbase saved_release
     local pkgbase_file
 
-    # Read the actual kernelrelease from the currently installed kernel.
+    # Read the actual kernelrelease currently installed on disk.
     if [[ ! -r "${_ln_kver_file}" ]]; then
         printf 'WARNING: Cannot read previous kernel version: %s\n' \
             "${_ln_kver_file}" >&2
@@ -29,7 +28,7 @@ pre_upgrade() {
         return 0
     fi
 
-    # Validate the kernelrelease before using it in a filesystem path.
+    # Validate the kernelrelease before using it as a filesystem path.
     if [[ ! "${old_release}" =~ ^[A-Za-z0-9._+-]+$ ]] ||
        [[ "${old_release}" == "." || "${old_release}" == ".." ]]; then
         printf 'WARNING: Invalid previous kernelrelease: %s\n' \
@@ -37,7 +36,7 @@ pre_upgrade() {
         return 0
     fi
 
-    # Verify that this kernel directory belongs to linux-next.
+    # Verify that the directory belongs to linux-next.
     pkgbase_file="${_ln_modules_root}/${old_release}/pkgbase"
 
     if [[ ! -r "${pkgbase_file}" ]]; then
@@ -74,7 +73,7 @@ pre_upgrade() {
         return 0
     fi
 
-    # Avoid registering the same kernelrelease more than once.
+    # Avoid registering the same kernelrelease twice.
     while IFS= read -r saved_release || [[ -n "${saved_release}" ]]; do
         if [[ "${saved_release}" == "${old_release}" ]]; then
             printf '>> Kernel already registered for cleanup: %s\n' \

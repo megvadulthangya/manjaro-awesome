@@ -1,4 +1,3 @@
-
 # Maintainer: gabi <gabi@localhost>
 # Based on:
 #   - AUR linux-next-git
@@ -197,25 +196,25 @@ sha256sums=('SKIP'
             '138684588665b8f651dffb4e75c265a2b81f6bd7a606f75f8fc6814a4a63d3fd'
             '3d37e1f54290bad1b7a4c5c45046341dc4c1bfc2f8648b7754bf0bd9705b3a35'
             '9628a67ac23beaf2de7194d2934386944adc64cb2a4a90e4c38b867b868654b4'
-            '6994d7a815feee1b9956c957d192c976cc0da3ee16adb3f2e8de7aa3595d99f7'
-            '6567929ea33814c83b72aba755e6fb9d807b6c64cd7450724ebd32d5cd3fd02f')
+            '3be1a3e64366f5ebe228f1f2bc43fd39cdcea759d69ba305bf7089576ae1645e'
+            'a1121fb69a96aa00b36c802dbe4e3cc5f6891266b13e4726d768d40790ac712b')
 
 # =============================================================================
 # AUTOMATIC OLD KERNEL CLEANUP
 # =============================================================================
-# The hook and cleanup helper are local files beside this PKGBUILD.
+# The hook and cleanup helper are local files beside this PKGBUILD:
 #
-# linux-next-cleanup.hook
-# linux-next-cleanup
+#   linux-next-cleanup.hook
+#   linux-next-cleanup
 #
-# The .install script is assigned separately to package_linux-next().
-# It is deliberately NOT included in the source array.
+# The .install script is assigned inside package_linux-next() and is
+# deliberately NOT listed in source[]. makepkg reads it directly from the
+# PKGBUILD directory.
 
 source+=(
   linux-next-cleanup.hook
   linux-next-cleanup
 )
-
 
 # Reproducible kernel build metadata: derived from the pinned commit, not build time.
 export SOURCE_DATE_EPOCH="${_commit_epoch}"
@@ -262,6 +261,26 @@ _mpatch_apply() {
 
 prepare() {
   cd -- "${_srcdir}"
+
+  # Remove the per-snapshot date suffix from EXTRAVERSION so that every
+  # linux-next snapshot within the same kernel series produces the SAME
+  # kernelrelease value.
+  #
+  # Example:
+  #   upstream Makefile: EXTRAVERSION = -rc1-next-20261105
+  #   after this sed:    EXTRAVERSION = -rc1-next
+  #
+  # Result: each new snapshot of the same series overwrites the SAME
+  # /usr/lib/modules/<kernelrelease>/ directory on upgrade. This
+  # eliminates the per-snapshot accumulation of stale module directories
+  # and per-snapshot DKMS rebuild storms. A new directory is only created
+  # when the kernel series itself changes (e.g. -rc1 -> -rc2), and that
+  # single stale directory is then handled by the cleanup hook.
+  #
+  # The unique build identifier remains available via `pacman -Q linux-next`
+  # (the pkgver from pkgver()), so the builder-side version check is
+  # unaffected. Only `uname -r` no longer discloses the snapshot date.
+  sed -ri 's|^(EXTRAVERSION = .*)-next-[0-9]{8}|\1-next|' Makefile
 
   printf '%s\n' "-${pkgrel}" > localversion.10-pkgrel
   cp -- "${srcdir}/config" .config
