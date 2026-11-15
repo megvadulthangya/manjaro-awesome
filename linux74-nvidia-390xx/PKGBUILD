@@ -9,7 +9,7 @@
 # Contributor: Dede Dindin Qudsy <xtrymind+gmail+com>
 # Contributor: Ike Devolder <ike.devolder+gmail+com>
 
-_linuxprefix=linux72
+_linuxprefix=linux74
 
 pkgname="${_linuxprefix}-nvidia-390xx"
 pkgver=390.157
