@@ -77,9 +77,10 @@ ignore_xen_on_arm.patch
 arm-outer-sync.patch
 nvidia-drm-arm-cflags.patch
 armhf-on-arm64-kernel.patch
+make-modesetting-default.patch
 fixup-warnings.patch
 kernel-7.3-acpi.patch
 kernel-linux-next-drm-reset.patch
 390-prime-fence-lifecycle.patch
 390-workqueue-tracking.patch
-
+linux-next-drm-connector-atomic-create-state.patch

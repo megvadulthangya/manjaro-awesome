@@ -1,0 +1,41 @@
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -5103,1 +5103,17 @@
++        drm_connector_funcs_has_atomic_create_state)
++            #
++            # Determine if struct drm_connector_funcs has atomic_create_state
++            # and drm_atomic_helper_connector_create_state() is available.
++            #
++            CODE="
++            #include <drm/drm_atomic_helper.h>
++            #include <drm/drm_connector.h>
++            struct drm_connector_state *(*conftest_connector_create_state)(struct drm_connector *) =
++                drm_atomic_helper_connector_create_state;
++            int conftest_drm_connector_funcs_has_atomic_create_state(void) {
++                return offsetof(struct drm_connector_funcs, atomic_create_state);
++            }"
++            compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_FUNCS_HAS_ATOMIC_CREATE_STATE" "" "types"
++        ;;
++
+         drm_connector_helper_funcs_mode_valid_has_const_mode_arg)
+--- a/nvidia-drm/nvidia-drm-connector.c
++++ b/nvidia-drm/nvidia-drm-connector.c
+@@ -221,7 +221,11 @@
+     .dpms                   = drm_atomic_helper_connector_dpms,
+ #endif
+     .destroy                = nv_drm_connector_destroy,
++#if defined(NV_DRM_CONNECTOR_FUNCS_HAS_ATOMIC_CREATE_STATE)
++    .atomic_create_state    = drm_atomic_helper_connector_create_state,
++#else
+     .reset                  = drm_atomic_helper_connector_reset,
++#endif
+     .force                  = __nv_drm_connector_force,
+     .detect                 = nv_drm_connector_detect,
+     .fill_modes             = drm_helper_probe_single_connector_modes,
+--- a/nvidia-drm/nvidia-drm.Kbuild
++++ b/nvidia-drm/nvidia-drm.Kbuild
+@@ -115,3 +115,4 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_plane_funcs_has_atomic_create_state
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_crtc_funcs_has_atomic_create_state
++NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_funcs_has_atomic_create_state
+ NV_CONFTEST_TYPE_COMPILE_TESTS += file_operations_fop_unsigned_offset_present
