@@ -86,3 +86,4 @@ cve-2022-34670-nv-h-IS-OFFSET.patch
 cve-2022-34674-vma-size.patch
 cve-2022-34670-nv-c-usage-count-overflow.patch
 fixup-warnings.patch
+340-taskqueue-tracking.patch

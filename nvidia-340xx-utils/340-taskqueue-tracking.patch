@@ -1,0 +1,245 @@
+--- a/nv-linux.h
++++ b/nv-linux.h
+@@ -1704,9 +1704,14 @@
+     void *data;
+ } nv_work_t;
+ 
+-#define NV_TASKQUEUE_SCHEDULE(work) schedule_work(work)
+-#define NV_TASKQUEUE_FLUSH()                           \
+-    flush_scheduled_work();
++int NV_API_CALL nv_taskqueue_init(void);
++void NV_API_CALL nv_taskqueue_shutdown(void);
++int NV_API_CALL nv_taskqueue_schedule(nv_task_t *work);
++void NV_API_CALL nv_taskqueue_complete(void);
++void NV_API_CALL nv_taskqueue_flush(void);
++
++#define NV_TASKQUEUE_SCHEDULE(work) nv_taskqueue_schedule(work)
++#define NV_TASKQUEUE_FLUSH() nv_taskqueue_flush()
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_TASKQUEUE_INIT(tq,handler,data)             \
+     {                                                  \
+@@ -1896,6 +1901,8 @@
+         free_irq(nv->interrupt_line, (void *)nvl);                  \
+         if (nv->flags & NV_FLAG_USES_MSI)                           \
+             NV_PCI_DISABLE_MSI(nvl->dev);                           \
++        if (NV_IS_GVI_DEVICE(nv))\
++            NV_TASKQUEUE_FLUSH();\
+         rm_shutdown_adapter(sp, nv);                                \
+     }
+ 
+--- a/os-interface.c
++++ b/os-interface.c
+@@ -9,6 +9,11 @@
+  */
+ 
+ #define  __NO_VERSION__
++#include <linux/atomic.h>
++#include <linux/errno.h>
++#include <linux/spinlock.h>
++#include <linux/wait.h>
++
+ #include "nv-misc.h"
+ 
+ #include "os-interface.h"
+@@ -664,6 +669,11 @@
+ 
+ 
+ 
++static DEFINE_SPINLOCK(nv_taskqueue_state_lock);
++static DECLARE_WAIT_QUEUE_HEAD(nv_taskqueue_wait_queue);
++static atomic_t nv_taskqueue_pending = ATOMIC_INIT(0);
++static NvBool nv_taskqueue_accepting = NV_FALSE;
++
+ #define MAX_ERROR_STRING 512
+ 
+ /*
+@@ -1018,6 +1028,87 @@
+     }
+ }
+ 
++int NV_API_CALL nv_taskqueue_init(void)
++{
++    unsigned long flags;
++    int status = 0;
++
++    spin_lock_irqsave(&nv_taskqueue_state_lock, flags);
++
++    if (nv_taskqueue_accepting ||
++        atomic_read(&nv_taskqueue_pending) != 0)
++    {
++        status = -EBUSY;
++    }
++    else
++    {
++        nv_taskqueue_accepting = NV_TRUE;
++    }
++
++    spin_unlock_irqrestore(&nv_taskqueue_state_lock, flags);
++
++    return status;
++}
++
++void NV_API_CALL nv_taskqueue_shutdown(void)
++{
++    unsigned long flags;
++
++    for (;;)
++    {
++        wait_event(nv_taskqueue_wait_queue,
++                   atomic_read(&nv_taskqueue_pending) == 0);
++
++        spin_lock_irqsave(&nv_taskqueue_state_lock, flags);
++
++        if (atomic_read(&nv_taskqueue_pending) == 0)
++        {
++            nv_taskqueue_accepting = NV_FALSE;
++            spin_unlock_irqrestore(&nv_taskqueue_state_lock, flags);
++            break;
++        }
++
++        spin_unlock_irqrestore(&nv_taskqueue_state_lock, flags);
++    }
++}
++
++int NV_API_CALL nv_taskqueue_schedule(nv_task_t *work)
++{
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_taskqueue_state_lock, flags);
++
++    if (!nv_taskqueue_accepting)
++    {
++        spin_unlock_irqrestore(&nv_taskqueue_state_lock, flags);
++        return 0;
++    }
++
++    atomic_inc(&nv_taskqueue_pending);
++
++    spin_unlock_irqrestore(&nv_taskqueue_state_lock, flags);
++
++    if (schedule_work(work))
++        return 1;
++
++    if (atomic_dec_and_test(&nv_taskqueue_pending))
++        wake_up(&nv_taskqueue_wait_queue);
++
++    return 0;
++}
++
++void NV_API_CALL nv_taskqueue_complete(void)
++{
++    if (atomic_dec_and_test(&nv_taskqueue_pending))
++        wake_up(&nv_taskqueue_wait_queue);
++}
++
++void NV_API_CALL nv_taskqueue_flush(void)
++{
++    wait_event(nv_taskqueue_wait_queue,
++               atomic_read(&nv_taskqueue_pending) == 0);
++}
++
+ static void os_execute_work_item(
+     NV_TASKQUEUE_DATA_T *data
+ )
+@@ -1029,14 +1120,15 @@
+     if (sp == NULL)
+     {
+         nv_printf(NV_DBG_ERRORS, "NVRM: failed to allocate stack!\n");
+-        return;
+     }
+-
+-    rm_execute_work_item(sp, work->data);
++    else
++    {
++        rm_execute_work_item(sp, work->data);
++        NV_KMEM_CACHE_FREE_STACK(sp);
++    }
+ 
+     os_free_mem((void *)work);
+-
+-    NV_KMEM_CACHE_FREE_STACK(sp);
++    nv_taskqueue_complete();
+ }
+ 
+ RM_STATUS NV_API_CALL os_queue_work_item(
+@@ -1055,7 +1147,12 @@
+ 
+     NV_TASKQUEUE_INIT(&work->task, os_execute_work_item,
+                       (void *)work);
+-    NV_TASKQUEUE_SCHEDULE(&work->task);
++
++    if (!NV_TASKQUEUE_SCHEDULE(&work->task))
++    {
++        os_free_mem((void *)work);
++        return RM_ERR_NOT_READY;
++    }
+ 
+     return RM_OK;
+ }
+--- a/nv-gvi.c
++++ b/nv-gvi.c
+@@ -48,6 +48,7 @@
+     nv  = NV_STATE_PTR(nvl);
+ 
+     rm_gvi_bh(nvl->isr_bh_sp, nv);
++    nv_taskqueue_complete();
+ }
+ 
+ #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
+--- a/nv.c
++++ b/nv.c
+@@ -777,8 +777,19 @@
+         goto failed4;
+     }
+ 
++    rc = nv_taskqueue_init();
++    if (rc != 0)
++    {
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: failed to initialize taskqueue tracking: %d\n", rc);
++        NV_KMEM_CACHE_FREE_STACK(sp);
++        NV_KMEM_CACHE_DESTROY(nv_stack_t_cache);
++        goto failed4;
++    }
++
+     if (!rm_init_rm(sp))
+     {
++        nv_taskqueue_shutdown();
+         NV_KMEM_CACHE_FREE_STACK(sp);
+         NV_KMEM_CACHE_DESTROY(nv_stack_t_cache);
+         nv_printf(NV_DBG_ERRORS, "NVRM: rm_init_rm() failed!\n");
+@@ -823,7 +834,7 @@
+     {
+         rc = -ENODEV;
+         nv_printf(NV_DBG_ERRORS, "NVRM: No NVIDIA graphics adapter found!\n");
+-        goto failed4;
++        goto failed5;
+     }
+ 
+     if (nv_drm_init(&nv_pci_driver) < 0)
+@@ -1050,6 +1061,7 @@
+ 
+ failed5:
+     rm_shutdown_rm(sp);
++    nv_taskqueue_shutdown();
+ 
+     NV_KMEM_CACHE_FREE_STACK(sp);
+     NV_KMEM_CACHE_DESTROY(nv_stack_t_cache);
+@@ -1107,6 +1119,7 @@
+ #endif
+     // Shutdown the resource manager
+     rm_shutdown_rm(sp);
++    nv_taskqueue_shutdown();
+ 
+ #if defined(NVCPU_X86_64) && defined(CONFIG_IA32_EMULATION) && \
+   !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
+@@ -1567,8 +1580,8 @@
+         if (NV_IS_GVI_DEVICE(nv))
+         {
+             rm_shutdown_gvi_device(sp, nv);
+-            NV_TASKQUEUE_FLUSH();
+             free_irq(nv->interrupt_line, (void *)nvl);
++            NV_TASKQUEUE_FLUSH();
+         }
+         else
+         {
