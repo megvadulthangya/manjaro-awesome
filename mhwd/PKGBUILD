@@ -33,7 +33,7 @@ source=(
   "0001-mhwd-nvidia-assistant-integration.patch"
 )
 sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92'
-            '133cc21dea40c86ae2aadaf3165d9cd60afce2573f58b2541529fa590a9fa4f2')
+            '5a2e550131464ba53a2815764dd7da53cd42bea51d78731df50289e0e1f39a37')
 
 # =============================================================================
 #  MPATCH KONFIGURÁCIÓ
@@ -88,7 +88,7 @@ prepare() {
   echo ">>> Opciók: ${_mpatch_opts[*]}"
   _mpatch_apply "${srcdir}/0001-mhwd-nvidia-assistant-integration.patch" . \
     || { echo "!!! PATCH FAILED"; exit 1; }
-  echo ">>> Patch alkalmazva."
+  echo ">>> PATCH alkalmazva."
 }
 
 build() {
