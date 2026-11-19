@@ -10,8 +10,8 @@ pkgname=(
   'manjaro-live-portable-efi'
 )
 pkgbase=manjaro-live
-pkgver=20260802
-pkgrel=2
+pkgver=20261119
+pkgrel=1
 pkgdesc="Manjaro Linux live session"
 arch=('any')
 url="https://code.manjaro.org/tools/manjaro-tools-livecd"
