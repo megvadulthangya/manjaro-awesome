@@ -1,5 +1,4 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
-# Contributor: Philip Müller <philm[at]manjaro[dog]org>
+# Maintainer: Philip Müller <philm[at]manjaro[dog]org>
 # Contributor: artoo <artoo@manjaro.org>
 # Contributor: anex <assassin.anex[@]gmail.com>
 
@@ -10,15 +9,15 @@ pkgname=(
   'manjaro-live-skel'
   'manjaro-live-portable-efi'
 )
-pkgbase=manjaro-live-base
-pkgver=20260731
-pkgrel=1
+pkgbase=manjaro-live
+pkgver=20260802
+pkgrel=2
 pkgdesc="Manjaro Linux live session"
 arch=('any')
-url="https://github.com/megvadulthangya/manjaro-tools-livecd"
+url="https://code.manjaro.org/tools/manjaro-tools-livecd"
 license=('GPL-3.0-or-later')
 makedepends=('git')
-source=("git+https://github.com/megvadulthangya/manjaro-tools-livecd.git#branch=workingon")
+source=("manjaro-tools-livecd::git+https://github.com/megvadulthangya/manjaro-tools-livecd.git#branch=develop")
 sha256sums=('SKIP')
 
 pkgver() {
