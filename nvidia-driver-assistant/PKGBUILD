@@ -101,6 +101,28 @@ PY
   return 1
 }
 
+# Determine the newest 580.xx driver from NVIDIA's directory index.
+# This deliberately does not use latest.txt, which points to the production
+# branch and is not a reliable selector for the 580.xx driver series.
+_latest_580_version() {
+  local ver
+
+  ver=$(
+    set -o pipefail
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 \
+      "${_nvidia_dir_base}/" \
+      | grep -oE '580\.[0-9]+(\.[0-9]+)?' \
+      | sort -Vu \
+      | tail -n1
+  ) || return 1
+
+  if [[ ! "$ver" =~ ^580\.[0-9]+(\.[0-9]+)?$ ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$ver"
+}
+
 pkgver() {
   cd "${srcdir}/${pkgname}"
 
@@ -150,18 +172,44 @@ prepare() {
     return 1
   fi
 
-  echo "==> Using NVIDIA driver version: ${nfb_version}"
+  echo "==> Using NVIDIA NFB version: ${nfb_version}"
   local chips_url="${_nvidia_chips_base}/${nfb_version}/README/supportedchips.html"
   echo "==> Downloading supportedchips.html: ${chips_url}"
   rm -f "supportedchips.html"
-  curl -fL --retry 5 -o "supportedchips.html" "${chips_url}"
+  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 \
+    -o "supportedchips.html" "${chips_url}" || return 1
 
-  # Sanity check
-  if ! grep -qE 'CURRENT NVIDIA GPUS|Current NVIDIA GPUs|[0-9]+\.xx driver supports' supportedchips.html; then
+  # Sanity check for the NFB supportedchips file.
+  if [[ ! -s "supportedchips.html" ]] || \
+     ! grep -qE 'CURRENT NVIDIA GPUS|Current NVIDIA GPUs|[0-9]+\.xx driver supports' "supportedchips.html"; then
     error "supportedchips.html does not contain expected sections"
     return 1
   fi
   msg2 "supportedchips.html validated ($(wc -c < supportedchips.html) bytes)"
+
+  # 3. Find the newest 580.xx release from NVIDIA's directory index and
+  #    download that release's supportedchips.html separately.
+  echo "==> Determining latest NVIDIA 580 driver version..."
+  local nvidia_580_version
+  nvidia_580_version="$(_latest_580_version)" || {
+    error "Could not determine the latest NVIDIA 580 driver version from the directory index"
+    return 1
+  }
+
+  echo "==> Using NVIDIA 580 version: ${nvidia_580_version}"
+  local chips580_url="${_nvidia_chips_base}/${nvidia_580_version}/README/supportedchips.html"
+  echo "==> Downloading supportedchips580.html: ${chips580_url}"
+  rm -f "supportedchips580.html"
+  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 \
+    -o "supportedchips580.html" "${chips580_url}" || return 1
+
+  # Sanity check for the 580 supportedchips file.
+  if [[ ! -s "supportedchips580.html" ]] || \
+     ! grep -qE 'CURRENT NVIDIA GPUS|Current NVIDIA GPUs|[0-9]+\.xx driver supports' "supportedchips580.html"; then
+    error "supportedchips580.html does not contain expected sections"
+    return 1
+  fi
+  msg2 "supportedchips580.html validated ($(wc -c < supportedchips580.html) bytes)"
 }
 
 package() {
@@ -190,6 +238,15 @@ package() {
       "${pkgdir}${site_packages}/nvidia_driver_assistant/data/supportedchips.html"
   else
     error "supportedchips.html is missing from prepare()"
+    return 1
+  fi
+
+  if [[ -f "${srcdir}/supportedchips580.html" ]]; then
+    msg2 "Installing supportedchips580.html..."
+    install -m644 "${srcdir}/supportedchips580.html" \
+      "${pkgdir}${site_packages}/nvidia_driver_assistant/data/supportedchips580.html"
+  else
+    error "supportedchips580.html is missing from prepare()"
     return 1
   fi
 
