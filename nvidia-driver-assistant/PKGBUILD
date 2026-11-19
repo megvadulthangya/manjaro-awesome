@@ -1,8 +1,7 @@
-
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0.68.70.06_1.g40777820ad
+pkgver=0.68.70.06_1.gd44d292e86
 pkgrel=1
 pkgdesc="Detect and install the best NVIDIA driver packages for the system (Manjaro-only fork)"
 arch=('any')
@@ -236,15 +235,24 @@ prepare() {
       "${package_data}/${chips_file}" || return 1
   done
 
-  # 5. Validate the documents currently supported by the parser.
-  # The 470, 390 and 340 parsers will be integrated in the next development step.
+  # 5. Validate all five documents using the parser that will be shipped.
   python3 - "$parser_path" \
     "${srcdir}/supportedchips.html" \
-    "${srcdir}/supportedchips580.html" <<'PY' || return 1
+    "${srcdir}/supportedchips580.html" \
+    "${srcdir}/supportedchips470.html" \
+    "${srcdir}/supportedchips390.html" \
+    "${srcdir}/supportedchips340.html" <<'PY' || return 1
 import importlib.util
 import sys
 
-module_path, latest_path, legacy580_path = sys.argv[1:4]
+(
+    module_path,
+    latest_path,
+    legacy580_path,
+    legacy470_path,
+    legacy390_path,
+    legacy340_path,
+) = sys.argv[1:7]
 
 spec = importlib.util.spec_from_file_location(
     "nvidia_supported_chips",
@@ -257,20 +265,22 @@ if spec is None or spec.loader is None:
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-latest, current580 = module.validate_documents(
+supported = module.validate_all_documents(
     latest_path,
     legacy580_path,
+    legacy470_path,
+    legacy390_path,
+    legacy340_path,
 )
 
-print(
-    "Validated existing NVIDIA parser inputs: "
-    "%d latest device IDs; %d IDs in 580 Current"
-    % (len(latest), len(current580))
-)
+for branch in ("6xx", "580", "470", "390", "340"):
+    print(
+        "Validated NVIDIA %s: %d device IDs"
+        % (branch, len(supported[branch]))
+    )
 PY
 
-  msg2 "Downloaded all five NVIDIA supportedchips documents"
-  msg2 "Existing 6xx and 580 parser validation passed"
+  msg2 "All five NVIDIA supportedchips documents parsed and validated successfully"
 }
 
 package() {
