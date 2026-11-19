@@ -1,282 +1,88 @@
-# Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
+import pathlib
+import tempfile
+import unittest
 
-pkgname=nvidia-driver-assistant
-pkgver=0.68.70.06_1.g4d48dd488d
-pkgrel=1
-pkgdesc="Detect and install the best NVIDIA driver packages for the system (Manjaro-only fork)"
-arch=('any')
-url="https://github.com/megvadulthangya/nvidia-driver-assistant"
-license=('MIT' 'custom')
-depends=('python' 'python-pyyaml')
-makedepends=('git' 'curl' 'libarchive' 'gzip')
+from nvidia_driver_assistant import supported_chips
 
-# Pin the NVIDIA driver version used for the supportedchips.html download.
-# Leave empty to auto-detect (falls back to production branch when the
-# New Feature Branch version cannot be determined from the unix page).
-# Update manually when a new NFB is released (e.g. 615.78.08).
-_nfb_version_override="615.78.08"
 
-source=(
-  "git+https://github.com/megvadulthangya/nvidia-driver-assistant.git#branch=manjaro"
-  "show-driver"
-)
-sha256sums=('SKIP'
-            'a0db80df56df5e4a34befb4689d97cdb2322ae09c7bb7a4e1680165da6eae3f7')
+LATEST_HTML = """\
+<p><a name="Current" id="Current"></a></p>
+<h3>Current NVIDIA GPUs</h3>
+<table>
+  <tr id="devid2D98"><td>GeForce RTX example</td></tr>
+  <tr id="devid1340"><td>GeForce legacy overlap example</td></tr>
+</table>
+<p><a name="legacy_580.xx" id="legacy_580.xx"></a></p>
+<table><tr id="devid1340"><td>GeForce 830M</td></tr></table>
+<p><a name="legacy_470.xx" id="legacy_470.xx"></a></p>
+<table><tr id="devid0FC6"><td>GeForce GTX 650</td></tr></table>
+<p><a name="legacy_173.14.xx" id="legacy_173.14.xx"></a></p>
+<table><tr id="devid00C2"><td>Legacy GPU</td></tr></table>
+"""
 
-_nvidia_repo_base='https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64'
-_nvidia_unix_page='https://www.nvidia.com/en-us/drivers/unix/'
-_nvidia_chips_base='https://us.download.nvidia.com/XFree86/Linux-x86_64'
-_nvidia_dir_base='https://download.nvidia.com/XFree86/Linux-x86_64'
 
-_latest_deb_info() {
-  local html latest_file ver
-  html=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "${_nvidia_repo_base}/") || return 1
-  latest_file=$(echo "$html" | grep -oP 'nvidia-driver-assistant_[\d\.-]+_all\.deb' | sort -V | tail -n1)
+SUPPORTED_580_HTML = """\
+<p><a name="Current" id="Current"></a></p>
+<h3>Current NVIDIA GPUs</h3>
+<table>
+  <tr id="devid1340"><td>GeForce 830M</td></tr>
+  <tr id="devid2D98_17AA_3E31"><td>GeForce RTX example subsystem variant</td></tr>
+</table>
+<p><a name="legacy_470.xx" id="legacy_470.xx"></a></p>
+<table><tr id="devid1340"><td>Unrelated old-driver section</td></tr></table>
+"""
 
-  if [[ -z "$latest_file" ]]; then
-    return 1
-  fi
 
-  ver=$(echo "$latest_file" | sed -E 's/nvidia-driver-assistant_(.*)_all\.deb/\1/')
-  echo "${ver}|${latest_file}"
-}
+class SupportedChipsParserTests(unittest.TestCase):
+    def _write_temp(self, directory, filename, content):
+        path = pathlib.Path(directory) / filename
+        path.write_text(content, encoding="utf-8")
+        return str(path)
 
-_latest_nfb_version() {
-  if [[ -n "${_nfb_version_override}" ]]; then
-    echo "${_nfb_version_override}"
-    return 0
-  fi
+    def test_latest_document_maps_current_and_legacy_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_temp(tmpdir, "supportedchips.html", LATEST_HTML)
+            branch_map = supported_chips.parse(path)
 
-  local ver
+        self.assertEqual(branch_map["2d98"], "current")
+        self.assertEqual(branch_map["1340"], "580")
+        self.assertEqual(branch_map["0fc6"], "470")
+        self.assertEqual(branch_map["00c2"], "173")
 
-  # Strategy 1: parse the NVIDIA unix driver page (strip tags + entities first)
-  ver=$(python - "${_nvidia_unix_page}" <<'PY' 2>/dev/null
-import re
-import sys
-import html
-import urllib.request
+    def test_580_current_only_ignores_later_legacy_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_temp(tmpdir, "supportedchips580.html", SUPPORTED_580_HTML)
+            current_ids = supported_chips.parse_current(path)
 
-url = sys.argv[1]
-req = urllib.request.Request(
-    url,
-    headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
-)
-try:
-    raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
-except Exception:
-    sys.exit(1)
+        self.assertEqual(current_ids, {"1340", "2d98"})
 
-text = re.sub(r"<[^>]+>", " ", raw)
-text = html.unescape(text).replace("\xa0", " ")
-m = re.search(
-    r"Latest\s+New\s+Feature\s+Branch\s+Version:\s*([0-9]+\.[0-9]+\.[0-9]+)",
-    text,
-)
-if m:
-    print(m.group(1))
-    sys.exit(0)
-sys.exit(1)
-PY
-)
-  if [[ -n "$ver" ]]; then echo "$ver"; return 0; fi
+    def test_subsystem_variants_reduce_to_base_device_id(self):
+        rows = supported_chips.parse_html(SUPPORTED_580_HTML)
+        self.assertIn("2d98", {row["device_id"] for row in rows})
 
-  # Strategy 2: directory listing on download.nvidia.com
-  local html
-  html=$(curl -fsSL --retry 3 --connect-timeout 10 "${_nvidia_dir_base}/") || return 1
-  ver=$(echo "$html" \
-    | grep -oE 'href="[5-9][0-9]{2}\.[0-9]+\.[0-9]+/"' \
-    | sed -E 's|href="([^/]+)/"|\1|' \
-    | sort -V \
-    | tail -n1)
-  if [[ -n "$ver" ]]; then echo "$ver"; return 0; fi
+    def test_legacy_entry_wins_over_duplicate_current_entry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_temp(tmpdir, "supportedchips.html", LATEST_HTML)
+            branch_map = supported_chips.parse(path)
+        self.assertEqual(branch_map["1340"], "580")
 
-  # Strategy 3: latest.txt (production branch)
-  ver=$(curl -fsSL --retry 3 --connect-timeout 10 "${_nvidia_dir_base}/latest.txt" 2>/dev/null | awk '{print $1}')
-  if [[ -n "$ver" ]]; then
-    warning "Falling back to production branch ${ver} as NFB could not be determined"
-    echo "$ver"
-    return 0
-  fi
+    def test_build_validation_requires_both_documents(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            latest_path = self._write_temp(tmpdir, "supportedchips.html", LATEST_HTML)
+            chips580_path = self._write_temp(tmpdir, "supportedchips580.html", SUPPORTED_580_HTML)
+            latest, current580 = supported_chips.validate_documents(
+                latest_path, chips580_path
+            )
 
-  return 1
-}
+        self.assertEqual(latest["1340"], "580")
+        self.assertEqual(latest["2d98"], "current")
+        self.assertEqual(current580, {"1340", "2d98"})
 
-# Determine the newest 580.xx driver from NVIDIA's directory index.
-# This deliberately does not use latest.txt, which points to the production
-# branch and is not a reliable selector for the 580.xx driver series.
-_latest_580_version() {
-  local ver
+    def test_empty_or_unrecognized_html_is_rejected(self):
+        self.assertIsNone(
+            supported_chips.parse_html("<html><body>not an NVIDIA list</body></html>")
+        )
 
-  ver=$(
-    set -o pipefail
-    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 \
-      "${_nvidia_dir_base}/" \
-      | grep -oE '580\.[0-9]+(\.[0-9]+)?' \
-      | sort -Vu \
-      | tail -n1
-  ) || return 1
 
-  if [[ ! "$ver" =~ ^580\.[0-9]+(\.[0-9]+)?$ ]]; then
-    return 1
-  fi
-
-  printf '%s\n' "$ver"
-}
-
-pkgver() {
-  cd "${srcdir}/${pkgname}"
-
-  local meta deb_ver git_hash
-  meta="$(_latest_deb_info)" || return 1
-
-  deb_ver="${meta%%|*}"
-  deb_ver="${deb_ver//-/_}"
-  git_hash="$(git rev-parse --short=10 HEAD)"
-
-  printf '%s.g%s' "${deb_ver}" "${git_hash}"
-}
-
-prepare() {
-  cd "${srcdir}"
-
-  # 1. Download and unpack upstream DEB (supported-gpus.json + EULA)
-  local meta deb_file deb_url
-  meta="$(_latest_deb_info)" || return 1
-  deb_file="${meta#*|}"
-  deb_url="${_nvidia_repo_base}/${deb_file}"
-
-  rm -rf "debroot"
-  mkdir -p "debroot"
-
-  echo "==> Downloading upstream DEB for assets: ${deb_file}..."
-  curl -fL --retry 5 -o "upstream.deb" "${deb_url}"
-
-  echo "==> Unpacking DEB payload..."
-  bsdtar -xf "upstream.deb" -C "debroot"
-
-  local data_tar
-  data_tar=$(find "debroot" -maxdepth 1 -type f \( -name 'data.tar.*' -o -name 'data.tar' \) | head -n1)
-
-  if [[ -n "$data_tar" ]]; then
-    bsdtar -xf "$data_tar" -C "debroot"
-    rm "$data_tar"
-  fi
-
-  # 2. Download supportedchips.html from the configured (or detected) NFB.
-  echo "==> Determining NVIDIA driver version for supportedchips.html..."
-  local nfb_version
-  nfb_version="$(_latest_nfb_version)" || true
-
-  if [[ -z "$nfb_version" ]]; then
-    error "Could not determine NVIDIA driver version for supportedchips.html"
-    return 1
-  fi
-
-  echo "==> Using NVIDIA NFB version: ${nfb_version}"
-  local chips_url="${_nvidia_chips_base}/${nfb_version}/README/supportedchips.html"
-  echo "==> Downloading supportedchips.html: ${chips_url}"
-  rm -f "supportedchips.html"
-  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 \
-    -o "supportedchips.html" "${chips_url}" || return 1
-
-  # Sanity check for the NFB supportedchips file.
-  if [[ ! -s "supportedchips.html" ]] || \
-     ! grep -qE 'CURRENT NVIDIA GPUS|Current NVIDIA GPUs|[0-9]+\.xx driver supports' "supportedchips.html"; then
-    error "supportedchips.html does not contain expected sections"
-    return 1
-  fi
-  msg2 "supportedchips.html validated ($(wc -c < supportedchips.html) bytes)"
-
-  # 3. Find the newest 580.xx release from NVIDIA's directory index and
-  #    download that release's supportedchips.html separately.
-  echo "==> Determining latest NVIDIA 580 driver version..."
-  local nvidia_580_version
-  nvidia_580_version="$(_latest_580_version)" || {
-    error "Could not determine the latest NVIDIA 580 driver version from the directory index"
-    return 1
-  }
-
-  echo "==> Using NVIDIA 580 version: ${nvidia_580_version}"
-  local chips580_url="${_nvidia_chips_base}/${nvidia_580_version}/README/supportedchips.html"
-  echo "==> Downloading supportedchips580.html: ${chips580_url}"
-  rm -f "supportedchips580.html"
-  curl -fL --retry 5 --retry-delay 2 --connect-timeout 10 \
-    -o "supportedchips580.html" "${chips580_url}" || return 1
-
-  # Sanity check for the 580 supportedchips file.
-  if [[ ! -s "supportedchips580.html" ]] || \
-     ! grep -qE 'CURRENT NVIDIA GPUS|Current NVIDIA GPUs|[0-9]+\.xx driver supports' "supportedchips580.html"; then
-    error "supportedchips580.html does not contain expected sections"
-    return 1
-  fi
-  msg2 "supportedchips580.html validated ($(wc -c < supportedchips580.html) bytes)"
-}
-
-package() {
-  install -d "${pkgdir}/usr/bin"
-  install -d "${pkgdir}/usr/share/${pkgname}"
-  install -d "${pkgdir}/usr/share/doc/${pkgname}"
-  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
-
-  local site_packages
-  site_packages="$(python -c 'import site; print(site.getsitepackages()[0])')"
-  install -d "${pkgdir}${site_packages}/nvidia_driver_assistant/data"
-
-  msg2 "Installing main script from git source..."
-  install -m755 "${srcdir}/${pkgname}/nvidia-driver-assistant" \
-    "${pkgdir}/usr/bin/nvidia-driver-assistant"
-
-  msg2 "Installing Python package (nvidia_driver_assistant/)..."
-  install -m644 "${srcdir}/${pkgname}/nvidia_driver_assistant/"*.py \
-    "${pkgdir}${site_packages}/nvidia_driver_assistant/"
-  install -m644 "${srcdir}/${pkgname}/nvidia_driver_assistant/data/"*.yaml \
-    "${pkgdir}${site_packages}/nvidia_driver_assistant/data/"
-
-  if [[ -f "${srcdir}/supportedchips.html" ]]; then
-    msg2 "Installing supportedchips.html..."
-    install -m644 "${srcdir}/supportedchips.html" \
-      "${pkgdir}${site_packages}/nvidia_driver_assistant/data/supportedchips.html"
-  else
-    error "supportedchips.html is missing from prepare()"
-    return 1
-  fi
-
-  if [[ -f "${srcdir}/supportedchips580.html" ]]; then
-    msg2 "Installing supportedchips580.html..."
-    install -m644 "${srcdir}/supportedchips580.html" \
-      "${pkgdir}${site_packages}/nvidia_driver_assistant/data/supportedchips580.html"
-  else
-    error "supportedchips580.html is missing from prepare()"
-    return 1
-  fi
-
-  if [[ -f "${srcdir}/show-driver" ]]; then
-    msg2 "Installing show-driver as nvidia-recommended-driver..."
-    install -m755 "${srcdir}/show-driver" \
-      "${pkgdir}/usr/bin/nvidia-recommended-driver"
-  else
-    error "show-driver is missing from srcdir"
-    return 1
-  fi
-
-  if [[ -d "${srcdir}/debroot/usr/share/${pkgname}" ]]; then
-    cp -ra "${srcdir}/debroot/usr/share/${pkgname}"/* "${pkgdir}/usr/share/${pkgname}/"
-  fi
-
-  install -m644 "${srcdir}/${pkgname}/README.md" \
-    "${pkgdir}/usr/share/doc/${pkgname}/README.md"
-  install -m644 "${srcdir}/${pkgname}/docs/Configuration.md" \
-    "${pkgdir}/usr/share/doc/${pkgname}/Configuration.md"
-  install -m644 "${srcdir}/${pkgname}/COPYING" \
-    "${pkgdir}/usr/share/licenses/${pkgname}/COPYING"
-
-  local deb_doc="${srcdir}/debroot/usr/share/doc/${pkgname}"
-  if [[ -f "${deb_doc}/copyright" ]]; then
-    install -m644 "${deb_doc}/copyright" "${pkgdir}/usr/share/licenses/${pkgname}/copyright"
-  fi
-
-  local eula="${srcdir}/debroot/usr/share/${pkgname}/driver_eula/LICENSE"
-  if [[ -f "$eula" ]]; then
-    install -m644 "$eula" "${pkgdir}/usr/share/licenses/${pkgname}/NVIDIA-EULA"
-  fi
-}
+if __name__ == "__main__":
+    unittest.main()
