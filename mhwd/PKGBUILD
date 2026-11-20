@@ -4,7 +4,7 @@
 
 pkgname=mhwd
 pkgver=0.6.6
-pkgrel=2
+pkgrel=3
 pkgdesc="Manjaro Linux Hardware Detection library and application"
 arch=('x86_64')
 url="https://code.manjaro.org/applications/mhwd"
@@ -33,7 +33,7 @@ source=(
   "0001-mhwd-nvidia-assistant-integration.patch"
 )
 sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92'
-            'f1ca43110926a198fbb02585cec669663c9f39f3451889aefa5ab7c8901f1255')
+            '3bac2ccbf416c2d1fc96701ba36c5a580102556a814078b1279f25a6c005f001')
 
 # =============================================================================
 #  MPATCH KONFIGURÁCIÓ

@@ -1,14 +1,15 @@
 --- a/src/Mhwd.hpp
 +++ b/src/Mhwd.hpp
-@@ -89,7 +89,8 @@ private:
+@@ -100,7 +100,9 @@ private:
      void tryToParseCmdLineOptions(int argc, char* argv[], bool& autoConfigureNonFreeDriver,
              std::string& operationType, std::string& autoConfigureClassID);
      bool optionsDontInterfereWithEachOther() const;
      std::string gatherConfigContent(const std::vector<std::shared_ptr<Config>> & config) const;
 +    std::string getNvidiaAssistantConfig();
-     std::string getNvidiaConfigBranch(const std::string& configName) const;
++    std::string getNvidiaConfigBranch(const std::string& configName) const;
  };
-
+ 
+ #endif /* MHWD_HPP_ */
 --- a/src/Mhwd.cpp
 +++ b/src/Mhwd.cpp
 @@ -27,6 +27,7 @@
@@ -16,13 +17,13 @@
  #include <sys/stat.h>
  #include <sys/types.h>
 +#include <sys/wait.h>
-
+ 
  #include <algorithm>
  #include <cctype>
 @@ -254,6 +255,83 @@
      return nullptr;
  }
-
+ 
 +std::string Mhwd::getNvidiaAssistantConfig()
 +{
 +    const std::string command = "nvidia-driver-assistant --mhwd-config";
@@ -144,7 +145,7 @@
 @@ -1101,13 +1208,57 @@
                  foundDevice = true;
                  std::shared_ptr<Config> config;
-
+ 
 -                for (auto&& availableConfig : device->availableConfigs_)
 +                const bool isNvidiaDevice = hasNvidiaDevice && "10de" == device->vendorID_;
 +                if (isNvidiaDevice)
@@ -201,5 +202,5 @@
 +                        }
 +                    }
                  }
-
+ 
                  if (nullptr == config)
