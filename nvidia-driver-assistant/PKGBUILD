@@ -1,7 +1,7 @@
 # Maintainer: Gyöngyösi Gábor <gabor at gshoots dot hu>
 
 pkgname=nvidia-driver-assistant
-pkgver=0.68.70.06_1.gbdb7c96be0
+pkgver=0.68.70.06_1.gf76a6957b8
 pkgrel=1
 pkgdesc="Detect and install the best NVIDIA driver packages for the system (Manjaro-only fork)"
 arch=('any')
