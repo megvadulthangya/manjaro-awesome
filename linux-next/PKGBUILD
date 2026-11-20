@@ -80,7 +80,7 @@ pkgver() {
 
 # Intentionally static:
 # The GitHub builder updates this value to the last successfully built version.
-pkgver=20261116.r0.g749a4de37040
+pkgver=20261119.r0.gadcad7f4e633
 
 _source_tarball="linux-next-${_commit_date}-${_commit}.tar.gz"
 _srcdir="linux-next-${_commit}"
