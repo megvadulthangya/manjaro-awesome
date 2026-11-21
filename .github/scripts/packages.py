@@ -53,7 +53,7 @@ LOCAL_PACKAGES = [
     "linux-lts-acpi_call-meta",
     "manjaro-xfce-settings",
     "nordic-wallpaper-default",
-    "manjaro-live",
+#    "manjaro-live",
     "gsconnect",
     "cuda-12.9",
     "cudnn9.10-cuda12.9",
