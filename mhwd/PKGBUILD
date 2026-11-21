@@ -4,7 +4,7 @@
 
 pkgname=mhwd
 pkgver=0.6.6
-pkgrel=3
+pkgrel=4
 pkgdesc="Manjaro Linux Hardware Detection library and application"
 arch=('x86_64')
 url="https://code.manjaro.org/applications/mhwd"
@@ -27,19 +27,71 @@ optdepends=(
 )
 provides=('libmhwd.so')
 install="$pkgname.install"
+
+# =============================================================================
+# NVIDIA DRIVER ASSISTANT INTEGRATION MODE
+# =============================================================================
+# Select exactly ONE integration mode by setting NVIDIA_ASSISTANT_MODE below.
+# This changes only which MHWD integration patch is applied. It does not change
+# pkgver/pkgrel, the MHWD source revision, or the NVIDIA Driver Assistant itself.
+# The nvidia-driver-assistant source code is not patched or modified here.
+#
+# Available modes:
+#
+#   authority
+#     The NVIDIA Driver Assistant makes the NVIDIA driver-branch decision for
+#     the system. MHWD uses the result of `nvidia-driver-assistant --mhwd-config`
+#     and searches its available profiles for the matching branch. MHWD's own
+#     profile priority does not override the Assistant's result. If the Assistant
+#     cannot return a valid choice, or MHWD has no matching profile, MHWD does
+#     not fall back to choosing an NVIDIA profile by priority.
+#
+#   corrective
+#     MHWD makes its normal choice first, using the existing profile priority
+#     order. The NVIDIA Driver Assistant then checks the selected branch for
+#     each NVIDIA PCI device using its `--mhwd-branch --mhwd-device-id` interface.
+#     If MHWD's choice disagrees with the Assistant's supportedchips.html result,
+#     MHWD switches to an available profile for the required branch. If no
+#     suitable profile exists, that NVIDIA device is skipped rather than installing
+#     a profile for the wrong branch. If the Assistant cannot determine a branch,
+#     MHWD keeps its original priority-based choice.
+#
+# Hybrid profiles are taken into account in both modes. The two patches implement
+# alternative behaviours for the same MHWD auto-configuration path, so they must
+# NEVER be applied together. Change only the value below to select the behaviour.
+# For the normal Assistant-controlled behaviour, leave it as "authority".
+# For the MHWD-first behaviour with Assistant correction, set it to "corrective".
+NVIDIA_ASSISTANT_MODE="corrective"
+
+case "${NVIDIA_ASSISTANT_MODE}" in
+  authority)
+    _nvidia_assistant_patch="0001-mhwd-nvidia-assistant-integration.patch"
+    ;;
+  corrective)
+    _nvidia_assistant_patch="0002-mhwd-nvidia-assistant-corrective.patch"
+    ;;
+  *)
+    echo "ERROR: Invalid NVIDIA_ASSISTANT_MODE='${NVIDIA_ASSISTANT_MODE}'." >&2
+    echo "Choose exactly one supported value: authority or corrective." >&2
+    exit 1
+    ;;
+esac
+
 _commit=6ddcc6072c28a067ecebe6d38245dd0748f59c0f
 source=(
   "git+https://code.manjaro.org/applications/mhwd.git#commit=${_commit}"
   "0001-mhwd-nvidia-assistant-integration.patch"
+  "0002-mhwd-nvidia-assistant-corrective.patch"
 )
 sha256sums=('5450b471ae6bb6a716b4a29cdc8e68014f0be585338de95d05a1bcf1a7c08a92'
-            '3bac2ccbf416c2d1fc96701ba36c5a580102556a814078b1279f25a6c005f001')
+            '3bac2ccbf416c2d1fc96701ba36c5a580102556a814078b1279f25a6c005f001'
+            'd22a4bd82eb07df40931e684c1439fac8c852de77cec81b119bcf52bbd7dd894')
 
 # =============================================================================
 #  MPATCH KONFIGURÁCIÓ
 # =============================================================================
-#  Ugyanaz a minta, mint a 390xx PKGBUILD-ben: --atomic + fuzz + debug.
-#
+#  Same approach as in the 390xx PKGBUILD: --atomic + fuzz + debug.
+
 _mpatch_opts=(
     --atomic
     --fuzz-factor 0.7
@@ -70,12 +122,12 @@ _mpatch_apply() {
     if [ "${_mpatch_debug_on_failure}" = "1" ]; then
         local _dbgdir="${srcdir}/mpatch-debug"
         mkdir -p "$_dbgdir"
-        echo ">>> Debug riport generálása: $_dbgdir/" >&2
+        echo ">>> Debug report: $_dbgdir/" >&2
         ( cd "$_targetdir" && mpatch "${_mpatch_debug_opts[@]}" \
             "$_patchfile" . ) > "$_dbgdir/${_patchname}.stdout" 2>&1 || true
         find "${_targetdir}" -maxdepth 1 -name 'mpatch-debug-report-*.md' \
             -exec mv {} "$_dbgdir/${_patchname}.report.md" \; 2>/dev/null || true
-        echo ">>> Nézd meg: $_dbgdir/${_patchname}.report.md" >&2
+        echo ">>> Inspect: $_dbgdir/${_patchname}.report.md" >&2
     fi
 
     return "$_rc"
@@ -84,11 +136,12 @@ _mpatch_apply() {
 prepare() {
   cd "${srcdir}/${pkgname}"
 
-  echo ">>> Alkalmazom: 0001-mhwd-nvidia-assistant-integration.patch"
-  echo ">>> Opciók: ${_mpatch_opts[*]}"
-  _mpatch_apply "${srcdir}/0001-mhwd-nvidia-assistant-integration.patch" . \
+  echo ">>> NVIDIA Driver Assistant integration mode: ${NVIDIA_ASSISTANT_MODE}"
+  echo ">>> Applying: ${_nvidia_assistant_patch}"
+  echo ">>> mpatch options: ${_mpatch_opts[*]}"
+  _mpatch_apply "${srcdir}/${_nvidia_assistant_patch}" . \
     || { echo "!!! PATCH FAILED"; exit 1; }
-  echo ">>> PATCH alkalmazva."
+  echo ">>> PATCH applied."
 }
 
 build() {

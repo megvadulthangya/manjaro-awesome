@@ -1,0 +1,235 @@
+--- a/src/Mhwd.hpp
++++ b/src/Mhwd.hpp
+@@ -100,7 +100,9 @@ private:
+     void tryToParseCmdLineOptions(int argc, char* argv[], bool& autoConfigureNonFreeDriver,
+             std::string& operationType, std::string& autoConfigureClassID);
+     bool optionsDontInterfereWithEachOther() const;
+     std::string gatherConfigContent(const std::vector<std::shared_ptr<Config>> & config) const;
++    std::string getNvidiaAssistantBranch(const std::string& deviceID);
++    std::string getNvidiaConfigBranch(const std::string& configName) const;
+ };
+ 
+ #endif /* MHWD_HPP_ */
+--- a/src/Mhwd.cpp
++++ b/src/Mhwd.cpp
+@@ -27,6 +27,7 @@
+ #include <unistd.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
++#include <sys/wait.h>
+ 
+ #include <algorithm>
+ #include <cctype>
+@@ -254,6 +255,100 @@
+     return nullptr;
+ }
+ 
++std::string Mhwd::getNvidiaAssistantBranch(const std::string& deviceID)
++{
++    std::string normalizedDeviceID{deviceID};
++    if (normalizedDeviceID.compare(0, 2, "0x") == 0
++            || normalizedDeviceID.compare(0, 2, "0X") == 0)
++    {
++        normalizedDeviceID.erase(0, 2);
++    }
++
++    if (4 != normalizedDeviceID.size()
++            || !std::all_of(normalizedDeviceID.begin(), normalizedDeviceID.end(),
++                    [](unsigned char c) { return std::isxdigit(c); }))
++    {
++        return {};
++    }
++
++    const std::string command =
++            "nvidia-driver-assistant --mhwd-branch --mhwd-device-id "
++            + normalizedDeviceID + " 2>/dev/null";
++    FILE* fp = popen(command.c_str(), "r");
++    if (nullptr == fp)
++    {
++        return {};
++    }
++
++    char buffer[64] = {};
++    std::string branch;
++    if (nullptr != fgets(buffer, sizeof(buffer), fp))
++    {
++        branch = buffer;
++    }
++
++    const int status = pclose(fp);
++    if (-1 == status || !WIFEXITED(status) || 0 != WEXITSTATUS(status))
++    {
++        return {};
++    }
++
++    const std::size_t endpos = branch.find_last_not_of(" \n\r\t");
++    if (std::string::npos == endpos)
++    {
++        return {};
++    }
++    branch.erase(endpos + 1);
++
++    if ("current" == branch)
++    {
++        return branch;
++    }
++
++    if (branch.empty()
++            || !std::all_of(branch.begin(), branch.end(),
++                    [](unsigned char c) { return std::isdigit(c); }))
++    {
++        return {};
++    }
++
++    return branch;
++}
++
++std::string Mhwd::getNvidiaConfigBranch(const std::string& configName) const
++{
++    const std::size_t marker = configName.find("-nvidia");
++    if (std::string::npos == marker)
++    {
++        return {};
++    }
++
++    const std::size_t branchToken = marker + 7;
++    if (branchToken == configName.size()
++            || (branchToken + 6 == configName.size()
++                    && 0 == configName.compare(branchToken, 6, "-prime")))
++    {
++        return "current";
++    }
++
++    if (branchToken >= configName.size() || '-' != configName[branchToken])
++    {
++        return {};
++    }
++
++    const std::size_t digitsStart = branchToken + 1;
++    const std::size_t suffix = configName.find("xx", digitsStart);
++    if (std::string::npos != suffix && suffix > digitsStart
++            && (suffix + 2 == configName.size() || '-' == configName[suffix + 2])
++            && std::all_of(configName.begin() + digitsStart, configName.begin() + suffix,
++                    [](unsigned char c) { return std::isdigit(c); }))
++    {
++        return configName.substr(digitsStart, suffix - digitsStart);
++    }
++
++    return {};
++}
++
+ MHWD::STATUS Mhwd::performTransaction(const Transaction& transaction)
+ {
+     if ((MHWD::TRANSACTIONTYPE::INSTALL == transaction.type_) &&
+@@ -1087,8 +1184,17 @@
+         else
+         {
+             devices = &data_.PCIDevices;
+             installedConfigs = &data_.installedPCIConfigs;
+         }
++        const bool useNvidiaAssistant = autoConfigureNonFreeDriver
++                && "PCI" == operationType && "0300" == autoConfigureClassID;
++        const bool hasNvidiaDevice = useNvidiaAssistant
++                && std::find_if(devices->begin(), devices->end(),
++                        [&autoConfigureClassID](const std::shared_ptr<Device>& device) {
++                            return device->classID_ == autoConfigureClassID
++                                    && "10de" == device->vendorID_;
++                        }) != devices->end();
++
+         bool foundDevice = false;
+         for (auto&& device : *devices)
+         {
+@@ -1101,6 +1207,27 @@
+                 foundDevice = true;
++
++                const bool isNvidiaDevice = hasNvidiaDevice
++                        && "10de" == device->vendorID_;
++
++                // Hybrid NVIDIA profiles are also attached to the integrated GPU.
++                // Defer their selection to the NVIDIA device, where the Assistant
++                // can validate or correct the NVIDIA branch before it is queued.
++                if (hasNvidiaDevice && !isNvidiaDevice)
++                {
++                    const auto hybridConfig = std::find_if(
++                            device->availableConfigs_.begin(),
++                            device->availableConfigs_.end(),
++                            [this](const std::shared_ptr<Config>& candidate) {
++                                return !getNvidiaConfigBranch(candidate->name_).empty();
++                            });
++                    if (device->availableConfigs_.end() != hybridConfig)
++                    {
++                        continue;
++                    }
++                }
++
+                 std::shared_ptr<Config> config;
+ 
+                 for (auto&& availableConfig : device->availableConfigs_)
+                 {
+                     if (autoConfigureNonFreeDriver || availableConfig->freedriver_)
+@@ -1109,5 +1236,65 @@
+                         break;
+                     }
+                 }
++
++                // MHWD keeps its priority-based choice unless the Assistant
++                // identifies a different supported NVIDIA branch for this PCI ID.
++                if (nullptr != config && isNvidiaDevice)
++                {
++                    const std::string supportedBranch =
++                            getNvidiaAssistantBranch(device->deviceID_);
++                    const std::string selectedBranch =
++                            getNvidiaConfigBranch(config->name_);
++
++                    if (supportedBranch.empty())
++                    {
++                        consoleWriter_.printWarning(
++                                "NVIDIA Driver Assistant could not determine a supported branch for PCI ID "
++                                + device->deviceID_ + "; keeping MHWD priority selection '"
++                                + config->name_ + "'.");
++                    }
++                    else if (selectedBranch.empty())
++                    {
++                        consoleWriter_.printWarning(
++                                "Could not determine the NVIDIA branch from MHWD config '"
++                                + config->name_ + "' for PCI ID " + device->deviceID_
++                                + "; keeping MHWD priority selection.");
++                    }
++                    else if (supportedBranch != selectedBranch)
++                    {
++                        const std::string priorityConfigName = config->name_;
++                        const bool priorityConfigIsHybrid =
++                                0 == priorityConfigName.find("video-hybrid-");
++                        const auto correctedConfig = std::find_if(
++                                device->availableConfigs_.begin(),
++                                device->availableConfigs_.end(),
++                                [this, &supportedBranch, priorityConfigIsHybrid](
++                                        const std::shared_ptr<Config>& candidate) {
++                                    const bool candidateIsHybrid =
++                                            0 == candidate->name_.find("video-hybrid-");
++                                    return candidateIsHybrid == priorityConfigIsHybrid
++                                            && getNvidiaConfigBranch(candidate->name_)
++                                                    == supportedBranch;
++                                });
++
++                        if (device->availableConfigs_.end() == correctedConfig)
++                        {
++                            consoleWriter_.printWarning(
++                                    "MHWD selected '" + priorityConfigName
++                                    + "' for NVIDIA PCI ID " + device->deviceID_
++                                    + ", but supportedchips.html requires branch "
++                                    + supportedBranch
++                                    + ". No matching MHWD config is available; skipping this device.");
++                            continue;
++                        }
++
++                        config = *correctedConfig;
++                        consoleWriter_.printStatus(
++                                "Correcting MHWD priority selection for NVIDIA PCI ID "
++                                + device->deviceID_ + ": '" + priorityConfigName
++                                + "' -> '" + config->name_ + "' (supportedchips branch "
++                                + supportedBranch + ")");
++                    }
++                }
+ 
+                 if (nullptr == config)
