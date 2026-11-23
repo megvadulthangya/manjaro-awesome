@@ -1,0 +1,220 @@
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -4372,6 +4372,26 @@
+             "
+ 
+             compile_check_conftest "$CODE" "NV_PROC_OPS_PRESENT" "" "types"
++
++            CODE="
++            #include <linux/proc_fs.h>
++
++            int conftest_proc_ops_new_api(void)
++            {
++                struct proc_ops p_ops = {
++                    .proc_show = 0,
++                    .proc_seq_ops = 0,
++                    .proc_read_buf = 0,
++                    .proc_write_buf = 0,
++                    .proc_write_size = 1,
++                    .proc_state_size = 0,
++                };
++
++                return p_ops.proc_write_size;
++            }
++            "
++
++            compile_check_conftest "$CODE" "NV_PROC_OPS_NEW_API_PRESENT" "" "types"
+         ;;
+ 
+         timeval)
+--- a/common/inc/nv-procfs.h
++++ b/common/inc/nv-procfs.h
+@@ -33,11 +33,18 @@
+ 
+ #define NV_PROC_OPS_SET_OWNER()
+ 
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++#define NV_PROC_OPS_OPEN    proc_open
++#define NV_PROC_OPS_READ    proc_show
++#define NV_PROC_OPS_WRITE   proc_write_buf
++#define NV_PROC_OPS_RELEASE proc_release
++#else
+ #define NV_PROC_OPS_OPEN    proc_open
+ #define NV_PROC_OPS_READ    proc_read
+ #define NV_PROC_OPS_WRITE   proc_write
+ #define NV_PROC_OPS_LSEEK   proc_lseek
+ #define NV_PROC_OPS_RELEASE proc_release
++#endif
+ #else
+ typedef struct file_operations nv_proc_ops_t;
+ 
+@@ -128,23 +135,30 @@
+     remove_proc_entry(entry->name, entry->parent);
+ #endif
+ 
+-#define NV_DEFINE_PROCFS_SINGLE_FILE(__name)                                  \
+-    static int nv_procfs_open_##__name(                                       \
+-        struct inode *inode,                                                  \
+-        struct file *filep                                                    \
+-    )                                                                         \
+-    {                                                                         \
+-        return single_open(filep, nv_procfs_read_##__name,                    \
+-            NV_PDE_DATA(inode));                                              \
+-    }                                                                         \
+-                                                                              \
+-    static const nv_proc_ops_t nv_procfs_##__name##_fops = {                  \
+-        NV_PROC_OPS_SET_OWNER()                                               \
+-        .NV_PROC_OPS_OPEN    = nv_procfs_open_##__name,                       \
+-        .NV_PROC_OPS_READ    = seq_read,                                      \
+-        .NV_PROC_OPS_LSEEK   = seq_lseek,                                     \
+-        .NV_PROC_OPS_RELEASE = single_release,                                \
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++#define NV_DEFINE_PROCFS_SINGLE_FILE(__name) \
++    static const nv_proc_ops_t nv_procfs_##__name##_fops = { \
++        NV_PROC_OPS_SET_OWNER() \
++        .NV_PROC_OPS_READ = nv_procfs_read_##__name, \
+     };
++#else
++#define NV_DEFINE_PROCFS_SINGLE_FILE(__name) \
++    static int nv_procfs_open_##__name( \
++        struct inode *inode, \
++        struct file *filep \
++    ) \
++    { \
++        return single_open(filep, nv_procfs_read_##__name, NV_PDE_DATA(inode)); \
++    } \
++ \
++    static const nv_proc_ops_t nv_procfs_##__name##_fops = { \
++        NV_PROC_OPS_SET_OWNER() \
++        .NV_PROC_OPS_OPEN    = nv_procfs_open_##__name, \
++        .NV_PROC_OPS_READ    = seq_read, \
++        .NV_PROC_OPS_LSEEK   = seq_lseek, \
++        .NV_PROC_OPS_RELEASE = single_release, \
++    };
++#endif
+ 
+ #endif  /* CONFIG_PROC_FS */
+ 
+--- a/nvidia/nv-procfs.c
++++ b/nvidia/nv-procfs.c
+@@ -231,7 +231,11 @@
+     retval = nv_procfs_open_file(inode, file, &nvfp);
+     if (retval == 0)
+     {
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++        ((struct seq_file *)file->private_data)->private = nvfp;
++#else
+         single_open(file, nv_procfs_read_registry, nvfp);
++#endif
+     }
+ 
+     return retval;
+@@ -255,7 +259,9 @@
+     int rc = 0;
+ 
+     nvfp = s->private;
++#if !defined(NV_PROC_OPS_NEW_API_PRESENT)
+     single_release(inode, file);
++#endif
+ 
+     sp = nvfp->fops_sp[NV_FOPS_STACK_INDEX_PROCFS];
+ 
+@@ -368,7 +374,11 @@
+ static ssize_t
+ nv_procfs_write_file(
+     struct file   *file,
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++    char *buffer,
++#else
+     const char __user *buffer,
++#endif
+     size_t count,
+     loff_t *pos
+ )
+@@ -396,6 +406,10 @@
+ 
+     proc_buffer = &((char *)nvfp->data)[nvfp->off];
+ 
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++    memcpy(proc_buffer, buffer, count);
++    nvfp->off += count;
++#else
+     if (copy_from_user(proc_buffer, buffer, count))
+     {
+         nv_printf(NV_DBG_ERRORS, "NVRM: failed to copy in proc data!\n");
+@@ -405,8 +419,10 @@
+     {
+         nvfp->off += count;
+     }
++#endif
+ 
+-    *pos = nvfp->off;
++    if (pos != NULL)
++        *pos = nvfp->off;
+ 
+ done:
+     up(&nvfp->fops_sp_lock[NV_FOPS_STACK_INDEX_PROCFS]);
+@@ -417,9 +433,15 @@
+ static nv_proc_ops_t nv_procfs_registry_fops = {
+      NV_PROC_OPS_SET_OWNER()
+     .NV_PROC_OPS_OPEN    = nv_procfs_open_registry,
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++    .NV_PROC_OPS_READ    = nv_procfs_read_registry,
++    .NV_PROC_OPS_WRITE   = nv_procfs_write_file,
++    .proc_write_size     = NV_PROC_WRITE_BUFFER_SIZE - 1,
++#else
+     .NV_PROC_OPS_READ    = seq_read,
+     .NV_PROC_OPS_WRITE   = nv_procfs_write_file,
+     .NV_PROC_OPS_LSEEK   = seq_lseek,
++#endif
+     .NV_PROC_OPS_RELEASE = nv_procfs_close_registry,
+ };
+ 
+@@ -521,6 +543,9 @@
+      NV_PROC_OPS_SET_OWNER()
+     .NV_PROC_OPS_OPEN    = nv_procfs_open_exercise_error_forwarding,
+     .NV_PROC_OPS_WRITE   = nv_procfs_write_file,
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++    .proc_write_size     = NV_PROC_WRITE_BUFFER_SIZE - 1,
++#endif
+     .NV_PROC_OPS_RELEASE = nv_procfs_close_exercise_error_forwarding,
+ };
+ 
+@@ -560,7 +585,11 @@
+     retval = nv_procfs_open_file(inode, file, &nvfp);
+     if (retval == 0)
+     {
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++        ((struct seq_file *)file->private_data)->private = nvfp;
++#else
+         single_open(file, nv_procfs_read_unbind_lock, nvfp);
++#endif
+     }
+ 
+     return retval;
+@@ -581,7 +610,9 @@
+     int value;
+ 
+     nvfp = s->private;
++#if !defined(NV_PROC_OPS_NEW_API_PRESENT)
+     single_release(inode, file);
++#endif
+ 
+     sp = nvfp->fops_sp[NV_FOPS_STACK_INDEX_PROCFS];
+ 
+@@ -653,9 +684,15 @@
+ static nv_proc_ops_t nv_procfs_unbind_lock_fops = {
+     NV_PROC_OPS_SET_OWNER()
+     .NV_PROC_OPS_OPEN    = nv_procfs_open_unbind_lock,
++#if defined(NV_PROC_OPS_NEW_API_PRESENT)
++    .NV_PROC_OPS_READ    = nv_procfs_read_unbind_lock,
++    .NV_PROC_OPS_WRITE   = nv_procfs_write_file,
++    .proc_write_size     = NV_PROC_WRITE_BUFFER_SIZE - 1,
++#else
+     .NV_PROC_OPS_READ    = seq_read,
+     .NV_PROC_OPS_WRITE   = nv_procfs_write_file,
+     .NV_PROC_OPS_LSEEK   = seq_lseek,
++#endif
+     .NV_PROC_OPS_RELEASE = nv_procfs_close_unbind_lock,
+ };
+ 

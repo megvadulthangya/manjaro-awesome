@@ -91,10 +91,11 @@
      /*
       * If seqno wrapped, force signal fences to make sure none of them
       * get stuck.
-@@ -400,6 +381,5 @@
-     }
+@@ -400,7 +381,6 @@
+     nv_fence_context->last_seqno = seqno;
  
 -unlock_and_out:
      spin_unlock(&nv_fence_context->lock);
  
-     return nv_fence;
+ out:
+     return ret != 0 ? ERR_PTR(ret) : &nv_fence->base;

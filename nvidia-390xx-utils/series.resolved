@@ -84,3 +84,5 @@ kernel-linux-next-drm-reset.patch
 390-prime-fence-lifecycle.patch
 390-workqueue-tracking.patch
 linux-next-drm-connector-atomic-create-state.patch
+390-procfs-next-compat.patch
+390-dma-fence-init-flags.patch

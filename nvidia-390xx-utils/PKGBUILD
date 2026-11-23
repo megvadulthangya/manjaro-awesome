@@ -194,12 +194,12 @@
 pkgbase=nvidia-390xx-utils
 pkgname=('nvidia-390xx-utils' 'opencl-nvidia-390xx' 'nvidia-390xx-dkms' 'mhwd-nvidia-390xx')
 pkgver=390.157
-pkgrel=5
+pkgrel=6
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
 options=('!strip')
-makedepends=('mpatch-git')
+makedepends=('mpatch-git' 'nvidia-driver-assistant')
 _pkg="NVIDIA-Linux-x86_64-${pkgver}-no-compat32"
 
 # =============================================================================
@@ -314,10 +314,11 @@ _debian_patches=(
     '390-prime-fence-lifecycle.patch'
     '390-workqueue-tracking.patch'
     'linux-next-drm-connector-atomic-create-state.patch'
+    '390-procfs-next-compat.patch'
+    '390-dma-fence-init-flags.patch'
 )
 
 source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.run"
-        'mhwd-nvidia'
         'nvidia-390xx-utils.install'
         'nvidia-390xx-utils.sysusers'
         'nvidia-390xx.rules'
@@ -334,7 +335,6 @@ source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.r
 # Hash-ek: mind SKIP (12 fix fájl + 85 Debian patch = 97 db), hogy a gyakran
 # frissülő Debian patchek és helper fájlok ne okozzanak felesleges build-hibát.
 sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
-            'fa6f1e43b468c7d5b7ad7880cd6be7520f37ebb6e7b8c2c9a08756249754af66'
             '9c18d0b11ef84677983105974bd19b29036d17f496b1f77c58817f97e326d762'
             'd8d1caa5d72c71c6430c2a0d9ce1a674787e9272ccce28b9d5898ca24e60a167'
             'e30714f9b473d810c28763d067e0b85c75f86f23618d968b49b9d1fced9a1dd6'
@@ -344,7 +344,7 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             'c5aa7b8abe69e72bfdc6b9ee8afbfd350bcc557e894558f2e6e4087fa9aa0dd8'
             '1d053c5078387021338cfc3a732bed61be1a20a549775573788e9134775c8149'
             '9e6f14afaa7523370ad96e6675d3357441ee3985e60405cb3e0ced30b2ddaf76'
-            '764ee3bb5b1c09e1b8507dbd7dc432602013e379d6fa2a92f47031b260129de6'
+            '4b217080fa0ce3b86918754f5a9a981105e821a364c83916cf6257c549dcd315'
             'af5e491da1d10cb6c01e0e46f23939fb22fe412b89dce923eb146c30a79f684e'
             '9605f378ba51feb7c984cd04185fac70a83ff5dd30fbff24ad91404c9312ac82'
             '7c2071c822d927280deafea1fca955c41ca352ce4dd81732063a166a32553f62'
@@ -428,9 +428,11 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             'bc9ebbd85ee56a166ab1d81a193fae228c2cc010bccc7d13188af80444aa008e'
             '919b2b04357ce50a461d1a407bf7c9c58fad632a8c8285754b550b6e177575a5'
             'f07ab1ad7b4cfb471c267b6761cf172715d50a1e3c56220c3eed146300aa7fb6'
-            'a1d302bc9342e2751f0e9a8855c247da0406dc2dc99cbc7224ae6a30643d8625'
+            '086c779f0ee8343d2d17124999ced58939362ac4078df2e65e894c76ce06af7a'
             '14a1c5a5f2627c5dc77dcfee98b4b83724c2e7f7315a3a2dba95a14f457bd52f'
-            '91791c813a96a770c34b84641552fc6d66c4200914451d8439cdfd2803c5995d')
+            '91791c813a96a770c34b84641552fc6d66c4200914451d8439cdfd2803c5995d'
+            '6f36928fc6a381a4ff6665ed61f848e6ac2855e4320ffca1409571a871a81d37'
+            '840dd91ffae9ca57fc8522e88d461092fc69287d5f0eae3f0de2fc1d753ebd71')
 
 # =============================================================================
 # SYMLINK GENERÁTOR – a .so SONAME-ekhez szükséges linkek létrehozása.
@@ -774,10 +776,9 @@ package_mhwd-nvidia-390xx() {
 
     install -d -m755 "${pkgdir}/var/lib/mhwd/ids/pci/"
 
-    sh -e ${srcdir}/mhwd-nvidia \
-        ${srcdir}/${_pkg}/README.txt \
-        ${srcdir}/${_pkg}/kernel/nvidia/nv-kernel-amd64.o_binary \
-        > ${pkgdir}/var/lib/mhwd/ids/pci/nvidia-390xx.ids
-
-    sed -i 's/1b81 1b84/1b81 1b82 1b84/g' ${pkgdir}/var/lib/mhwd/ids/pci/nvidia-390xx.ids
+    # Generate the MHWD ID list from the NVIDIA supportedchips data shipped
+    # with nvidia-driver-assistant. Only the 4-digit PCI Device IDs are written;
+    # Subsystem Vendor IDs and Subsystem Device IDs are intentionally ignored.
+    nvidia-driver-assistant --generate-ids 390 \
+        > "${pkgdir}/var/lib/mhwd/ids/pci/nvidia-390xx.ids"
 }

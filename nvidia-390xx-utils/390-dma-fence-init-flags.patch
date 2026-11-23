@@ -1,0 +1,56 @@
+--- conftest.sh
++++ conftest.sh
+@@ -4358,6 +4358,28 @@
+             compile_check_conftest "$CODE" "NV_DRM_GEM_OBJECT_HAS_RESV" "" "types"
+         ;;
+ 
++        dma_fence_init_has_flags)
++            #
++            # Determine if dma_fence_init() accepts the flags argument.
++            #
++            CODE="
++            #if !defined(NV_LINUX_FENCE_H_PRESENT)
++            #include <linux/dma-fence.h>
++            #include <linux/spinlock.h>
++            void conftest_dma_fence_init_has_flags(
++                struct dma_fence *fence,
++                const struct dma_fence_ops *ops,
++                spinlock_t *lock)
++            {
++                dma_fence_init(fence, ops, lock, 0, 0, 0UL);
++            }
++            #else
++            #error legacy fence API does not use dma_fence_init()
++            #endif"
++
++            compile_check_conftest "$CODE" "NV_DMA_FENCE_INIT_HAS_FLAGS" "" "types"
++        ;;
++
+         proc_ops)
+             #
+             # Determine if the 'struct proc_ops' type is present.
+--- nvidia-drm/nvidia-drm.Kbuild
++++ nvidia-drm/nvidia-drm.Kbuild
+@@ -53,6 +53,8 @@
+ NV_CONFTEST_GENERIC_COMPILE_TESTS += is_export_symbol_gpl_refcount_dec_and_test
+ NV_CONFTEST_GENERIC_COMPILE_TESTS += is_export_symbol_present_drm_gem_prime_handle_to_fd
+ NV_CONFTEST_GENERIC_COMPILE_TESTS += is_export_symbol_gpl___vma_start_write
++
++NV_CONFTEST_TYPE_COMPILE_TESTS += dma_fence_init_has_flags
+ 
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_dev_unref
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_reinit_primary_mode_group
+--- nvidia-drm/nvidia-dma-fence-helper.h
++++ nvidia-drm/nvidia-dma-fence-helper.h
+@@ -113,7 +113,11 @@
+ #if defined(NV_LINUX_FENCE_H_PRESENT)
+     fence_init(fence, ops, lock, context, seqno);
+ #else
++#if defined(NV_DMA_FENCE_INIT_HAS_FLAGS)
++    dma_fence_init(fence, ops, lock, context, seqno, 0UL);
++#else
+     dma_fence_init(fence, ops, lock, context, seqno);
++#endif
+ #endif
+ }
+ 
