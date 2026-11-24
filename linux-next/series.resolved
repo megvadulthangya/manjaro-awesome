@@ -6,5 +6,4 @@
 0999-patch_realtek.patch
 0002-xpad-gate-the-zotac-zone-PID-behind-if-IS_REACHABLE-.patch
 0003-tmp-apply-zotac-screen-quirk.patch
-0005-zone-fix-6.15-rename-del_timer-to-timer_delete.patch
 0000-iwlwifi-fix.patch

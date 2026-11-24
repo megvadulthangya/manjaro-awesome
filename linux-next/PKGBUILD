@@ -147,9 +147,9 @@ options=(
 
 # The selectable options are intentionally kept together here.
 _mpatch_opts=(
-#    --atomic
-#    --fuzz-factor 0.7
-   --fuzz-factor 0.9
+    --atomic
+    --fuzz-factor 0.7
+#   --fuzz-factor 0.9
 #   --fuzz-factor 0.3
 #   --fuzz-factor 0.1
 #   --fuzz-factor 0.0
@@ -185,7 +185,7 @@ source=(
 
 sha256sums=('3f71fa3e9df9555017f3e2614738b50e3cf120212814f97b3a627f7e2851df52'
             '80282f72c636a69f84af13a7c2a3a281281eb1cc74deee68423b0d662ba08aa7'
-            '8a719e284232e35d36798d27a98ecdafc665a7ab93f5f96fcc8c0f15981e256a'
+            'b8640c652e977d3d99f735f226f580c49331a3148fa903c3e80848727a2be411'
             'c21170eba77438abb8b8ab02aeccf16bfb2467a01303509945aa6b3a0fd16d31'
             '37f3222fafbe67dec3740933be37867e0c378468f71e9a6d5d6a07c2a2a568fe'
             'cacb08b2f43a9fd09053bffaacc4b7bdf8381772f26e61825fb696ded100af57'
