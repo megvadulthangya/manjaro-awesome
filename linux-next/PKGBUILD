@@ -6,7 +6,7 @@
 _basekernel=next
 _basever=next
 _kernelname=-MANJARO
-_commit=909ef7a9a30fa139e69e555e3606680f5cca7726
+_commit=3191063649dbf7c0d0b768e1f3655e4c5fc6edb5
 _commit_short=${_commit:0:12}
 _rc=
 pkgbase=linux-next
