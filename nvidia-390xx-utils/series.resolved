@@ -86,3 +86,4 @@ kernel-linux-next-drm-reset.patch
 linux-next-drm-connector-atomic-create-state.patch
 390-procfs-next-compat.patch
 390-dma-fence-init-flags.patch
+390-msr-rdmsrq-compat.patch

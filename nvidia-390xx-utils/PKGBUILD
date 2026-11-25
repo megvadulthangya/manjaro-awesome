@@ -194,7 +194,7 @@
 pkgbase=nvidia-390xx-utils
 pkgname=('nvidia-390xx-utils' 'opencl-nvidia-390xx' 'nvidia-390xx-dkms' 'mhwd-nvidia-390xx')
 pkgver=390.157
-pkgrel=6
+pkgrel=7
 arch=('x86_64')
 url="https://www.nvidia.com/"
 license=('custom')
@@ -316,6 +316,7 @@ _debian_patches=(
     'linux-next-drm-connector-atomic-create-state.patch'
     '390-procfs-next-compat.patch'
     '390-dma-fence-init-flags.patch'
+    '390-msr-rdmsrq-compat.patch'
 )
 
 source=("https://us.download.nvidia.com/XFree86/Linux-x86_64/${pkgver}/${_pkg}.run"
@@ -344,7 +345,7 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             'c5aa7b8abe69e72bfdc6b9ee8afbfd350bcc557e894558f2e6e4087fa9aa0dd8'
             '1d053c5078387021338cfc3a732bed61be1a20a549775573788e9134775c8149'
             '9e6f14afaa7523370ad96e6675d3357441ee3985e60405cb3e0ced30b2ddaf76'
-            '4b217080fa0ce3b86918754f5a9a981105e821a364c83916cf6257c549dcd315'
+            '50410f9280892e94c7080d8bbb8c623ce73cee0e268d222efd103d018318d78c'
             'af5e491da1d10cb6c01e0e46f23939fb22fe412b89dce923eb146c30a79f684e'
             '9605f378ba51feb7c984cd04185fac70a83ff5dd30fbff24ad91404c9312ac82'
             '7c2071c822d927280deafea1fca955c41ca352ce4dd81732063a166a32553f62'
@@ -432,7 +433,8 @@ sha256sums=('162317a49aa5a521eb888ec12119bfe5a45cec4e8653efc575a2d04fb05bf581'
             '14a1c5a5f2627c5dc77dcfee98b4b83724c2e7f7315a3a2dba95a14f457bd52f'
             '91791c813a96a770c34b84641552fc6d66c4200914451d8439cdfd2803c5995d'
             '6f36928fc6a381a4ff6665ed61f848e6ac2855e4320ffca1409571a871a81d37'
-            '840dd91ffae9ca57fc8522e88d461092fc69287d5f0eae3f0de2fc1d753ebd71')
+            '840dd91ffae9ca57fc8522e88d461092fc69287d5f0eae3f0de2fc1d753ebd71'
+            '6df4c1c4e7c79f78f844f308c5a4e86b265103f2c499236811e7333624496058')
 
 # =============================================================================
 # SYMLINK GENERÁTOR – a .so SONAME-ekhez szükséges linkek létrehozása.
