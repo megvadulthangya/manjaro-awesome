@@ -1,0 +1,104 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -128,1 +128,3 @@
+ 	INIT_WORK \
++	MSRQ \
++	MSRQ_2ARGS \
+
+diff --git a/conftest.sh b/conftest.sh
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1267,1 +1267,33 @@
++      MSRQ)
++            #
++            # Determine whether the 64-bit MSR accessors are present.
++            #
++            CODE="
++            #include <linux/types.h>
++            #include <asm/msr.h>
++            void conftest_MSRQ(void) {
++                u64 (*read_msr)(u32) = rdmsrq;
++                void (*write_msr)(u32, u64) = wrmsrq;
++                (void)read_msr;
++                (void)write_msr;
++            }"
++
++            compile_check_conftest "$CODE" "NV_RDMSRQ_PRESENT" "" "macros"
++        ;;
++
++      MSRQ_2ARGS)
++            CODE="
++            #include <linux/types.h>
++            #include <asm/msr.h>
++            #ifndef rdmsrq
++            #error rdmsrq is not a macro
++            #endif
++            void conftest_MSRQ_2ARGS(void) {
++                u64 value = 0;
++                rdmsrq(0x277, value);
++                wrmsrq(0x277, value);
++            }"
++
++            compile_check_conftest "$CODE" "NV_RDMSRQ_TWO_ARGS_PRESENT" "" "macros"
++        ;;
+       INIT_WORK)
+
+diff --git a/nv-linux.h b/nv-linux.h
+--- a/nv-linux.h
++++ b/nv-linux.h
+@@ -1951,4 +1951,38 @@
+ #ifndef MSR_EFER
+ #define MSR_EFER 0xc0000080
+ #endif
++
++#if defined(NV_RDMSRQ_PRESENT)
++#define NV_READ_MSR(msr, low, high) \
++    do { \
++        u64 __nv_msr_value = rdmsrq(msr); \
++        (low) = (u32)__nv_msr_value; \
++        (high) = (u32)(__nv_msr_value >> 32); \
++    } while (0)
++
++#define NV_WRITE_MSR(msr, low, high) \
++    wrmsrq((msr), ((u64)(high) << 32) | (u32)(low))
++#elif defined(NV_RDMSRQ_TWO_ARGS_PRESENT)
++#define NV_READ_MSR(msr, low, high) \
++    do { \
++        u64 __nv_msr_value; \
++        rdmsrq((msr), __nv_msr_value); \
++        (low) = (u32)__nv_msr_value; \
++        (high) = (u32)(__nv_msr_value >> 32); \
++    } while (0)
++
++#define NV_WRITE_MSR(msr, low, high) \
++    wrmsrq((msr), ((u64)(high) << 32) | (u32)(low))
++#else
++#define NV_READ_MSR(msr, low, high) \
++    do { \
++        u64 __nv_msr_value; \
++        rdmsrl((msr), __nv_msr_value); \
++        (low) = (u32)__nv_msr_value; \
++        (high) = (u32)(__nv_msr_value >> 32); \
++    } while (0)
++
++#define NV_WRITE_MSR(msr, low, high) \
++    wrmsrl((msr), ((u64)(high) << 32) | (u32)(low))
++#endif
+ #ifndef EFER_NX
+
+diff --git a/nv.c b/nv.c
+--- a/nv.c
++++ b/nv.c
+@@ -946,1 +946,1 @@
+-        rdmsr(MSR_EFER, __eax, __edx);
++        NV_READ_MSR(MSR_EFER, __eax, __edx);
+
+diff --git a/nv-pat.c b/nv-pat.c
+--- a/nv-pat.c
++++ b/nv-pat.c
+@@ -38,2 +38,2 @@
+-#define NV_READ_PAT_ENTRIES(pat1, pat2)   rdmsr(0x277, (pat1), (pat2))
+-#define NV_WRITE_PAT_ENTRIES(pat1, pat2)  wrmsr(0x277, (pat1), (pat2))
++#define NV_READ_PAT_ENTRIES(pat1, pat2)   NV_READ_MSR(0x277, (pat1), (pat2))
++#define NV_WRITE_PAT_ENTRIES(pat1, pat2)  NV_WRITE_MSR(0x277, (pat1), (pat2))
